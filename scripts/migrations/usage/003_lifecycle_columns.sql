@@ -1,9 +1,8 @@
--- Canonical current schema for usage.db.
--- Regenerated whenever a new NNN_*.sql migration is added so that fresh
--- installs can jump straight here instead of replaying history.
--- Must remain equivalent to the cumulative effect of 001..003.
+-- Make columns nullable for INSERT+UPDATE lifecycle pattern.
+-- Add endpoint column.
 
-CREATE TABLE requests (
+-- SQLite doesn't support ALTER COLUMN, so we recreate the table.
+CREATE TABLE requests_new (
   id             INTEGER PRIMARY KEY,
   ts             INTEGER NOT NULL,
   session_id     TEXT,
@@ -20,6 +19,13 @@ CREATE TABLE requests (
   status         INTEGER,
   stream         INTEGER NOT NULL DEFAULT 0
 );
+
+INSERT INTO requests_new (id, ts, session_id, request_id, project_id, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
+  SELECT id, ts, session_id, request_id, project_id, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream FROM requests;
+
+DROP TABLE requests;
+ALTER TABLE requests_new RENAME TO requests;
+
 CREATE INDEX idx_requests_ts      ON requests(ts);
 CREATE INDEX idx_requests_session ON requests(session_id);
 CREATE UNIQUE INDEX idx_requests_request ON requests(request_id);

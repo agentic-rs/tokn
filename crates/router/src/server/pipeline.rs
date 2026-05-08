@@ -9,7 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_config::RouteMode;
 use llm_core::pipeline::{
-  OutputTransformer, ParsedRequest, RequestMeta, RequestReporter, RequestResolver, RequestSender,
+  OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -131,9 +131,6 @@ struct UpstreamResponse {
 struct PoolResolver;
 struct ProviderSender;
 struct EndpointOutputTransformer;
-struct DbReporter {
-  state: AppState,
-}
 
 impl RequestResolver for PoolResolver {
   type State = AppState;
@@ -190,11 +187,9 @@ impl OutputTransformer for EndpointOutputTransformer {
     &self,
     state: AppState,
     upstream: UpstreamResponse,
-    reporter: Arc<dyn RequestReporter>,
   ) -> Response {
     stream_response(
       state,
-      reporter,
       upstream.account,
       upstream.resp,
       upstream.meta.endpoint,
@@ -213,12 +208,6 @@ impl OutputTransformer for EndpointOutputTransformer {
   }
 }
 
-impl RequestReporter for DbReporter {
-  fn report(&self, record: crate::db::CallRecord) {
-    self.state.events.emit(llm_core::event::Event::RequestCompleted { record });
-  }
-}
-
 pub(crate) async fn handle_endpoint(
   state: AppState,
   parser: &dyn RequestParser,
@@ -228,9 +217,24 @@ pub(crate) async fn handle_endpoint(
   let resolver = PoolResolver;
   let sender = ProviderSender;
   let transformer = EndpointOutputTransformer;
-  let reporter = Arc::new(DbReporter { state: state.clone() });
   let parsed = parser.parse(headers, body);
   let started = Instant::now();
+
+  // Generate request_id if not provided
+  let request_id = parsed.meta.request_id.clone()
+    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+  state.events.emit(llm_core::event::Event::RequestStarted {
+    request_id: request_id.clone(),
+    ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+    endpoint: parser.endpoint().as_str().to_string(),
+    model: parsed.meta.model.clone(),
+    initiator: parsed.meta.initiator.clone(),
+    stream: parsed.meta.stream,
+    session_id: parsed.meta.session_id.clone(),
+    project_id: parsed.meta.project_id.clone(),
+    inbound_req: llm_core::db::HttpSnapshot::default(),
+  });
 
   let span = tracing::Span::current();
   span.record("model", parsed.meta.model.as_str());
@@ -261,6 +265,17 @@ pub(crate) async fn handle_endpoint(
     );
 
     let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
+
+    // Emit RequestParsed on first attempt (routing resolved)
+    if attempt == 0 {
+      state.events.emit(llm_core::event::Event::RequestParsed {
+        request_id: request_id.clone(),
+        account_id: prepared.account.id(),
+        provider_id: prepared.account.provider.info().id.clone(),
+        outbound_req: prepared.capture.get().cloned(),
+      });
+    }
+
     let send_result = async {
       debug!("sending upstream request");
       sender.send(&state, &prepared).await
@@ -300,6 +315,13 @@ pub(crate) async fn handle_endpoint(
       state.pool.record_session(id, &prepared.account.id());
     }
 
+    // Emit RequestResponded with upstream status
+    state.events.emit(llm_core::event::Event::RequestResponded {
+      request_id: request_id.clone(),
+      status: status.as_u16(),
+      resp_headers: resp.headers().clone(),
+    });
+
     let outbound = prepared.capture.get().cloned();
     let upstream = UpstreamResponse {
       meta: prepared.meta,
@@ -311,11 +333,11 @@ pub(crate) async fn handle_endpoint(
     };
     return Ok(if parsed.meta.stream {
       transformer
-        .transform_sse(state.clone(), upstream, reporter.clone())
+        .transform_sse(state.clone(), upstream)
         .await
     } else {
       let (response, record) = transformer.transform_result(state.clone(), upstream).await;
-      reporter.report(record);
+      state.events.emit(llm_core::event::Event::completed_from_record(&record));
       response
     });
   }

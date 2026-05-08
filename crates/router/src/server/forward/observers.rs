@@ -3,7 +3,6 @@ use super::usage::parse_usage_any_value;
 use crate::db::CallRecord;
 use bytes::Bytes;
 use llm_convert::sse::ObserverMsg;
-use llm_core::pipeline::RequestReporter;
 use std::sync::Arc;
 
 /// Metadata for emitting StreamProgress events.
@@ -21,7 +20,7 @@ pub(super) async fn background_stream_recorder(
   mut rx: llm_convert::sse::ObserverReceiver,
   base_builder: CallRecordBuilder,
   resp_headers: reqwest::header::HeaderMap,
-  reporter: Arc<dyn RequestReporter>,
+  events: Arc<llm_core::event::EventBus>,
   max_body: usize,
   meta: StreamMeta,
 ) {
@@ -84,9 +83,10 @@ pub(super) async fn background_stream_recorder(
     captured,
     &resp_headers,
   );
-  reporter.report(record);
+  events.emit(llm_core::event::Event::completed_from_record(&record));
 }
 
+// NOTE: `reporter` was replaced by `events` — emit directly
 pub(super) fn build_stream_record(
   builder: CallRecordBuilder,
   usage: (Option<u64>, Option<u64>),

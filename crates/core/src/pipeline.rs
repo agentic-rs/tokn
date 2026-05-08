@@ -5,7 +5,6 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct RequestMeta {
@@ -65,10 +64,5 @@ pub trait OutputTransformer: Send + Sync {
     &self,
     state: Self::State,
     upstream: Self::Upstream,
-    reporter: Arc<dyn RequestReporter>,
   ) -> Self::Output;
-}
-
-pub trait RequestReporter: Send + Sync {
-  fn report(&self, record: CallRecord);
 }

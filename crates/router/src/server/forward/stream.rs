@@ -16,7 +16,6 @@ use std::time::Instant;
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_response(
   s: AppState,
-  reporter: Arc<dyn llm_core::pipeline::RequestReporter>,
   acct: Arc<AccountHandle>,
   resp: reqwest::Response,
   endpoint: Endpoint,
@@ -71,7 +70,7 @@ pub(crate) async fn stream_response(
     endpoint: endpoint.as_str().to_string(),
     events: s.events.clone(),
   };
-  tokio::spawn(background_stream_recorder(rx, builder, resp_headers, reporter, max_body, meta));
+  tokio::spawn(background_stream_recorder(rx, builder, resp_headers, s.events.clone(), max_body, meta));
 
   let mut pipeline = SsePipeline::from_response_with_tap(resp, tx);
   if upstream_endpoint != endpoint {

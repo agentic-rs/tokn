@@ -84,13 +84,30 @@ fn write_record(
 // --- Event bus integration ---
 
 use llm_core::event::{Event, EventHandler};
+use std::collections::HashMap;
+
+/// Partial request data accumulated from lifecycle events before completion.
+struct PendingRequest {
+  ts: i64,
+  session_id: Option<String>,
+  project_id: Option<String>,
+  endpoint: String,
+  model: String,
+  initiator: String,
+  stream: bool,
+  account_id: String,
+  provider_id: String,
+  inbound_req: HttpSnapshot,
+  outbound_req: Option<HttpSnapshot>,
+}
 
 /// Database writer that implements `EventHandler` for use with the event bus.
-/// Processes `RequestCompleted` events by writing to usage, requests, and sessions DBs.
+/// Accumulates lifecycle events in memory and writes a full row on RequestCompleted.
 pub struct DbEventHandler {
   usage: usage::UsageDb,
   requests: requests::RequestsDb,
   sessions: Option<sessions::SessionsDb>,
+  pending: HashMap<String, PendingRequest>,
 }
 
 impl DbEventHandler {
@@ -104,17 +121,90 @@ impl DbEventHandler {
         None
       }
     };
-    Ok(Self { usage, requests, sessions })
+    Ok(Self { usage, requests, sessions, pending: HashMap::new() })
   }
 }
 
 impl EventHandler for DbEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestCompleted { record } => {
-        write_record(&mut self.usage, &mut self.requests, &mut self.sessions, record);
+      Event::RequestStarted { request_id, ts, endpoint, model, initiator, stream, session_id, project_id, inbound_req } => {
+        self.pending.insert(request_id.clone(), PendingRequest {
+          ts: *ts,
+          session_id: session_id.clone(),
+          project_id: project_id.clone(),
+          endpoint: endpoint.clone(),
+          model: model.clone(),
+          initiator: initiator.clone(),
+          stream: *stream,
+          account_id: String::new(),
+          provider_id: String::new(),
+          inbound_req: inbound_req.clone(),
+          outbound_req: None,
+        });
       }
-      // Other events are ignored by the DB handler
+      Event::RequestParsed { request_id, account_id, provider_id, outbound_req } => {
+        if let Some(p) = self.pending.get_mut(request_id) {
+          p.account_id = account_id.clone();
+          p.provider_id = provider_id.clone();
+          p.outbound_req = outbound_req.clone();
+        }
+      }
+      Event::RequestCompleted { request_id, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
+        let pending = self.pending.remove(request_id);
+        let record = if let Some(p) = pending {
+          CallRecord {
+            ts: p.ts,
+            session_id: p.session_id.unwrap_or_default(),
+            session_source: *session_source,
+            request_id: Some(request_id.clone()),
+            request_error: request_error.clone(),
+            project_id: p.project_id,
+            endpoint: p.endpoint,
+            account_id: p.account_id,
+            provider_id: p.provider_id,
+            model: p.model,
+            initiator: p.initiator,
+            status: *status,
+            stream: p.stream,
+            latency_ms: *latency_ms,
+            prompt_tokens: *prompt_tokens,
+            completion_tokens: *completion_tokens,
+            inbound_req: p.inbound_req,
+            outbound_req: p.outbound_req,
+            outbound_resp: outbound_resp.clone(),
+            inbound_resp: inbound_resp.clone(),
+            messages: messages.clone(),
+          }
+        } else {
+          // Fallback: no prior events captured (shouldn't happen in normal flow)
+          tracing::debug!(request_id = %request_id, "RequestCompleted without prior RequestStarted");
+          CallRecord {
+            ts: 0,
+            session_id: String::new(),
+            session_source: *session_source,
+            request_id: Some(request_id.clone()),
+            request_error: request_error.clone(),
+            project_id: None,
+            endpoint: String::new(),
+            account_id: String::new(),
+            provider_id: String::new(),
+            model: String::new(),
+            initiator: String::new(),
+            status: *status,
+            stream: false,
+            latency_ms: *latency_ms,
+            prompt_tokens: *prompt_tokens,
+            completion_tokens: *completion_tokens,
+            inbound_req: HttpSnapshot::default(),
+            outbound_req: None,
+            outbound_resp: outbound_resp.clone(),
+            inbound_resp: inbound_resp.clone(),
+            messages: messages.clone(),
+          }
+        };
+        write_record(&mut self.usage, &mut self.requests, &mut self.sessions, &record);
+      }
       _ => {}
     }
   }

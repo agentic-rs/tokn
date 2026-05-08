@@ -12,7 +12,6 @@ use axum::response::Response;
 use bytes::Bytes;
 use llm_convert::sse::{observer_channel, SsePipeline};
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Instant;
 
 pub(crate) fn is_sse_response(headers: &HeaderMap) -> bool {
@@ -55,7 +54,7 @@ pub(crate) fn record_passthrough_call(
   )
   .with_usage(prompt_tokens, completion_tokens)
   .build();
-  s.events.emit(llm_core::event::Event::RequestCompleted { record });
+  llm_core::event::Event::emit_record(&s.events, record);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -100,15 +99,13 @@ pub(crate) fn passthrough_streaming_response(
     .to_string();
 
   let (tx, rx) = observer_channel();
-  let reporter: Arc<dyn llm_core::pipeline::RequestReporter> =
-    Arc::new(EventBusReporter(state.events.clone()));
   let meta = StreamMeta {
     request_id: crate::server::first_header(&req_headers, crate::server::REQUEST_ID_HEADERS).map(|s| s.to_string()),
     model: progress_model,
     endpoint: progress_endpoint,
     events: state.events.clone(),
   };
-  tokio::spawn(background_stream_recorder(rx, base_builder, record_headers, reporter, max_body, meta));
+  tokio::spawn(background_stream_recorder(rx, base_builder, record_headers, state.events.clone(), max_body, meta));
 
   response_with_body(
     status,
@@ -117,14 +114,6 @@ pub(crate) fn passthrough_streaming_response(
   )
 }
 
-/// Reporter that emits RequestCompleted events via the EventBus.
-struct EventBusReporter(Arc<llm_core::event::EventBus>);
-
-impl llm_core::pipeline::RequestReporter for EventBusReporter {
-  fn report(&self, record: crate::db::CallRecord) {
-    self.0.emit(llm_core::event::Event::RequestCompleted { record });
-  }
-}
 
 #[allow(clippy::too_many_arguments)]
 fn passthrough_record_builder(

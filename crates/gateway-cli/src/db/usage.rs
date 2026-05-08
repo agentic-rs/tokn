@@ -14,6 +14,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_correlation_ids",
     sql: include_str!("../../../../scripts/migrations/usage/002_add_correlation_ids.sql"),
   },
+  migrate::Migration {
+    version: 3,
+    name: "lifecycle_columns",
+    sql: include_str!("../../../../scripts/migrations/usage/003_lifecycle_columns.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -44,13 +49,14 @@ impl UsageDb {
 
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     self.conn.execute(
-      "INSERT INTO requests (ts, session_id, request_id, project_id, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+      "INSERT OR REPLACE INTO requests (ts, session_id, request_id, project_id, endpoint, account_id, provider_id, model, initiator, prompt_tok, completion_tok, latency_ms, status, stream)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
       params![
         r.ts,
         r.session_id,
         r.request_id,
         r.project_id,
+        r.endpoint,
         r.account_id,
         r.provider_id,
         r.model,

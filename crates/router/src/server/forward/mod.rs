@@ -38,15 +38,89 @@ mod tests {
   /// Shared record collector for tests.
   type Records = Arc<Mutex<Vec<CallRecord>>>;
 
-  /// Event handler that collects CallRecords for test assertions.
+  /// Event handler that accumulates lifecycle events and produces CallRecords on completion.
   struct CollectingHandler {
     records: Records,
+    pending: std::collections::HashMap<String, CallRecord>,
+  }
+
+  impl CollectingHandler {
+    fn new(records: Records) -> Self {
+      Self { records, pending: std::collections::HashMap::new() }
+    }
   }
 
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
-      if let Event::RequestCompleted { record } = event {
-        self.records.lock().unwrap().push(record.clone());
+      match event {
+        Event::RequestStarted { request_id, ts, endpoint, model, initiator, stream, session_id, project_id, inbound_req } => {
+          self.pending.insert(request_id.clone(), CallRecord {
+            ts: *ts,
+            session_id: session_id.clone().unwrap_or_default(),
+            session_source: SessionSource::Auto,
+            request_id: Some(request_id.clone()),
+            request_error: None,
+            project_id: project_id.clone(),
+            endpoint: endpoint.clone(),
+            account_id: String::new(),
+            provider_id: String::new(),
+            model: model.clone(),
+            initiator: initiator.clone(),
+            status: 0,
+            stream: *stream,
+            latency_ms: 0,
+            prompt_tokens: None,
+            completion_tokens: None,
+            inbound_req: inbound_req.clone(),
+            outbound_req: None,
+            outbound_resp: None,
+            inbound_resp: Default::default(),
+            messages: Vec::new(),
+          });
+        }
+        Event::RequestParsed { request_id, account_id, provider_id, outbound_req } => {
+          if let Some(r) = self.pending.get_mut(request_id) {
+            r.account_id = account_id.clone();
+            r.provider_id = provider_id.clone();
+            r.outbound_req = outbound_req.clone();
+          }
+        }
+        Event::RequestCompleted { request_id, session_source, latency_ms, status, prompt_tokens, completion_tokens, request_error, inbound_resp, outbound_resp, messages } => {
+          let mut r = self.pending.remove(request_id).unwrap_or_else(|| CallRecord {
+            ts: 0,
+            session_id: String::new(),
+            session_source: SessionSource::Auto,
+            request_id: Some(request_id.clone()),
+            request_error: None,
+            project_id: None,
+            endpoint: String::new(),
+            account_id: String::new(),
+            provider_id: String::new(),
+            model: String::new(),
+            initiator: String::new(),
+            status: 0,
+            stream: false,
+            latency_ms: 0,
+            prompt_tokens: None,
+            completion_tokens: None,
+            inbound_req: Default::default(),
+            outbound_req: None,
+            outbound_resp: None,
+            inbound_resp: Default::default(),
+            messages: Vec::new(),
+          });
+          r.session_source = *session_source;
+          r.latency_ms = *latency_ms;
+          r.status = *status;
+          r.prompt_tokens = *prompt_tokens;
+          r.completion_tokens = *completion_tokens;
+          r.request_error = request_error.clone();
+          r.inbound_resp = inbound_resp.clone();
+          r.outbound_resp = outbound_resp.clone();
+          r.messages = messages.clone();
+          self.records.lock().unwrap().push(r);
+        }
+        _ => {}
       }
     }
   }
@@ -55,7 +129,7 @@ mod tests {
   /// Returns (EventBus, Records, JoinHandle).
   fn test_event_bus() -> (Arc<EventBus>, Records) {
     let records: Records = Arc::new(Mutex::new(Vec::new()));
-    let handler = CollectingHandler { records: records.clone() };
+    let handler = CollectingHandler::new(records.clone());
     let (bus, receiver) = EventBus::new(64);
     llm_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
     (Arc::new(bus), records)
