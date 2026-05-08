@@ -8,13 +8,6 @@ pub struct DbPaths {
   pub requests_dir: PathBuf,
 }
 
-#[derive(Clone, Debug)]
-pub struct DbOptions {
-  pub paths: DbPaths,
-  pub queue_capacity: usize,
-  pub body_max_bytes: usize,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionSource {
   Header,
@@ -30,7 +23,7 @@ impl SessionSource {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CallRecord {
   pub ts: i64,
   pub session_id: String,
@@ -55,7 +48,7 @@ pub struct CallRecord {
   pub messages: Vec<MessageRecord>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageRecord {
   pub role: String,
   pub status: Option<u16>,
@@ -78,8 +71,3 @@ pub struct HttpSnapshot {
 }
 
 pub type OutboundSnapshot = HttpSnapshot;
-
-pub trait DbStore: Send + Sync {
-  fn body_max_bytes(&self) -> usize;
-  fn record(&self, record: CallRecord);
-}

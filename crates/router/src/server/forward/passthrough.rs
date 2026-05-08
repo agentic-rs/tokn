@@ -39,10 +39,9 @@ pub(crate) fn record_passthrough_call(
   status: u16,
   started: Instant,
 ) {
-  let Some(db) = s.db.as_ref() else { return };
   let (prompt_tokens, completion_tokens) = parse_usage_any_json(resp_body);
   let record = passthrough_record_builder(
-    db.body_max_bytes(),
+    s.body_max_bytes,
     host,
     method,
     path_and_query,
@@ -57,7 +56,7 @@ pub(crate) fn record_passthrough_call(
   )
   .with_usage(prompt_tokens, completion_tokens)
   .build();
-  db.record(record);
+  s.events.emit(llm_core::event::Event::RequestCompleted { record });
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -74,7 +73,7 @@ pub(crate) fn passthrough_streaming_response(
 ) -> Response {
   let status = resp.status();
   let headers = resp.headers().clone();
-  let max_body = state.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0);
+  let max_body = state.body_max_bytes;
   let usage = SharedUsage::new();
   let body = SharedBody::new();
   let record_headers = headers.clone();
@@ -212,9 +211,7 @@ struct PassthroughReporter {
 
 impl llm_core::pipeline::RequestReporter for PassthroughReporter {
   fn report(&self, record: crate::db::CallRecord) {
-    if let Some(db) = self.state.db.as_ref() {
-      db.record(record);
-    }
+    self.state.events.emit(llm_core::event::Event::RequestCompleted { record });
   }
 }
 

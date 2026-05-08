@@ -24,31 +24,41 @@ mod tests {
   use crate::db::{CallRecord, SessionSource};
   use crate::provider::Endpoint;
   use crate::server::build_state;
-  use llm_core::event::EventBus;
+  use llm_core::event::{Event, EventBus, EventHandler};
   use crate::util::secret::Secret;
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
-  use llm_core::db::DbStore;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use uuid::Uuid;
 
-  #[derive(Default)]
-  struct FakeDb {
-    records: Mutex<Vec<CallRecord>>,
+  /// Shared record collector for tests.
+  type Records = Arc<Mutex<Vec<CallRecord>>>;
+
+  /// Event handler that collects CallRecords for test assertions.
+  struct CollectingHandler {
+    records: Records,
   }
 
-  impl crate::db::DbStore for FakeDb {
-    fn body_max_bytes(&self) -> usize {
-      1024 * 1024
+  impl EventHandler for CollectingHandler {
+    fn handle(&mut self, event: &Event) {
+      if let Event::RequestCompleted { record } = event {
+        self.records.lock().unwrap().push(record.clone());
+      }
     }
+  }
 
-    fn record(&self, record: CallRecord) {
-      self.records.lock().unwrap().push(record);
-    }
+  /// Create an event bus with a collecting handler for tests.
+  /// Returns (EventBus, Records, JoinHandle).
+  fn test_event_bus() -> (Arc<EventBus>, Records) {
+    let records: Records = Arc::new(Mutex::new(Vec::new()));
+    let handler = CollectingHandler { records: records.clone() };
+    let (bus, receiver) = EventBus::new(64);
+    llm_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
+    (Arc::new(bus), records)
   }
 
   #[test]
@@ -138,11 +148,10 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     });
-    let db = Arc::new(FakeDb::default());
     let req_body = json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] });
     let resp_body = Bytes::from_static(br#"{"id":"r1"}"#);
     let record = CallRecordBuilder::for_endpoint(
-      db.body_max_bytes(),
+      1024 * 1024, // body_max_bytes
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
@@ -196,11 +205,10 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     });
-    let db = Arc::new(FakeDb::default());
     let req_body = json!({ "model": "glm-4.6", "messages": [] });
 
     let record = CallRecordBuilder::for_endpoint(
-      db.body_max_bytes(),
+      1024 * 1024, // body_max_bytes
       "acct",
       "zai-coding-plan",
       Endpoint::ChatCompletions,
@@ -260,8 +268,8 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     });
-    let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone()), Arc::new(EventBus::noop())).unwrap();
+    let (events, records) = test_event_bus();
+    let state = build_state(&cfg, events.clone()).unwrap();
     let mut req_headers = HeaderMap::new();
     req_headers.insert("x-session-id", "client-session".parse().unwrap());
     let mut outbound_req_headers = HeaderMap::new();
@@ -286,7 +294,9 @@ mod tests {
       Instant::now(),
     );
 
-    let records = db.records.lock().unwrap();
+    // Shut down event bus to flush
+    events.shutdown().await;
+    let records = records.lock().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].endpoint, "chat_completions");
     assert_eq!(records[0].account_id, "passthrough");
@@ -331,8 +341,8 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     });
-    let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone()), Arc::new(EventBus::noop())).unwrap();
+    let (events, records) = test_event_bus();
+    let state = build_state(&cfg, events.clone()).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -371,7 +381,9 @@ mod tests {
 
     let body_text = std::str::from_utf8(&streamed_body).unwrap();
     assert!(body_text.contains("prompt_tokens"));
-    let records = db.records.lock().unwrap();
+    // Flush the event bus to ensure the record is captured
+    events.shutdown().await;
+    let records = records.lock().unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].prompt_tokens, Some(2));
     assert_eq!(records[0].completion_tokens, Some(3));

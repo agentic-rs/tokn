@@ -1,24 +1,8 @@
 use crate::config::Config;
-use crate::db::{DbEventHandler, DbOptions, DbPaths, DbStore};
+use crate::db::{DbEventHandler, DbPaths};
 use anyhow::Result;
 use llm_core::event::{EventBus, EventHandler, EventReceiver};
 use std::sync::Arc;
-
-pub fn build_db(cfg: &Config) -> Result<Option<Arc<DbStore>>> {
-  if !cfg.db.enabled {
-    return Ok(None);
-  }
-  let paths = cfg.db.resolve_paths()?;
-  Ok(Some(Arc::new(DbStore::spawn(DbOptions {
-    paths: DbPaths {
-      usage_db: paths.usage_db,
-      sessions_db: paths.sessions_db,
-      requests_dir: paths.requests_dir,
-    },
-    queue_capacity: cfg.db.write_queue_capacity,
-    body_max_bytes: cfg.db.body_max_bytes,
-  })?)))
-}
 
 /// Build the event bus and its handlers. The DB event handler is included
 /// when usage recording is enabled.
@@ -40,15 +24,8 @@ pub fn build_event_bus(cfg: &Config) -> Result<(Arc<EventBus>, EventReceiver, Ve
   Ok((Arc::new(bus), receiver, handlers))
 }
 
-pub fn build_state(cfg: &Config, db: &Option<Arc<DbStore>>, events: Arc<EventBus>) -> Result<llm_router::server::AppState> {
-  llm_router::server::build_state(cfg, db.clone().map(|db| db as Arc<dyn llm_core::db::DbStore>), events)
-}
-
-pub async fn shutdown_db(db: Option<Arc<DbStore>>) -> Result<()> {
-  if let Some(db) = db {
-    db.shutdown().await?;
-  }
-  Ok(())
+pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<llm_router::server::AppState> {
+  llm_router::server::build_state(cfg, events)
 }
 
 pub fn is_loopback(host: &str) -> bool {

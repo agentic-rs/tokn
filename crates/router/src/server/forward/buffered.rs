@@ -70,7 +70,7 @@ pub(crate) async fn buffered_response(
 
   let (pt, ct) = parse_usage_any_json(&bytes);
   let record = CallRecordBuilder::for_endpoint(
-    s.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0),
+    s.body_max_bytes,
     &acct.id(),
     acct.provider.info().id.as_str(),
     endpoint,

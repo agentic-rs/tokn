@@ -35,7 +35,7 @@ pub(crate) async fn stream_response(
 ) -> Response {
   let status = resp.status();
   let resp_headers = resp.headers().clone();
-  let max_body = s.db.as_ref().map(|db| db.body_max_bytes()).unwrap_or(0);
+  let max_body = s.body_max_bytes;
   let headers = sse_headers(session_id.as_deref());
   let inbound_resp_headers = headers.clone();
   let usage = SharedUsage::new();
