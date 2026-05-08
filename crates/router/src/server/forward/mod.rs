@@ -24,6 +24,7 @@ mod tests {
   use crate::db::{CallRecord, SessionSource};
   use crate::provider::Endpoint;
   use crate::server::build_state;
+  use llm_core::event::EventBus;
   use crate::util::secret::Secret;
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
@@ -260,7 +261,7 @@ mod tests {
       settings: toml::Table::new(),
     });
     let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone())).unwrap();
+    let state = build_state(&cfg, Some(db.clone()), Arc::new(EventBus::noop())).unwrap();
     let mut req_headers = HeaderMap::new();
     req_headers.insert("x-session-id", "client-session".parse().unwrap());
     let mut outbound_req_headers = HeaderMap::new();
@@ -331,7 +332,7 @@ mod tests {
       settings: toml::Table::new(),
     });
     let db = Arc::new(FakeDb::default());
-    let state = build_state(&cfg, Some(db.clone())).unwrap();
+    let state = build_state(&cfg, Some(db.clone()), Arc::new(EventBus::noop())).unwrap();
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

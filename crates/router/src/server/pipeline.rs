@@ -424,6 +424,7 @@ mod tests {
   use crate::config::{Account as AccountCfg, Config};
   use crate::provider::{Endpoint, Provider};
   use crate::server::build_state;
+  use llm_core::event::EventBus;
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
   use llm_core::pipeline::InputTransformer;
@@ -489,7 +490,7 @@ mod tests {
   fn prepare_request_converts_endpoint_and_applies_provider_transform() {
     let mut cfg = Config::default();
     cfg.accounts.push(zai_account());
-    let state = build_state(&cfg, None).unwrap();
+    let state = build_state(&cfg, None, Arc::new(EventBus::noop())).unwrap();
     let account = state.pool.all()[0].clone();
     let route = state.route.resolve("glm-4.6", None).unwrap();
     let req = ResolvedRequest {
@@ -558,7 +559,7 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     });
-    let state = build_state(&cfg, None).unwrap();
+    let state = build_state(&cfg, None, Arc::new(EventBus::noop())).unwrap();
     let provider: &dyn Provider = state.pool.all()[0].provider.as_ref();
     let transformer: &dyn InputTransformer = provider.input_transformer().expect("copilot transformer");
     let body = json!({"model": "gpt-4.1", "messages": [{"role": "user", "content": "hi"}]});

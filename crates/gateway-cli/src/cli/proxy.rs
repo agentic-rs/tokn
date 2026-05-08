@@ -126,7 +126,9 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   crate::server_runtime::ensure_bind_host(&host, args.allow_remote)?;
 
   let db = crate::server_runtime::build_db(&cfg)?;
-  let state = crate::server_runtime::build_state(&cfg, &db)?;
+  let (events, receiver, handlers) = crate::server_runtime::build_event_bus(&cfg)?;
+  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let state = crate::server_runtime::build_state(&cfg, &db, events.clone())?;
   let n = state.pool.len();
   let addr: SocketAddr = format!("{host}:{port}")
     .parse()
@@ -151,6 +153,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
 
   let result = llm_router::proxy::serve(state, options).await;
   crate::server_runtime::shutdown_db(db).await?;
+  events.shutdown().await;
   result
 }
 

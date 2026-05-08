@@ -128,17 +128,7 @@ fn writer_loop(paths: DbPaths, mut rx: mpsc::Receiver<WriteOp>) -> Result<()> {
   while let Some(op) = rx.blocking_recv() {
     match op {
       WriteOp::Record(record) => {
-        if let Err(e) = usage.record(&record) {
-          tracing::warn!(error = %e, "failed to write usage db row");
-        }
-        if let Err(e) = requests.record(&record) {
-          tracing::warn!(error = %e, "failed to write requests db row");
-        }
-        if let Some(s) = sessions.as_mut() {
-          if let Err(e) = s.record(&record) {
-            tracing::warn!(error = %e, session_id = %record.session_id, "failed to write sessions db row");
-          }
-        }
+        write_record(&mut usage, &mut requests, &mut sessions, &record);
       }
       WriteOp::Shutdown(done) => {
         let _ = done.send(());
@@ -147,4 +137,62 @@ fn writer_loop(paths: DbPaths, mut rx: mpsc::Receiver<WriteOp>) -> Result<()> {
     }
   }
   Ok(())
+}
+
+fn write_record(
+  usage: &mut usage::UsageDb,
+  requests: &mut requests::RequestsDb,
+  sessions: &mut Option<sessions::SessionsDb>,
+  record: &CallRecord,
+) {
+  if let Err(e) = usage.record(record) {
+    tracing::warn!(error = %e, "failed to write usage db row");
+  }
+  if let Err(e) = requests.record(record) {
+    tracing::warn!(error = %e, "failed to write requests db row");
+  }
+  if let Some(s) = sessions.as_mut() {
+    if let Err(e) = s.record(record) {
+      tracing::warn!(error = %e, session_id = %record.session_id, "failed to write sessions db row");
+    }
+  }
+}
+
+// --- Event bus integration ---
+
+use llm_core::event::{Event, EventHandler};
+
+/// Database writer that implements `EventHandler` for use with the event bus.
+/// Processes `RequestCompleted` events by writing to usage, requests, and sessions DBs.
+pub struct DbEventHandler {
+  usage: usage::UsageDb,
+  requests: requests::RequestsDb,
+  sessions: Option<sessions::SessionsDb>,
+}
+
+impl DbEventHandler {
+  pub fn new(paths: DbPaths) -> Result<Self> {
+    let usage = usage::UsageDb::open(&paths.usage_db)?;
+    let requests = requests::RequestsDb::new(paths.requests_dir)?;
+    let sessions = match sessions::SessionsDb::open(&paths.sessions_db) {
+      Ok(s) => Some(s),
+      Err(e) => {
+        tracing::error!(error = %e, path = %paths.sessions_db.display(), "sessions.db open failed; continuing without per-message capture");
+        None
+      }
+    };
+    Ok(Self { usage, requests, sessions })
+  }
+}
+
+impl EventHandler for DbEventHandler {
+  fn handle(&mut self, event: &Event) {
+    match event {
+      Event::RequestCompleted { record } => {
+        write_record(&mut self.usage, &mut self.requests, &mut self.sessions, record);
+      }
+      // Other events are ignored by the DB handler
+      _ => {}
+    }
+  }
 }

@@ -13,6 +13,7 @@ use axum::routing::{get, post};
 use axum::Router;
 use llm_config::Config;
 use llm_core::db::DbStore;
+use llm_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,6 +27,7 @@ pub struct AppState {
   pub route: Arc<RouteResolver>,
   pub http: reqwest::Client,
   pub db: Option<Arc<dyn DbStore>>,
+  pub events: Arc<EventBus>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -188,12 +190,12 @@ async fn health() -> &'static str {
   "ok"
 }
 
-pub fn build_state(cfg: &Config, db: Option<Arc<dyn DbStore>>) -> Result<AppState> {
+pub fn build_state(cfg: &Config, db: Option<Arc<dyn DbStore>>, events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
   let pool = AccountPool::from_config_with(cfg, crate::registry::build_for_account)?;
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
-  Ok(AppState { pool, route, http, db })
+  Ok(AppState { pool, route, http, db, events })
 }
 
 #[cfg(test)]

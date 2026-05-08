@@ -16,4 +16,5 @@ sha2 = { workspace = true }
 snafu = { workspace = true }
 time = { workspace = true }
 toml = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
