@@ -3,6 +3,7 @@ use crate::server::{
   self,
   error::ApiError,
   forward::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext},
+  pipeline::infer_stream_request,
   AppState,
 };
 use anyhow::{Context, Result};
@@ -582,7 +583,7 @@ async fn proxy_passthrough(
     account_id: "passthrough".to_string(),
     provider_id: host.to_string(),
     model: ctx.model.clone(),
-    stream: req_body_json.get("stream").and_then(|v| v.as_bool()).unwrap_or(false),
+    stream: infer_stream_request(&parts.headers, &req_body_json),
     initiator,
     outbound_req: Some(crate::db::HttpSnapshot {
       method: Some(parts.method.to_string()),
@@ -616,6 +617,7 @@ pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<
     ("api.z.ai", &Method::POST, "/v1/chat/completions") => Some("/v1/chat/completions"),
     ("open.bigmodel.cn", &Method::POST, "/api/paas/v4/chat/completions") => Some("/v1/chat/completions"),
     ("openrouter.ai", &Method::POST, "/api/v1/chat/completions") => Some("/v1/chat/completions"),
+    ("chatgpt.com", &Method::POST, "/backend-api/codex/responses") => Some("/v1/responses"),
     _ => None,
   }
 }

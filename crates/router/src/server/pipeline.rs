@@ -5,6 +5,7 @@ use crate::pool::{AccountHandle, EndpointAcquire};
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use crate::route::RouteResolution;
 use async_trait::async_trait;
+use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_config::RouteMode;
@@ -15,6 +16,20 @@ use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
 
 const MAX_RETRIES: usize = 2;
+
+pub(crate) fn infer_stream_request(headers: &HeaderMap, body: &Value) -> bool {
+  if let Some(stream) = body.get("stream").and_then(|v| v.as_bool()) {
+    return stream;
+  }
+  headers
+    .get(ACCEPT)
+    .and_then(|v| v.to_str().ok())
+    .map(|v| {
+      v.split(',')
+        .any(|part| part.split(';').next().map(str::trim) == Some("text/event-stream"))
+    })
+    .unwrap_or(false)
+}
 
 pub(crate) trait RequestParser: Send + Sync {
   fn endpoint(&self) -> Endpoint;
@@ -27,7 +42,7 @@ pub(crate) trait RequestParser: Send + Sync {
       .and_then(|v| v.as_str())
       .unwrap_or("unknown")
       .to_string();
-    let stream = body.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
+    let stream = infer_stream_request(&headers, &body);
     let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
@@ -524,6 +539,39 @@ mod tests {
       parsed.meta.inbound_headers.get("x-session-id"),
       headers.get("x-session-id")
     );
+  }
+
+  #[test]
+  fn infers_stream_from_accept_header_when_body_omits_it() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      axum::http::header::ACCEPT,
+      HeaderValue::from_static("text/event-stream"),
+    );
+    let body = json!({
+      "model": "gpt-5",
+      "input": "hi"
+    });
+
+    let parsed = ResponsesParser.parse(headers, body);
+    assert!(parsed.meta.stream);
+  }
+
+  #[test]
+  fn explicit_stream_flag_overrides_accept_header() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      axum::http::header::ACCEPT,
+      HeaderValue::from_static("text/event-stream"),
+    );
+    let body = json!({
+      "model": "gpt-5",
+      "stream": false,
+      "input": "hi"
+    });
+
+    let parsed = ResponsesParser.parse(headers, body);
+    assert!(!parsed.meta.stream);
   }
 
   #[test]

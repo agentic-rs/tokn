@@ -3,8 +3,12 @@ use serde_json::Value;
 
 /// Extract `Usage` from an upstream response body. Handles three shapes:
 ///
-/// - **OpenAI** (chat completions): `usage.{prompt_tokens, completion_tokens,
-///   prompt_tokens_details.cached_tokens, completion_tokens_details.reasoning_tokens}`
+/// - **OpenAI chat completions**:
+///   `usage.{prompt_tokens, completion_tokens, prompt_tokens_details.cached_tokens,
+///   completion_tokens_details.reasoning_tokens}`
+/// - **OpenAI responses / Codex**:
+///   `usage.{input_tokens, output_tokens, input_tokens_details.cached_tokens,
+///   output_tokens_details.reasoning_tokens}`
 /// - **Anthropic** (messages): `message.usage.{input_tokens, output_tokens,
 ///   cache_creation_input_tokens, cache_read_input_tokens}`. The Anthropic
 ///   `input_tokens` field excludes cached portions, so we normalize
@@ -13,57 +17,57 @@ use serde_json::Value;
 ///
 /// Returns an empty `Usage` (all `None`) when no recognizable shape is found.
 pub(crate) fn parse_usage_any_value(v: &Value) -> Usage {
-  // Try OpenAI shape: top-level "usage"
-  if let Some(u) = v.get("usage") {
-    if let Some(usage) = parse_openai_usage(u) {
-      return usage;
-    }
-    // Could be Anthropic-style at top-level "usage" too
-    if let Some(usage) = parse_anthropic_usage(u) {
-      return usage;
-    }
-  }
   // Anthropic streaming shape: message.usage
-  if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
-    if let Some(usage) = parse_anthropic_usage(u) {
-      return usage;
-    }
+  if let Some(usage) = parse_anthropic_usage(v.pointer("/message/usage")) {
+    return usage;
   }
   // OpenAI Responses API: response.usage
-  if let Some(u) = v.get("response").and_then(|r| r.get("usage")) {
-    if let Some(usage) = parse_openai_usage(u) {
-      return usage;
-    }
+  if let Some(usage) = parse_openai_responses_usage(v.pointer("/response/usage")) {
+    return usage;
+  }
+  // Try OpenAI shape: top-level "usage"
+  if let Some(usage) = parse_openai_chat_usage(v.pointer("/usage")) {
+    return usage;
+  }
+  if let Some(usage) = parse_openai_responses_usage(v.pointer("/usage")) {
+    return usage;
+  }
+  // Could be Anthropic-style at top-level "usage" too
+  if let Some(usage) = parse_anthropic_usage(v.pointer("/usage")) {
+    return usage;
   }
   Usage::default()
 }
 
-/// Parse OpenAI-style usage block. Recognized by `prompt_tokens` or
-/// `input_tokens` (Responses API uses input_tokens at this level).
-fn parse_openai_usage(u: &Value) -> Option<Usage> {
-  let input_tokens = u
-    .get("prompt_tokens")
-    .or_else(|| u.get("input_tokens"))
-    .and_then(|x| x.as_u64());
-  let output_tokens = u
-    .get("completion_tokens")
-    .or_else(|| u.get("output_tokens"))
-    .and_then(|x| x.as_u64());
+fn ptr_u64(v: Option<&Value>, path: &str) -> Option<u64> {
+  v.and_then(|value| value.pointer(path)).and_then(Value::as_u64)
+}
+
+/// Parse OpenAI chat-completions usage block.
+fn parse_openai_chat_usage(u: Option<&Value>) -> Option<Usage> {
+  let input_tokens = ptr_u64(u, "/prompt_tokens");
+  let output_tokens = ptr_u64(u, "/completion_tokens");
   if input_tokens.is_none() && output_tokens.is_none() {
     return None;
   }
-  // Reject Anthropic-shaped blocks (no prompt_tokens AND has cache_creation_input_tokens)
-  if u.get("prompt_tokens").is_none() && u.get("cache_creation_input_tokens").is_some() {
+  let cache_read = ptr_u64(u, "/prompt_tokens_details/cached_tokens");
+  let reasoning = ptr_u64(u, "/completion_tokens_details/reasoning_tokens");
+  Some(Usage {
+    input_tokens,
+    output_tokens,
+    details: UsageDetails { cache_read, reasoning },
+  })
+}
+
+/// Parse OpenAI responses / Codex usage block.
+fn parse_openai_responses_usage(u: Option<&Value>) -> Option<Usage> {
+  let input_tokens = ptr_u64(u, "/input_tokens");
+  let output_tokens = ptr_u64(u, "/output_tokens");
+  if input_tokens.is_none() && output_tokens.is_none() {
     return None;
   }
-  let cache_read = u
-    .get("prompt_tokens_details")
-    .and_then(|d| d.get("cached_tokens"))
-    .and_then(|x| x.as_u64());
-  let reasoning = u
-    .get("completion_tokens_details")
-    .and_then(|d| d.get("reasoning_tokens"))
-    .and_then(|x| x.as_u64());
+  let cache_read = ptr_u64(u, "/input_tokens_details/cached_tokens");
+  let reasoning = ptr_u64(u, "/output_tokens_details/reasoning_tokens");
   Some(Usage {
     input_tokens,
     output_tokens,
@@ -75,15 +79,15 @@ fn parse_openai_usage(u: &Value) -> Option<Usage> {
 /// presence of any `cache_*_input_tokens` field. Normalizes
 /// `Usage.input_tokens` to the total (input + cache_creation + cache_read)
 /// since Anthropic's `input_tokens` excludes cached content.
-fn parse_anthropic_usage(u: &Value) -> Option<Usage> {
-  let raw_input = u.get("input_tokens").and_then(|x| x.as_u64());
-  let cache_creation = u.get("cache_creation_input_tokens").and_then(|x| x.as_u64());
-  let cache_read = u.get("cache_read_input_tokens").and_then(|x| x.as_u64());
+fn parse_anthropic_usage(u: Option<&Value>) -> Option<Usage> {
+  let raw_input = ptr_u64(u, "/input_tokens");
+  let cache_creation = ptr_u64(u, "/cache_creation_input_tokens");
+  let cache_read = ptr_u64(u, "/cache_read_input_tokens");
   // Require at least one Anthropic-specific marker.
   if cache_creation.is_none() && cache_read.is_none() {
     return None;
   }
-  let output_tokens = u.get("output_tokens").and_then(|x| x.as_u64());
+  let output_tokens = ptr_u64(u, "/output_tokens");
   let total_input = match (raw_input, cache_creation, cache_read) {
     (None, None, None) => None,
     (a, b, c) => Some(a.unwrap_or(0) + b.unwrap_or(0) + c.unwrap_or(0)),

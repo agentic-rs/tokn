@@ -251,6 +251,22 @@ mod tests {
   }
 
   #[test]
+  fn parses_codex_usage_details_shape() {
+    let v = json!({ "usage": {
+      "input_tokens": 35973,
+      "input_tokens_details": { "cached_tokens": 34176 },
+      "output_tokens": 989,
+      "output_tokens_details": { "reasoning_tokens": 11 },
+      "total_tokens": 36962
+    }});
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(35973));
+    assert_eq!(u.output_tokens, Some(989));
+    assert_eq!(u.details.cache_read, Some(34176));
+    assert_eq!(u.details.reasoning, Some(11));
+  }
+
+  #[test]
   fn detects_sse_content_type_with_charset() {
     let mut headers = HeaderMap::new();
     headers.insert(

@@ -58,7 +58,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
   let filter = build_filter(cfg, mode);
 
   let stderr_layer = match cfg.target {
-    LogTarget::Stderr | LogTarget::Both => Some(make_layer(cfg, SuspendingStderr)),
+    LogTarget::Stderr | LogTarget::Both => Some(make_layer(cfg, SuspendingStderr, cfg.ansi)),
     LogTarget::File => None,
   };
 
@@ -68,7 +68,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
         Ok(()) => {
           let appender = tracing_appender::rolling::daily(&dir, "llm-router.log");
           let (nb, g) = tracing_appender::non_blocking(appender);
-          (Some(make_layer(cfg, nb)), Some(g))
+          (Some(make_layer(cfg, nb, false)), Some(g))
         }
         Err(e) => {
           eprintln!("warning: failed to create log dir {dir:?}: {e} (file logging disabled)");
@@ -121,7 +121,7 @@ pub(crate) fn build_filter(cfg: &LoggingConfig, mode: RunMode) -> EnvFilter {
   EnvFilter::new(mode.default_directive())
 }
 
-fn make_layer<S, W>(cfg: &LoggingConfig, writer: W) -> Box<dyn Layer<S> + Send + Sync + 'static>
+fn make_layer<S, W>(cfg: &LoggingConfig, writer: W, ansi: bool) -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
   S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
   W: for<'a> fmt::MakeWriter<'a> + Send + Sync + 'static,
@@ -136,13 +136,13 @@ where
   match cfg.format {
     LogFormat::Pretty => fmt::layer()
       .with_writer(writer)
-      .with_ansi(cfg.ansi)
+      .with_ansi(ansi)
       .with_span_events(span_events)
       .pretty()
       .boxed(),
     LogFormat::Compact => fmt::layer()
       .with_writer(writer)
-      .with_ansi(cfg.ansi)
+      .with_ansi(ansi)
       .with_span_events(span_events)
       .compact()
       .boxed(),
