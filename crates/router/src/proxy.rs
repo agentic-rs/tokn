@@ -1,6 +1,7 @@
 use crate::route::RouteResolver;
 use crate::server::{
   self,
+  codec::decode_json_request,
   error::ApiError,
   forward::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext},
   pipeline::infer_stream_request,
@@ -11,6 +12,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, Response, Uri};
 use axum::response::IntoResponse;
 use axum::Router;
+use bytes::Bytes;
 use http::header::{HeaderValue, HOST};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -529,6 +531,10 @@ async fn proxy_passthrough(
   let request_body = axum::body::to_bytes(Body::new(body), usize::MAX)
     .await
     .context("read passthrough request body")?;
+  let decoded_req = match decode_json_request(&parts.headers, request_body.clone()) {
+    Ok(decoded) => decoded,
+    Err(err) => return Ok(err.into_response()),
+  };
 
   let mut upstream = http.request(parts.method.clone(), &url).body(request_body.clone());
   let mut outbound_req_headers = parts.headers.clone();
@@ -545,7 +551,7 @@ async fn proxy_passthrough(
 
   // Build ForwardContext from passthrough request data
   let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
-  let req_body_json = serde_json::from_slice::<serde_json::Value>(&request_body).unwrap_or(serde_json::Value::Null);
+  let req_body_json = decoded_req.value.clone();
   let ctx = ForwardContext::from_passthrough(&parts.method, path, &parts.headers, &req_body_json, started);
 
   // Emit lifecycle events (caller owns lifecycle)
@@ -590,7 +596,7 @@ async fn proxy_passthrough(
       url: Some(url.clone()),
       status: None,
       headers: outbound_req_headers.clone(),
-      body: request_body.clone(),
+      body: Bytes::from(serde_json::to_vec(&req_body_json).unwrap_or_default()),
     }),
   });
 

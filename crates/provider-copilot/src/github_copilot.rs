@@ -6,7 +6,6 @@ use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::{token_fingerprint, BehaveAs};
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use bytes::Bytes;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::{InputTransformer, RequestMeta};
 use parking_lot::RwLock;
@@ -303,9 +302,14 @@ impl CopilotProvider {
       reqwest::header::CONTENT_TYPE,
       reqwest::header::HeaderValue::from_static("application/json"),
     );
+    if let Some(encoding) = ctx.content_encoding {
+      if let Ok(value) = reqwest::header::HeaderValue::from_str(encoding) {
+        h.insert(reqwest::header::CONTENT_ENCODING, value);
+      }
+    }
     let url = format!("{COPILOT_API}{path}");
     debug!(%url, "POST upstream");
-    let body_bytes = Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
+    let body_bytes = ctx.request_body_bytes();
     let resp = crate::util::http::send(
       ctx.http,
       Method::POST,

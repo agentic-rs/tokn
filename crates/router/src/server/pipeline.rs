@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use bytes::Bytes;
 use llm_config::RouteMode;
 use llm_core::pipeline::{OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender};
 use serde_json::Value;
@@ -119,6 +120,8 @@ impl RequestParser for MessagesParser {
 struct ResolvedRequest {
   meta: RequestMeta,
   body: Value,
+  raw_body: Bytes,
+  content_encoding: Option<super::codec::ContentEncodingKind>,
   route: RouteResolution,
   account: Arc<AccountHandle>,
 }
@@ -127,6 +130,9 @@ struct PreparedRequest {
   meta: RequestMeta,
   inbound_body: Value,
   upstream_body: Value,
+  upstream_wire_body: Bytes,
+  debug_outbound_body: Bytes,
+  content_encoding: Option<super::codec::ContentEncodingKind>,
   account: Arc<AccountHandle>,
   capture: crate::provider::OutboundCapture,
 }
@@ -183,6 +189,8 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.meta.attempt,
       upstream.started,
     );
+    let mut ctx = ctx;
+    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
     buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 
@@ -196,6 +204,8 @@ impl OutputTransformer for EndpointOutputTransformer {
       upstream.meta.attempt,
       upstream.started,
     );
+    let mut ctx = ctx;
+    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
     stream_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 }
@@ -204,12 +214,13 @@ pub(crate) async fn handle_endpoint(
   state: AppState,
   parser: &dyn RequestParser,
   headers: HeaderMap,
-  body: Value,
+  decoded: super::codec::DecodedJsonRequest,
 ) -> Result<Response, ApiError> {
   let resolver = PoolResolver;
   let sender = ProviderSender;
   let transformer = EndpointOutputTransformer;
-  let parsed = parser.parse(headers, body);
+  let raw_body = decoded.raw_body.clone();
+  let parsed = parser.parse(headers.clone(), decoded.value.clone());
   let started = Instant::now();
 
   // Generate request_id if not provided
@@ -229,7 +240,13 @@ pub(crate) async fn handle_endpoint(
     initiator: parsed.meta.header_initiator.clone(),
     session_id: parsed.meta.session_id.clone(),
     project_id: parsed.meta.project_id.clone(),
-    inbound_req: llm_core::db::HttpSnapshot::default(),
+    inbound_req: llm_core::db::HttpSnapshot {
+      method: None,
+      url: None,
+      status: None,
+      headers: headers.clone(),
+      body: raw_body,
+    },
   });
 
   let span = tracing::Span::current();
@@ -246,7 +263,9 @@ pub(crate) async fn handle_endpoint(
   for attempt in 0..=MAX_RETRIES {
     let attempt_u32 = attempt as u32;
 
-    let resolved = resolver.resolve(&state, parsed.clone(), attempt)?;
+    let mut resolved = resolver.resolve(&state, parsed.clone(), attempt)?;
+    resolved.raw_body = decoded.raw_body.clone();
+    resolved.content_encoding = decoded.encoding;
     let account_id = resolved.account.id();
     super::record_last_account(&account_id);
 
@@ -264,7 +283,13 @@ pub(crate) async fn handle_endpoint(
 
     let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
 
-    // Emit RequestParsed per attempt
+    let send_result = async {
+      debug!("sending upstream request");
+      sender.send(&state, &prepared).await
+    }
+    .instrument(attempt_span.clone())
+    .await;
+
     state.events.emit(llm_core::event::Event::RequestParsed {
       request_id: request_id.clone(),
       attempt: attempt_u32,
@@ -273,15 +298,11 @@ pub(crate) async fn handle_endpoint(
       model: prepared.meta.model.clone(),
       stream: prepared.meta.stream,
       initiator: prepared.meta.initiator.clone(),
-      outbound_req: prepared.capture.get().cloned(),
+      outbound_req: prepared.capture.get().cloned().map(|mut snap| {
+        snap.body = prepared.debug_outbound_body.clone();
+        snap
+      }),
     });
-
-    let send_result = async {
-      debug!("sending upstream request");
-      sender.send(&state, &prepared).await
-    }
-    .instrument(attempt_span.clone())
-    .await;
 
     let resp = match send_result {
       Ok(resp) => resp,
@@ -422,6 +443,8 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
   Ok(ResolvedRequest {
     meta,
     body: parsed.body,
+    raw_body: Bytes::new(),
+    content_encoding: None,
     route,
     account,
   })
@@ -438,10 +461,20 @@ fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<PreparedRequ
   if let Some(transformer) = req.account.provider.input_transformer() {
     upstream_body = transformer.transform_input(&req.meta, upstream_body)?;
   }
+  let debug_outbound_body = Bytes::from(serde_json::to_vec(&upstream_body).unwrap_or_default());
+  let upstream_wire_body = if upstream_body == req.body {
+    req.raw_body.clone()
+  } else {
+    super::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
+      .map_err(|message| crate::provider::error::Error::Profiles { message })?
+  };
   Ok(PreparedRequest {
     meta: req.meta,
     inbound_body: req.body,
     upstream_body,
+    upstream_wire_body,
+    debug_outbound_body,
+    content_encoding: req.content_encoding,
     account: req.account,
     capture: new_outbound_capture(),
   })
@@ -452,6 +485,8 @@ async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provide
     endpoint: req.meta.upstream_endpoint,
     http: &state.http,
     body: &req.upstream_body,
+    body_bytes: Some(&req.upstream_wire_body),
+    content_encoding: req.content_encoding.map(|encoding| encoding.as_str()),
     stream: req.meta.stream,
     initiator: req.meta.initiator.as_str(),
     inbound_headers: &req.meta.inbound_headers,
@@ -601,6 +636,8 @@ mod tests {
         "model": "glm-4.6",
         "input": "hi"
       }),
+      raw_body: Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#),
+      content_encoding: None,
       route,
       account,
     };

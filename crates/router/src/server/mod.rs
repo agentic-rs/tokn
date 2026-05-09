@@ -1,3 +1,4 @@
+pub mod codec;
 pub mod endpoints;
 pub mod error;
 pub mod forward;

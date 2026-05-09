@@ -33,6 +33,10 @@ pub enum Error {
   #[snafu(display("{message}"))]
   BadRequest { message: String },
 
+  /// Request body used an unsupported transport/content encoding. Maps to 415.
+  #[snafu(display("{message}"))]
+  UnsupportedMediaType { message: String },
+
   /// Upstream returned a non-2xx the dispatcher chose to surface verbatim.
   /// `body` is the upstream-supplied error message; `status` is its HTTP
   /// status. Maps to whatever `status` is so clients can branch on it.
@@ -78,6 +82,9 @@ impl Error {
   pub fn bad_gateway(msg: impl Into<String>) -> Self {
     Error::BadGateway { message: msg.into() }
   }
+  pub fn unsupported_media_type(msg: impl Into<String>) -> Self {
+    Error::UnsupportedMediaType { message: msg.into() }
+  }
   pub fn not_implemented(endpoint: impl Into<String>, model: impl Into<String>) -> Self {
     Error::NotImplemented {
       endpoint: endpoint.into(),
@@ -93,6 +100,7 @@ impl Error {
   fn status(&self) -> StatusCode {
     match self {
       Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
+      Error::UnsupportedMediaType { .. } => StatusCode::UNSUPPORTED_MEDIA_TYPE,
       Error::Upstream { status, .. } => *status,
       Error::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
       Error::SessionExpired { .. } => StatusCode::GONE,
@@ -104,6 +112,7 @@ impl Error {
   fn kind(&self) -> &'static str {
     match self {
       Error::BadRequest { .. } => "bad_request",
+      Error::UnsupportedMediaType { .. } => "unsupported_media_type",
       Error::Upstream { .. } => "upstream_error",
       Error::NotImplemented { .. } => "not_implemented_error",
       Error::SessionExpired { .. } => "session_expired",
@@ -115,6 +124,7 @@ impl Error {
   fn message(&self) -> String {
     match self {
       Error::BadRequest { message } => message.clone(),
+      Error::UnsupportedMediaType { message } => message.clone(),
       Error::Upstream { body, .. } => body.clone(),
       Error::NotImplemented { endpoint, model } => {
         format!("no configured account supports endpoint '{endpoint}' for model '{model}'")
@@ -151,6 +161,10 @@ mod tests {
   fn status_mapping() {
     assert_eq!(Error::bad_request("x").status(), StatusCode::BAD_REQUEST);
     assert_eq!(
+      Error::unsupported_media_type("x").status(),
+      StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+    assert_eq!(
       Error::upstream(StatusCode::TOO_MANY_REQUESTS, "x").status(),
       StatusCode::TOO_MANY_REQUESTS
     );
@@ -163,6 +177,7 @@ mod tests {
   #[test]
   fn kind_names_are_stable() {
     assert_eq!(Error::bad_request("x").kind(), "bad_request");
+    assert_eq!(Error::unsupported_media_type("x").kind(), "unsupported_media_type");
     assert_eq!(Error::upstream(StatusCode::BAD_GATEWAY, "x").kind(), "upstream_error");
     assert_eq!(Error::not_implemented("e", "m").kind(), "not_implemented_error");
     assert_eq!(Error::session_expired("s").kind(), "session_expired");

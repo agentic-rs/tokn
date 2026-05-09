@@ -19,7 +19,6 @@ pub use crate::{models, quota, transform};
 use crate::util::redact::token_fingerprint;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use bytes::Bytes;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::{InputTransformer, RequestMeta};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
@@ -206,8 +205,13 @@ impl Provider for ZaiProvider {
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
     debug!(%url, "POST zai chat");
-    let headers = self.auth_headers(ctx.stream)?;
-    let body_bytes = Bytes::from(serde_json::to_vec(ctx.body).unwrap_or_default());
+    let mut headers = self.auth_headers(ctx.stream)?;
+    if let Some(encoding) = ctx.content_encoding {
+      if let Ok(value) = reqwest::header::HeaderValue::from_str(encoding) {
+        headers.insert(reqwest::header::CONTENT_ENCODING, value);
+      }
+    }
+    let body_bytes = ctx.request_body_bytes();
     let resp = crate::util::http::send(
       ctx.http,
       Method::POST,
@@ -390,6 +394,8 @@ mod tests {
       endpoint: Endpoint::ChatCompletions,
       http: &http,
       body: &body,
+      body_bytes: None,
+      content_encoding: None,
       stream: false,
       initiator: "user",
       inbound_headers: &inbound,

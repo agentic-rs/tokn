@@ -2,6 +2,7 @@ use super::context::ForwardContext;
 use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
+use crate::server::codec::maybe_compress_buffered_response;
 use crate::server::error::ApiError;
 use crate::server::AppState;
 use axum::http::{HeaderMap, HeaderValue};
@@ -55,6 +56,13 @@ pub(crate) async fn buffered_response(
   };
 
   let usage = parse_usage_any_json(&bytes);
+  let response_body = match maybe_compress_buffered_response(&ctx.downstream_headers, &mut headers, bytes.clone()) {
+    Ok(body) => body,
+    Err(e) => {
+      request_error = Some(format!("response compression failed: {e}"));
+      Bytes::new()
+    }
+  };
 
   let event = CompletedEventBuilder::new(
     s.body_max_bytes,
@@ -80,6 +88,6 @@ pub(crate) async fn buffered_response(
   if let Some(error) = request_error {
     ApiError::bad_gateway(error).into_response()
   } else {
-    (status, headers, bytes).into_response()
+    (status, headers, response_body).into_response()
   }
 }

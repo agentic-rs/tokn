@@ -4,6 +4,7 @@ use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_json;
 use crate::db::HttpSnapshot;
 use crate::provider::Endpoint;
+use crate::server::codec::maybe_compress_buffered_response;
 use crate::server::AppState;
 use axum::body::Body;
 use axum::http::header::CONTENT_TYPE;
@@ -34,6 +35,7 @@ pub(crate) async fn passthrough_buffered_response(
   let status = resp.status();
   let resp_headers = resp.headers().clone();
   let resp_body = resp.bytes().await.unwrap_or_default();
+  let mut downstream_headers = resp_headers.clone();
 
   let usage = parse_usage_any_json(&resp_body);
 
@@ -68,7 +70,11 @@ pub(crate) async fn passthrough_buffered_response(
     error: None,
   });
 
-  response_with_body(status, &resp_headers, Body::from(resp_body))
+  let response_body =
+    maybe_compress_buffered_response(&ctx.downstream_headers, &mut downstream_headers, resp_body.clone())
+      .unwrap_or(resp_body);
+
+  response_with_body(status, &downstream_headers, Body::from(response_body))
 }
 
 /// Wrap a streaming passthrough response with SSE recording.

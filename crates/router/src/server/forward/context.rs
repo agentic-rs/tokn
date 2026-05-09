@@ -14,6 +14,7 @@ pub(crate) struct ForwardContext {
   pub session_id: Option<String>,
   pub endpoint: Option<Endpoint>,
   pub upstream_endpoint: Endpoint,
+  pub downstream_headers: reqwest::header::HeaderMap,
   pub model: String,
   pub started: Instant,
 }
@@ -35,6 +36,7 @@ impl ForwardContext {
       session_id,
       endpoint: Some(endpoint),
       upstream_endpoint,
+      downstream_headers: reqwest::header::HeaderMap::new(),
       model,
       started,
     }
@@ -67,6 +69,7 @@ impl ForwardContext {
       session_id,
       endpoint,
       upstream_endpoint,
+      downstream_headers: req_headers.clone(),
       model,
       started,
     }

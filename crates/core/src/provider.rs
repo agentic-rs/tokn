@@ -136,6 +136,8 @@ pub struct RequestCtx<'a> {
   pub endpoint: Endpoint,
   pub http: &'a reqwest::Client,
   pub body: &'a Value,
+  pub body_bytes: Option<&'a Bytes>,
+  pub content_encoding: Option<&'a str>,
   pub stream: bool,
   pub initiator: &'a str,
   pub inbound_headers: &'a HeaderMap,
@@ -144,6 +146,13 @@ pub struct RequestCtx<'a> {
 }
 
 impl RequestCtx<'_> {
+  pub fn request_body_bytes(&self) -> Bytes {
+    self
+      .body_bytes
+      .map(Bytes::clone)
+      .unwrap_or_else(|| Bytes::from(serde_json::to_vec(self.body).unwrap_or_default()))
+  }
+
   pub fn capture_outbound(&self, method: &str, url: &str, headers: &HeaderMap, body: Bytes) {
     if let Some(slot) = self.outbound.as_ref() {
       let _ = slot.set(crate::db::OutboundSnapshot {
