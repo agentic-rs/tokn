@@ -66,15 +66,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 fn write_record(
   usage: &mut usage::UsageDb,
-  requests: &mut requests::RequestsDb,
   sessions: &mut Option<sessions::SessionsDb>,
   record: &CallRecord,
 ) {
   if let Err(e) = usage.record(record) {
     tracing::warn!(error = %e, "failed to write usage db row");
-  }
-  if let Err(e) = requests.record(record) {
-    tracing::warn!(error = %e, "failed to write requests db row");
   }
   if let Some(s) = sessions.as_mut() {
     if let Err(e) = s.record(record) {
@@ -146,6 +142,12 @@ impl EventHandler for DbEventHandler {
         project_id,
         inbound_req,
       } => {
+        if let Err(e) = self
+          .requests
+          .started(request_id, *ts, endpoint, session_id.as_deref(), inbound_req)
+        {
+          tracing::warn!(error = %e, "failed to insert started requests db row");
+        }
         self.pending.insert(
           (request_id.clone(), 0),
           PendingRequest {
@@ -190,17 +192,38 @@ impl EventHandler for DbEventHandler {
           p.stream = *stream;
           p.initiator = initiator.clone();
           p.outbound_req = outbound_req.clone();
+          if let Err(e) = self.requests.parsed(
+            request_id,
+            *attempt,
+            requests::ParsedUpdate {
+              ts: p.ts,
+              endpoint: &p.endpoint,
+              account_id,
+              provider_id,
+              model,
+              initiator,
+              stream: *stream,
+              outbound_req: outbound_req.as_ref(),
+            },
+          ) {
+            tracing::warn!(error = %e, "failed to update parsed requests db row");
+          }
         }
       }
       Event::RequestResponded {
         request_id,
         attempt,
+        status,
         latency_ms,
+        resp_headers,
         ..
       } => {
         let key = (request_id.clone(), *attempt);
         if let Some(p) = self.pending.get_mut(&key) {
           p.latency_header_ms = Some(*latency_ms);
+          if let Err(e) = self.requests.responded(p.ts, request_id, *attempt, *latency_ms, *status, resp_headers) {
+            tracing::warn!(error = %e, "failed to update responded requests db row");
+          }
         }
       }
       Event::RequestResult {
@@ -272,7 +295,10 @@ impl EventHandler for DbEventHandler {
             messages: messages.clone(),
           }
         };
-        write_record(&mut self.usage, &mut self.requests, &mut self.sessions, &record);
+        if let Err(e) = self.requests.result(&record) {
+          tracing::warn!(error = %e, "failed to update result requests db row");
+        }
+        write_record(&mut self.usage, &mut self.sessions, &record);
       }
       Event::RequestCompleted { request_id, .. } => {
         // Clean up any remaining pending state for the base request (all attempts)
@@ -383,7 +409,7 @@ mod tests {
   }
 
   /// Open all `*.db` files in requests dir and return selected request row fields.
-  fn fetch_rows(dir: &std::path::Path) -> Vec<(String, i64, Option<String>, Option<i64>)> {
+  fn fetch_rows(dir: &std::path::Path) -> Vec<(String, Option<i64>, Option<String>, Option<i64>)> {
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
       let p = entry.unwrap().path();
@@ -400,11 +426,33 @@ mod tests {
         .query_map([], |r| {
           Ok((
             r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
+            r.get::<_, Option<i64>>(1)?,
             r.get::<_, Option<String>>(2)?,
             r.get::<_, Option<i64>>(3)?,
           ))
         })
+        .unwrap();
+      for r in iter {
+        rows.push(r.unwrap());
+      }
+    }
+    rows.sort();
+    rows
+  }
+
+  fn fetch_sessions(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn
+        .prepare("SELECT request_id, session_id FROM requests ORDER BY request_id")
+        .unwrap();
+      let iter = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))
         .unwrap();
       for r in iter {
         rows.push(r.unwrap());
@@ -427,7 +475,7 @@ mod tests {
     let rows = fetch_rows(&dir);
     assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
     assert_eq!(rows[0].0, "req-1");
-    assert_eq!(rows[0].1, 200);
+    assert_eq!(rows[0].1, Some(200));
     assert_eq!(rows[0].2, None);
   }
 
@@ -448,12 +496,24 @@ mod tests {
     assert_eq!(rows[0].3, Some(42));
   }
 
-  /// Pending in-memory state may exist (started + parsed observed), but
-  /// without a `RequestResult` no DB row should be written. This documents
-  /// that DB persistence is gated on per-attempt results, not on
-  /// `RequestStarted`/`RequestParsed`.
   #[test]
-  fn started_and_parsed_without_result_writes_nothing() {
+  fn request_started_session_id_is_preserved() {
+    let (mut h, dir) = make_handler();
+    let req = "req-session";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&parsed(req, 0));
+    h.handle(&responded(req, 0, 42));
+    h.handle(&result(req, 0, 200, None));
+
+    let rows = fetch_sessions(&dir);
+    assert_eq!(rows, vec![("req-session".into(), Some("sess-1".into()))]);
+  }
+
+  /// Lifecycle persistence inserts a partial row before a final result exists,
+  /// so interrupted requests are still visible in the request DB.
+  #[test]
+  fn started_and_parsed_without_result_writes_partial_row() {
     let (mut h, dir) = make_handler();
     let req = "req-no-result";
     let ts = 1_700_000_000;
@@ -462,7 +522,9 @@ mod tests {
     // No RequestResult, no RequestCompleted.
 
     let rows = fetch_rows(&dir);
-    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+    assert_eq!(rows.len(), 1, "expected one partial row, got {rows:?}");
+    assert_eq!(rows[0].0, "req-no-result");
+    assert_eq!(rows[0].1, None);
   }
 
   /// A `RequestResult` for an attempt must persist a row immediately, even if
@@ -482,7 +544,7 @@ mod tests {
     let rows = fetch_rows(&dir);
     assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
     assert_eq!(rows[0].0, "req-no-complete");
-    assert_eq!(rows[0].1, 200);
+    assert_eq!(rows[0].1, Some(200));
     assert_eq!(rows[0].2, None);
   }
 
@@ -508,10 +570,10 @@ mod tests {
     let rows = fetch_rows(&dir);
     assert_eq!(rows.len(), 2, "expected two rows, got {rows:?}");
     assert_eq!(rows[0].0, "req-2");
-    assert_eq!(rows[0].1, 500);
+    assert_eq!(rows[0].1, Some(500));
     assert_eq!(rows[0].2.as_deref(), Some("upstream 500"));
     assert_eq!(rows[1].0, "req-2:1");
-    assert_eq!(rows[1].1, 200);
+    assert_eq!(rows[1].1, Some(200));
     assert_eq!(rows[1].2, None);
   }
 
@@ -538,7 +600,7 @@ mod tests {
     assert_eq!(rows[1].0, "req-3:1");
     assert_eq!(rows[2].0, "req-3:2");
     for r in &rows {
-      assert_eq!(r.1, 500);
+      assert_eq!(r.1, Some(500));
       assert!(r.2.is_some());
     }
   }

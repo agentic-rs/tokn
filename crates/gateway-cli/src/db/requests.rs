@@ -65,6 +65,7 @@ impl RequestsDb {
     Ok(out)
   }
 
+  #[cfg(test)]
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     let conn = self.conn_for_ts(r.ts)?;
     let inbound_req_headers = headers_json(&r.inbound_req.headers);
@@ -118,6 +119,197 @@ impl RequestsDb {
     Ok(())
   }
 
+  pub fn started(
+    &mut self,
+    request_id: &str,
+    ts: i64,
+    endpoint: &str,
+    session_id: Option<&str>,
+    inbound_req: &HttpSnapshot,
+  ) -> Result<()> {
+    let conn = self.conn_for_ts(ts)?;
+    let inbound_req_headers = headers_json(&inbound_req.headers);
+    conn.execute(
+      "INSERT INTO requests (ts, session_id, request_id, endpoint, account_id, provider_id, model, initiator,
+                             inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
+       VALUES (?1, ?2, ?3, ?4, '', '', '', '', ?5, ?6, ?7, ?8)
+       ON CONFLICT(request_id) DO UPDATE SET
+         ts=excluded.ts,
+         session_id=COALESCE(session_id, excluded.session_id),
+         endpoint=excluded.endpoint,
+         inbound_req_method=excluded.inbound_req_method,
+         inbound_req_url=excluded.inbound_req_url,
+         inbound_req_headers=excluded.inbound_req_headers,
+         inbound_req_body=excluded.inbound_req_body",
+      params![
+        ts,
+        session_id,
+        request_id,
+        endpoint,
+        inbound_req.method.as_deref(),
+        inbound_req.url.as_deref(),
+        inbound_req_headers.as_ref(),
+        inbound_req.body.as_ref(),
+      ],
+    )?;
+    Ok(())
+  }
+
+  pub fn parsed(&mut self, base_request_id: &str, attempt: u32, p: ParsedUpdate<'_>) -> Result<()> {
+    let request_id = composite_request_id(base_request_id, attempt);
+    let conn = self.conn_for_ts(p.ts)?;
+    let outbound_req_headers = p.outbound_req.map(|s| headers_json(&s.headers));
+    if attempt > 0 {
+      conn.execute(
+        "INSERT INTO requests (ts, session_id, request_id, endpoint, account_id, provider_id, model, initiator,
+                               inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
+         SELECT ts, session_id, ?2, endpoint, '', '', '', '',
+                inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body
+         FROM requests WHERE request_id = ?1
+         ON CONFLICT(request_id) DO NOTHING",
+        params![base_request_id, request_id],
+      )?;
+    }
+    let updated = conn.execute(
+      "UPDATE requests SET
+         endpoint=?11,
+         account_id=?2,
+         provider_id=?3,
+         model=?4,
+         initiator=?5,
+         stream=?6,
+         outbound_req_method=?7,
+         outbound_req_url=?8,
+         outbound_req_headers=?9,
+         outbound_req_body=?10
+       WHERE request_id=?1",
+      params![
+        request_id,
+        p.account_id,
+        p.provider_id,
+        p.model,
+        p.initiator,
+        p.stream as i64,
+        opt_str(p.outbound_req, |s| s.method.as_deref()),
+        opt_str(p.outbound_req, |s| s.url.as_deref()),
+        outbound_req_headers.as_ref().map(|b| b.as_ref()),
+        p.outbound_req.map(|s| s.body.as_ref()),
+        p.endpoint,
+      ],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %base_request_id, attempt, "RequestParsed without started requests row");
+    }
+    Ok(())
+  }
+
+  pub fn responded(
+    &mut self,
+    ts: i64,
+    base_request_id: &str,
+    attempt: u32,
+    latency_header_ms: u64,
+    status: u16,
+    resp_headers: &reqwest::header::HeaderMap,
+  ) -> Result<()> {
+    let request_id = composite_request_id(base_request_id, attempt);
+    let conn = self.conn_for_ts(ts)?;
+    let outbound_resp_headers = headers_json(resp_headers);
+    let updated = conn.execute(
+      "UPDATE requests SET
+         status=?2,
+         latency_header_ms=?3,
+         outbound_resp_status=?2,
+         outbound_resp_headers=?4
+       WHERE request_id=?1",
+      params![request_id, status as i64, latency_header_ms as i64, outbound_resp_headers.as_ref()],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %base_request_id, attempt, "RequestResponded without started requests row");
+    }
+    Ok(())
+  }
+
+  pub fn result(&mut self, r: &CallRecord) -> Result<()> {
+    let conn = self.conn_for_ts(r.ts)?;
+    let outbound_resp_headers = r.outbound_resp.as_ref().map(|s| headers_json(&s.headers));
+    let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
+    conn.execute(
+      "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id,
+                             model, initiator, status, stream, latency_ms, latency_header_ms,
+                             input_tok, output_tok, cached_tok, reasoning_tok,
+                             inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
+                             outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
+                             outbound_resp_status, outbound_resp_headers, outbound_resp_body,
+                             inbound_resp_status, inbound_resp_headers, inbound_resp_body)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+       ON CONFLICT(request_id) DO UPDATE SET
+         request_error=excluded.request_error,
+         endpoint=excluded.endpoint,
+         account_id=excluded.account_id,
+         provider_id=excluded.provider_id,
+         model=excluded.model,
+         initiator=excluded.initiator,
+         status=excluded.status,
+         stream=excluded.stream,
+         latency_ms=excluded.latency_ms,
+         latency_header_ms=COALESCE(latency_header_ms, excluded.latency_header_ms),
+         input_tok=excluded.input_tok,
+         output_tok=excluded.output_tok,
+         cached_tok=excluded.cached_tok,
+         reasoning_tok=excluded.reasoning_tok,
+         inbound_req_method=excluded.inbound_req_method,
+         inbound_req_url=excluded.inbound_req_url,
+         inbound_req_headers=excluded.inbound_req_headers,
+         inbound_req_body=excluded.inbound_req_body,
+         outbound_req_method=excluded.outbound_req_method,
+         outbound_req_url=excluded.outbound_req_url,
+         outbound_req_headers=excluded.outbound_req_headers,
+         outbound_req_body=excluded.outbound_req_body,
+         outbound_resp_status=excluded.outbound_resp_status,
+         outbound_resp_headers=excluded.outbound_resp_headers,
+         outbound_resp_body=excluded.outbound_resp_body,
+         inbound_resp_status=excluded.inbound_resp_status,
+         inbound_resp_headers=excluded.inbound_resp_headers,
+         inbound_resp_body=excluded.inbound_resp_body",
+      params![
+        r.ts,
+        r.session_id,
+        r.request_id,
+        r.request_error,
+        r.endpoint,
+        r.account_id,
+        r.provider_id,
+        r.model,
+        r.initiator,
+        r.status as i64,
+        r.stream as i64,
+        r.latency_ms.map(|v| v as i64),
+        r.latency_header_ms.map(|v| v as i64),
+        r.usage.input_tokens.map(|v| v as i64),
+        r.usage.output_tokens.map(|v| v as i64),
+        r.usage.details.cache_read.map(|v| v as i64),
+        r.usage.details.reasoning.map(|v| v as i64),
+        r.inbound_req.method.as_deref(),
+        r.inbound_req.url.as_deref(),
+        headers_json(&r.inbound_req.headers).as_ref(),
+        r.inbound_req.body.as_ref(),
+        opt_str(r.outbound_req.as_ref(), |s| s.method.as_deref()),
+        opt_str(r.outbound_req.as_ref(), |s| s.url.as_deref()),
+        r.outbound_req.as_ref().map(|s| headers_json(&s.headers)).as_ref().map(|b| b.as_ref()),
+        r.outbound_req.as_ref().map(|s| s.body.as_ref()),
+        r.outbound_resp.as_ref().and_then(|s| s.status).map(|v| v as i64),
+        outbound_resp_headers.as_ref().map(|b| b.as_ref()),
+        r.outbound_resp.as_ref().map(|s| s.body.as_ref()),
+        r.inbound_resp.status.map(|v| v as i64),
+        inbound_resp_headers.as_ref(),
+        r.inbound_resp.body.as_ref(),
+      ],
+    )?;
+    Ok(())
+  }
+
   fn conn_for_ts(&mut self, ts: i64) -> Result<&mut Connection> {
     let key = day_key(ts);
     if !self.conns.contains_key(&key) {
@@ -133,6 +325,17 @@ impl RequestsDb {
     self.order.push_back(key.clone());
     Ok(self.conns.get_mut(&key).expect("opened requests db"))
   }
+}
+
+pub struct ParsedUpdate<'a> {
+  pub ts: i64,
+  pub endpoint: &'a str,
+  pub account_id: &'a str,
+  pub provider_id: &'a str,
+  pub model: &'a str,
+  pub initiator: &'a str,
+  pub stream: bool,
+  pub outbound_req: Option<&'a HttpSnapshot>,
 }
 
 pub fn open_day_db(path: &Path) -> Result<Connection> {
@@ -162,6 +365,14 @@ fn day_key(ts: i64) -> String {
   dt.date()
     .format(format_description!("[year]-[month]-[day]"))
     .unwrap_or_else(|_| "1970-01-01".to_string())
+}
+
+fn composite_request_id(request_id: &str, attempt: u32) -> String {
+  if attempt == 0 {
+    request_id.to_string()
+  } else {
+    format!("{request_id}:{attempt}")
+  }
 }
 
 #[cfg(test)]

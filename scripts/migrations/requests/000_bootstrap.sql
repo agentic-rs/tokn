@@ -6,7 +6,7 @@
 CREATE TABLE requests (
   id INTEGER PRIMARY KEY,
   ts INTEGER NOT NULL,
-  session_id TEXT NOT NULL,
+  session_id TEXT,
   request_id TEXT,
   request_error TEXT,
   endpoint TEXT NOT NULL,
@@ -14,8 +14,8 @@ CREATE TABLE requests (
   provider_id TEXT NOT NULL,
   model TEXT NOT NULL,
   initiator TEXT NOT NULL,
-  status INTEGER NOT NULL,
-  stream INTEGER NOT NULL,
+  status INTEGER,
+  stream INTEGER,
   latency_ms INTEGER,
   latency_header_ms INTEGER,
   input_tok INTEGER,
@@ -25,8 +25,8 @@ CREATE TABLE requests (
 
   inbound_req_method   TEXT,
   inbound_req_url      TEXT,
-  inbound_req_headers  BLOB NOT NULL,
-  inbound_req_body     BLOB NOT NULL,
+  inbound_req_headers  BLOB,
+  inbound_req_body     BLOB,
 
   outbound_req_method  TEXT,
   outbound_req_url     TEXT,
@@ -44,3 +44,4 @@ CREATE TABLE requests (
 CREATE INDEX idx_requests_ts      ON requests(ts);
 CREATE INDEX idx_requests_session ON requests(session_id);
 CREATE INDEX idx_requests_account ON requests(account_id);
+CREATE UNIQUE INDEX idx_requests_request_id ON requests(request_id);
