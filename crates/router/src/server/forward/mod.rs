@@ -27,11 +27,11 @@ mod tests {
   use crate::db::{CallRecord, SessionSource, Usage};
   use crate::provider::Endpoint;
   use crate::server::build_state;
-  use llm_core::event::{Event, EventBus, EventHandler};
   use crate::util::secret::Secret;
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
+  use llm_core::event::{Event, EventBus, EventHandler};
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
@@ -48,38 +48,61 @@ mod tests {
 
   impl CollectingHandler {
     fn new(records: Records) -> Self {
-      Self { records, pending: std::collections::HashMap::new() }
+      Self {
+        records,
+        pending: std::collections::HashMap::new(),
+      }
     }
   }
 
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
       match event {
-        Event::RequestStarted { request_id, ts, endpoint, initiator, session_id, project_id, inbound_req } => {
-          self.pending.insert((request_id.clone(), 0), CallRecord {
-            ts: *ts,
-            session_id: session_id.clone().unwrap_or_default(),
-            session_source: SessionSource::Auto,
-            request_id: request_id.clone(),
-            request_error: None,
-            project_id: project_id.clone(),
-            endpoint: endpoint.clone(),
-            account_id: String::new(),
-            provider_id: String::new(),
-            model: String::new(),
-            initiator: initiator.clone().unwrap_or_default(),
-            status: 0,
-            stream: false,
-            latency_ms: 0,
-            usage: Usage::default(),
-            inbound_req: inbound_req.clone(),
-            outbound_req: None,
-            outbound_resp: None,
-            inbound_resp: Default::default(),
-            messages: Vec::new(),
-          });
+        Event::RequestStarted {
+          request_id,
+          ts,
+          endpoint,
+          initiator,
+          session_id,
+          project_id,
+          inbound_req,
+        } => {
+          self.pending.insert(
+            (request_id.clone(), 0),
+            CallRecord {
+              ts: *ts,
+              session_id: session_id.clone().unwrap_or_default(),
+              session_source: SessionSource::Auto,
+              request_id: request_id.clone(),
+              request_error: None,
+              project_id: project_id.clone(),
+              endpoint: endpoint.clone(),
+              account_id: String::new(),
+              provider_id: String::new(),
+              model: String::new(),
+              initiator: initiator.clone().unwrap_or_default(),
+              status: 0,
+              stream: false,
+              latency_ms: 0,
+              usage: Usage::default(),
+              inbound_req: inbound_req.clone(),
+              outbound_req: None,
+              outbound_resp: None,
+              inbound_resp: Default::default(),
+              messages: Vec::new(),
+            },
+          );
         }
-        Event::RequestParsed { request_id, attempt, account_id, provider_id, model, stream, initiator, outbound_req } => {
+        Event::RequestParsed {
+          request_id,
+          attempt,
+          account_id,
+          provider_id,
+          model,
+          stream,
+          initiator,
+          outbound_req,
+        } => {
           // Retry attempts: clone from base entry (attempt 0)
           let key = (request_id.clone(), *attempt);
           if *attempt > 0 && !self.pending.contains_key(&key) {
@@ -100,9 +123,24 @@ mod tests {
             }
           }
         }
-        Event::RequestResult { request_id, attempt, session_source, latency_ms, status, usage, request_error, inbound_resp, outbound_resp, messages } => {
+        Event::RequestResult {
+          request_id,
+          attempt,
+          session_source,
+          latency_ms,
+          status,
+          usage,
+          request_error,
+          inbound_resp,
+          outbound_resp,
+          messages,
+        } => {
           let key = (request_id.clone(), *attempt);
-          let composite_id = if *attempt == 0 { request_id.clone() } else { format!("{request_id}:{attempt}") };
+          let composite_id = if *attempt == 0 {
+            request_id.clone()
+          } else {
+            format!("{request_id}:{attempt}")
+          };
           let mut r = self.pending.remove(&key).unwrap_or_else(|| CallRecord {
             ts: 0,
             session_id: String::new(),
@@ -288,7 +326,12 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response(Some(&HeaderMap::new()), Some(&resp_body))
     .build();
-    if let llm_core::event::Event::RequestResult { session_source, messages, .. } = &event {
+    if let llm_core::event::Event::RequestResult {
+      session_source,
+      messages,
+      ..
+    } = &event
+    {
       assert_eq!(*session_source, SessionSource::Auto);
       assert!(messages
         .iter()
@@ -338,14 +381,17 @@ mod tests {
       Instant::now(),
       200,
     )
-    .with_ids(
-      Some("client-session"),
-      Some("stream terminated before completion"),
-    )
+    .with_ids(Some("client-session"), Some("stream terminated before completion"))
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    if let llm_core::event::Event::RequestResult { session_source, request_id, request_error, .. } = &event {
+    if let llm_core::event::Event::RequestResult {
+      session_source,
+      request_id,
+      request_error,
+      ..
+    } = &event
+    {
       assert_eq!(*session_source, SessionSource::Header);
       assert_eq!(request_id, "request-123");
       assert_eq!(request_error.as_deref(), Some("stream terminated before completion"));
@@ -525,7 +571,8 @@ mod tests {
       .unwrap();
     assert!(is_sse_response(response.headers()));
 
-    let req_body_bytes = Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
+    let req_body_bytes =
+      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
     let req_body_json: serde_json::Value = serde_json::from_slice(&req_body_bytes).unwrap();
 
     let ctx = ForwardContext::from_passthrough(
@@ -536,12 +583,7 @@ mod tests {
       Instant::now(),
     );
 
-    let streamed = passthrough_streaming_response(
-      state,
-      ctx,
-      &req_body_json,
-      response,
-    );
+    let streamed = passthrough_streaming_response(state, ctx, &req_body_json, response);
     let streamed_body = to_bytes(streamed.into_body(), usize::MAX).await.unwrap();
     server.await.unwrap();
 

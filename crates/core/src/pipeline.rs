@@ -64,9 +64,5 @@ pub trait OutputTransformer: Send + Sync {
 
   async fn transform_result(&self, state: Self::State, upstream: Self::Upstream) -> Self::Output;
 
-  async fn transform_sse(
-    &self,
-    state: Self::State,
-    upstream: Self::Upstream,
-  ) -> Self::Output;
+  async fn transform_sse(&self, state: Self::State, upstream: Self::Upstream) -> Self::Output;
 }

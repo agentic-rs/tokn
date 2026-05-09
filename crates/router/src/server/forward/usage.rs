@@ -67,10 +67,7 @@ fn parse_openai_usage(u: &Value) -> Option<Usage> {
   Some(Usage {
     input_tokens,
     output_tokens,
-    details: UsageDetails {
-      cache_read,
-      reasoning,
-    },
+    details: UsageDetails { cache_read, reasoning },
   })
 }
 
@@ -80,9 +77,7 @@ fn parse_openai_usage(u: &Value) -> Option<Usage> {
 /// since Anthropic's `input_tokens` excludes cached content.
 fn parse_anthropic_usage(u: &Value) -> Option<Usage> {
   let raw_input = u.get("input_tokens").and_then(|x| x.as_u64());
-  let cache_creation = u
-    .get("cache_creation_input_tokens")
-    .and_then(|x| x.as_u64());
+  let cache_creation = u.get("cache_creation_input_tokens").and_then(|x| x.as_u64());
   let cache_read = u.get("cache_read_input_tokens").and_then(|x| x.as_u64());
   // Require at least one Anthropic-specific marker.
   if cache_creation.is_none() && cache_read.is_none() {

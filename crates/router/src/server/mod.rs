@@ -162,7 +162,10 @@ pub fn router(state: AppState) -> Router {
   // Mode-prefixed routes: /{mode}/v1/...
   let mode_routes = Router::new()
     .route("/{mode}/v1/models", get(models::list_models_with_mode))
-    .route("/{mode}/v1/chat/completions", post(endpoints::chat_completions_with_mode))
+    .route(
+      "/{mode}/v1/chat/completions",
+      post(endpoints::chat_completions_with_mode),
+    )
     .route("/{mode}/v1/responses", post(endpoints::responses_with_mode))
     .route("/{mode}/v1/messages", post(endpoints::messages_with_mode));
 
@@ -195,7 +198,13 @@ pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<AppState> {
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
-  Ok(AppState { pool, route, http, events, body_max_bytes })
+  Ok(AppState {
+    pool,
+    route,
+    http,
+    events,
+    body_max_bytes,
+  })
 }
 
 #[cfg(test)]

@@ -57,8 +57,7 @@ impl ForwardContext {
     let request_id = crate::server::first_header(req_headers, crate::server::REQUEST_ID_HEADERS)
       .map(|s| s.to_string())
       .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id =
-      crate::server::first_header(req_headers, crate::server::SESSION_ID_HEADERS).map(|s| s.to_string());
+    let session_id = crate::server::first_header(req_headers, crate::server::SESSION_ID_HEADERS).map(|s| s.to_string());
     // For passthrough, upstream_endpoint == endpoint (no translation)
     let upstream_endpoint = endpoint.unwrap_or(Endpoint::ChatCompletions);
 

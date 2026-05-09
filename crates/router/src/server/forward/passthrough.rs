@@ -85,11 +85,7 @@ pub(crate) fn passthrough_streaming_response(
   let max_body = state.body_max_bytes;
   let record_headers = headers.clone();
 
-  let endpoint_str = ctx
-    .endpoint
-    .map(|e| e.as_str())
-    .unwrap_or("unknown")
-    .to_string();
+  let endpoint_str = ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string();
 
   let builder = CompletedEventBuilder::new(
     max_body,

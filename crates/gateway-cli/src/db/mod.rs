@@ -124,29 +124,54 @@ impl DbEventHandler {
         None
       }
     };
-    Ok(Self { usage, requests, sessions, pending: HashMap::new() })
+    Ok(Self {
+      usage,
+      requests,
+      sessions,
+      pending: HashMap::new(),
+    })
   }
 }
 
 impl EventHandler for DbEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestStarted { request_id, ts, endpoint, initiator, session_id, project_id, inbound_req } => {
-        self.pending.insert((request_id.clone(), 0), PendingRequest {
-          ts: *ts,
-          session_id: session_id.clone(),
-          project_id: project_id.clone(),
-          endpoint: endpoint.clone(),
-          model: String::new(),
-          initiator: initiator.clone().unwrap_or_default(),
-          stream: false,
-          account_id: String::new(),
-          provider_id: String::new(),
-          inbound_req: inbound_req.clone(),
-          outbound_req: None,
-        });
+      Event::RequestStarted {
+        request_id,
+        ts,
+        endpoint,
+        initiator,
+        session_id,
+        project_id,
+        inbound_req,
+      } => {
+        self.pending.insert(
+          (request_id.clone(), 0),
+          PendingRequest {
+            ts: *ts,
+            session_id: session_id.clone(),
+            project_id: project_id.clone(),
+            endpoint: endpoint.clone(),
+            model: String::new(),
+            initiator: initiator.clone().unwrap_or_default(),
+            stream: false,
+            account_id: String::new(),
+            provider_id: String::new(),
+            inbound_req: inbound_req.clone(),
+            outbound_req: None,
+          },
+        );
       }
-      Event::RequestParsed { request_id, attempt, account_id, provider_id, model, stream, initiator, outbound_req } => {
+      Event::RequestParsed {
+        request_id,
+        attempt,
+        account_id,
+        provider_id,
+        model,
+        stream,
+        initiator,
+        outbound_req,
+      } => {
         // For retry attempts, clone from the base (attempt 0) entry
         let key = (request_id.clone(), *attempt);
         if *attempt > 0 && !self.pending.contains_key(&key) {
@@ -163,7 +188,18 @@ impl EventHandler for DbEventHandler {
           p.outbound_req = outbound_req.clone();
         }
       }
-      Event::RequestResult { request_id, attempt, session_source, latency_ms, status, usage, request_error, inbound_resp, outbound_resp, messages } => {
+      Event::RequestResult {
+        request_id,
+        attempt,
+        session_source,
+        latency_ms,
+        status,
+        usage,
+        request_error,
+        inbound_resp,
+        outbound_resp,
+        messages,
+      } => {
         let key = (request_id.clone(), *attempt);
         let composite_id = if *attempt == 0 {
           request_id.clone()
@@ -302,7 +338,13 @@ mod tests {
     }
   }
 
-  fn completed(req_id: &str, success: bool, total_attempts: u32, final_status: Option<u16>, error: Option<&str>) -> Event {
+  fn completed(
+    req_id: &str,
+    success: bool,
+    total_attempts: u32,
+    final_status: Option<u16>,
+    error: Option<&str>,
+  ) -> Event {
     Event::RequestCompleted {
       request_id: req_id.into(),
       success,
@@ -326,7 +368,13 @@ mod tests {
         .prepare("SELECT request_id, status, request_error FROM requests ORDER BY request_id")
         .unwrap();
       let iter = stmt
-        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Option<String>>(2)?)))
+        .query_map([], |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, Option<String>>(2)?,
+          ))
+        })
         .unwrap();
       for r in iter {
         rows.push(r.unwrap());

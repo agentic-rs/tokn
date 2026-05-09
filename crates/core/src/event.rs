@@ -87,27 +87,16 @@ pub enum Event {
   },
 
   /// An account recovered from cooldown.
-  AccountRecovered {
-    account: String,
-    provider: String,
-  },
+  AccountRecovered { account: String, provider: String },
 
   /// A session was bound to an account.
-  SessionCreated {
-    session_id: String,
-    account: String,
-  },
+  SessionCreated { session_id: String, account: String },
 
   /// A session expired or was evicted.
-  SessionExpired {
-    session_id: String,
-  },
+  SessionExpired { session_id: String },
 
   /// An upstream auth token was refreshed.
-  TokenRefreshed {
-    account: String,
-    provider: String,
-  },
+  TokenRefreshed { account: String, provider: String },
 
   // --- Control ---
   /// Request graceful shutdown; sender receives `()` when drain is complete.
@@ -191,7 +180,10 @@ impl EventBus {
 }
 
 /// Spawn a background OS thread that consumes events and dispatches to handlers.
-pub fn spawn_event_loop(mut receiver: EventReceiver, mut handlers: Vec<Box<dyn EventHandler>>) -> std::thread::JoinHandle<()> {
+pub fn spawn_event_loop(
+  mut receiver: EventReceiver,
+  mut handlers: Vec<Box<dyn EventHandler>>,
+) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     while let Some(event) = receiver.blocking_recv() {
       if let Event::Shutdown(done) = event {

@@ -300,7 +300,9 @@ impl HostPolicy {
 /// Format: `Proxy-Authorization: Basic <base64(username:password)>`
 /// The username is parsed as a route mode; password is ignored.
 fn extract_proxy_auth_mode(header_value: &str) -> Option<String> {
-  let encoded = header_value.strip_prefix("Basic ").or_else(|| header_value.strip_prefix("basic "))?;
+  let encoded = header_value
+    .strip_prefix("Basic ")
+    .or_else(|| header_value.strip_prefix("basic "))?;
   let decoded = String::from_utf8(base64_decode(encoded.trim())?).ok()?;
   let username = decoded.split(':').next().unwrap_or("");
   if username.is_empty() {
@@ -350,7 +352,10 @@ async fn handle_client(
       break;
     }
     // Check for Proxy-Authorization header
-    if let Some(value) = header_line.strip_prefix("Proxy-Authorization:").or_else(|| header_line.strip_prefix("proxy-authorization:")) {
+    if let Some(value) = header_line
+      .strip_prefix("Proxy-Authorization:")
+      .or_else(|| header_line.strip_prefix("proxy-authorization:"))
+    {
       if let Some(mode) = extract_proxy_auth_mode(value.trim().trim_end_matches(['\r', '\n'])) {
         proxy_route_mode = Some(mode);
       }
@@ -410,7 +415,14 @@ async fn intercept_tls(
   http1_builder.keep_alive(true).title_case_headers(true);
 
   let service = service_fn(move |req| {
-    route_intercepted_request(state.clone(), router.clone(), route_resolver.clone(), http.clone(), req, proxy_route_mode.clone())
+    route_intercepted_request(
+      state.clone(),
+      router.clone(),
+      route_resolver.clone(),
+      http.clone(),
+      req,
+      proxy_route_mode.clone(),
+    )
   });
   http1_builder
     .serve_connection(TokioIo::new(tls_stream), service)
@@ -431,10 +443,9 @@ async fn route_intercepted_request(
   if let Some(ref mode) = proxy_route_mode {
     if !req.headers().contains_key(RouteResolver::mode_header()) {
       if let Ok(val) = HeaderValue::from_str(mode) {
-        req.headers_mut().insert(
-          http::header::HeaderName::from_static("x-route-mode"),
-          val,
-        );
+        req
+          .headers_mut()
+          .insert(http::header::HeaderName::from_static("x-route-mode"), val);
       }
     }
   }
@@ -538,15 +549,21 @@ async fn proxy_passthrough(
 
   // Emit lifecycle events (caller owns lifecycle)
   let project_id = server::first_header(&parts.headers, server::PROJECT_ID_HEADERS).map(|s| s.to_string());
-  let header_initiator = parts.headers.get("x-initiator")
+  let header_initiator = parts
+    .headers
+    .get("x-initiator")
     .and_then(|v| v.to_str().ok())
     .map(|v| v.trim().to_ascii_lowercase())
     .filter(|v| v == "user" || v == "agent");
-  let initiator = header_initiator.clone()
+  let initiator = header_initiator
+    .clone()
     .unwrap_or_else(|| crate::util::initiator::classify_initiator(&req_body_json).to_string());
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: ctx.request_id.clone(),
-    ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+    ts: std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs() as i64,
     endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or(path).to_string(),
     initiator: header_initiator,
     session_id: ctx.session_id.clone(),

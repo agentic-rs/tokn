@@ -8,9 +8,7 @@ use async_trait::async_trait;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use llm_config::RouteMode;
-use llm_core::pipeline::{
-  OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender,
-};
+use llm_core::pipeline::{OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender};
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::Instant;
@@ -33,11 +31,13 @@ pub(crate) trait RequestParser: Send + Sync {
     let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
-    let header_initiator = headers.get("x-initiator")
+    let header_initiator = headers
+      .get("x-initiator")
       .and_then(|v| v.to_str().ok())
       .map(|v| v.trim().to_ascii_lowercase())
       .filter(|v| v == "user" || v == "agent");
-    let initiator = header_initiator.clone()
+    let initiator = header_initiator
+      .clone()
       .unwrap_or_else(|| self.auto_classify_initiator(&body).to_string());
     let behave_as = headers
       .get("x-behave-as")
@@ -171,11 +171,7 @@ impl OutputTransformer for EndpointOutputTransformer {
     buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
   }
 
-  async fn transform_sse(
-    &self,
-    state: AppState,
-    upstream: UpstreamResponse,
-  ) -> Response {
+  async fn transform_sse(&self, state: AppState, upstream: UpstreamResponse) -> Response {
     let ctx = ForwardContext::from_pipeline(
       upstream.meta.endpoint,
       upstream.meta.upstream_endpoint,
@@ -202,14 +198,21 @@ pub(crate) async fn handle_endpoint(
   let started = Instant::now();
 
   // Generate request_id if not provided
-  let request_id = parsed.meta.request_id.clone()
+  let request_id = parsed
+    .meta
+    .request_id
+    .clone()
     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: request_id.clone(),
-    ts: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+    ts: std::time::SystemTime::now()
+      .duration_since(std::time::UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_secs() as i64,
     endpoint: parser.endpoint().as_str().to_string(),
-    initiator: parsed.meta.header_initiator.clone(),    session_id: parsed.meta.session_id.clone(),
+    initiator: parsed.meta.header_initiator.clone(),
+    session_id: parsed.meta.session_id.clone(),
     project_id: parsed.meta.project_id.clone(),
     inbound_req: llm_core::db::HttpSnapshot::default(),
   });
@@ -332,9 +335,7 @@ pub(crate) async fn handle_endpoint(
     };
     let response = if parsed.meta.stream {
       // For streaming, RequestCompleted is emitted by the background stream recorder
-      transformer
-        .transform_sse(state.clone(), upstream)
-        .await
+      transformer.transform_sse(state.clone(), upstream).await
     } else {
       let resp = transformer.transform_result(state.clone(), upstream).await;
       // Buffered: emit terminal RequestCompleted
@@ -463,9 +464,9 @@ mod tests {
   use crate::config::{Account as AccountCfg, Config};
   use crate::provider::{Endpoint, Provider};
   use crate::server::build_state;
-  use llm_core::event::EventBus;
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
+  use llm_core::event::EventBus;
   use llm_core::pipeline::InputTransformer;
   use serde_json::json;
 

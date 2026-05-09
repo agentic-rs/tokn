@@ -40,7 +40,16 @@ pub async fn run(cfg_path: Option<PathBuf>, args: UsageArgs) -> Result<()> {
   for r in rows {
     println!(
       "{:<16}  {:<18}  {:<24}  {:<7}  {:>6}  {:>9}  {:>10}  {:>9}  {:>10}  {:>10.0}",
-      r.account, r.provider, r.model, r.initiator, r.count, r.input_tokens, r.output_tokens, r.cached_tokens, r.reasoning_tokens, r.avg_latency_ms
+      r.account,
+      r.provider,
+      r.model,
+      r.initiator,
+      r.count,
+      r.input_tokens,
+      r.output_tokens,
+      r.cached_tokens,
+      r.reasoning_tokens,
+      r.avg_latency_ms
     );
   }
   Ok(())

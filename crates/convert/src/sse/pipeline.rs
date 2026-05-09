@@ -137,11 +137,7 @@ struct PipelineStream {
 }
 
 impl PipelineStream {
-  fn new(
-    source: EventStream,
-    transformers: Vec<Box<dyn EventTransformer>>,
-    tap: Option<Arc<ObserverSender>>,
-  ) -> Self {
+  fn new(source: EventStream, transformers: Vec<Box<dyn EventTransformer>>, tap: Option<Arc<ObserverSender>>) -> Self {
     Self {
       source,
       transformers,

@@ -22,13 +22,7 @@ pub(super) struct CompletedEventBuilder {
 }
 
 impl CompletedEventBuilder {
-  pub(crate) fn new(
-    max: usize,
-    request_id: String,
-    inbound_resp: HttpSnapshot,
-    started: Instant,
-    status: u16,
-  ) -> Self {
+  pub(crate) fn new(max: usize, request_id: String, inbound_resp: HttpSnapshot, started: Instant, status: u16) -> Self {
     Self {
       max,
       request_id,
@@ -62,7 +56,11 @@ impl CompletedEventBuilder {
     self
   }
 
-  pub(crate) fn with_outbound_response(mut self, headers: Option<&reqwest::header::HeaderMap>, body: Option<&Bytes>) -> Self {
+  pub(crate) fn with_outbound_response(
+    mut self,
+    headers: Option<&reqwest::header::HeaderMap>,
+    body: Option<&Bytes>,
+  ) -> Self {
     self.outbound_resp = headers.map(|headers| HttpSnapshot {
       method: None,
       url: None,
