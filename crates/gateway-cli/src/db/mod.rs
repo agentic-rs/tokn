@@ -353,6 +353,44 @@ mod tests {
     assert_eq!(rows[0].2, None);
   }
 
+  /// Pending in-memory state may exist (started + parsed observed), but
+  /// without a `RequestResult` no DB row should be written. This documents
+  /// that DB persistence is gated on per-attempt results, not on
+  /// `RequestStarted`/`RequestParsed`.
+  #[test]
+  fn started_and_parsed_without_result_writes_nothing() {
+    let (mut h, dir) = make_handler();
+    let req = "req-no-result";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&parsed(req, 0));
+    // No RequestResult, no RequestCompleted.
+
+    let rows = fetch_rows(&dir);
+    assert!(rows.is_empty(), "expected no rows, got {rows:?}");
+  }
+
+  /// A `RequestResult` for an attempt must persist a row immediately, even if
+  /// the terminal `RequestCompleted` never arrives (e.g., process killed
+  /// mid-stream, or the completion event is dropped). DB writes are driven by
+  /// per-attempt results, not by the request-level terminal event.
+  #[test]
+  fn attempt_result_without_completed_writes_row() {
+    let (mut h, dir) = make_handler();
+    let req = "req-no-complete";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&parsed(req, 0));
+    h.handle(&result(req, 0, 200, None));
+    // Intentionally no RequestCompleted.
+
+    let rows = fetch_rows(&dir);
+    assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
+    assert_eq!(rows[0].0, "req-no-complete");
+    assert_eq!(rows[0].1, 200);
+    assert_eq!(rows[0].2, None);
+  }
+
   #[test]
   fn retry_then_success_writes_two_rows() {
     let (mut h, dir) = make_handler();
