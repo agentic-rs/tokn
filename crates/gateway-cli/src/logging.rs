@@ -15,6 +15,7 @@
 //! process-wide subscriber; drop it during shutdown to flush.
 
 use crate::config::{LogFormat, LogTarget, LoggingConfig};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
@@ -57,7 +58,7 @@ pub fn init(cfg: &LoggingConfig, mode: RunMode) -> Guard {
   let filter = build_filter(cfg, mode);
 
   let stderr_layer = match cfg.target {
-    LogTarget::Stderr | LogTarget::Both => Some(make_layer(cfg, std::io::stderr)),
+    LogTarget::Stderr | LogTarget::Both => Some(make_layer(cfg, SuspendingStderr)),
     LogTarget::File => None,
   };
 
@@ -159,6 +160,60 @@ fn resolve_logs_dir(cfg: &LoggingConfig) -> Result<PathBuf, String> {
     return Ok(d.clone());
   }
   crate::config::paths::default_logs_dir().map_err(|e| e.to_string())
+}
+
+/// `MakeWriter` that emits each log record to stderr, but wraps the
+/// write inside `MultiProgress::suspend` so any active indicatif bars
+/// (rendered on stdout) are temporarily cleared during emission and
+/// redrawn afterwards. Avoids visible garbling when bars and logs are
+/// active in the same terminal.
+#[derive(Clone, Copy)]
+struct SuspendingStderr;
+
+/// Per-emission buffer. tracing-subscriber's fmt layer writes the full
+/// formatted line via repeated `write` calls and a final `flush`. We
+/// accumulate into the buffer and emit atomically on `flush` (or on
+/// `drop` as a safety net).
+struct SuspendingWriter {
+  buf: Vec<u8>,
+}
+
+impl Write for SuspendingWriter {
+  fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+    self.buf.extend_from_slice(data);
+    Ok(data.len())
+  }
+
+  fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
+    self.buf.extend_from_slice(data);
+    Ok(())
+  }
+
+  fn flush(&mut self) -> io::Result<()> {
+    if self.buf.is_empty() {
+      return Ok(());
+    }
+    let buf = std::mem::take(&mut self.buf);
+    crate::progress::multi().suspend(|| {
+      let mut err = io::stderr().lock();
+      let _ = err.write_all(&buf);
+      let _ = err.flush();
+    });
+    Ok(())
+  }
+}
+
+impl Drop for SuspendingWriter {
+  fn drop(&mut self) {
+    let _ = self.flush();
+  }
+}
+
+impl<'a> fmt::MakeWriter<'a> for SuspendingStderr {
+  type Writer = SuspendingWriter;
+  fn make_writer(&'a self) -> Self::Writer {
+    SuspendingWriter { buf: Vec::new() }
+  }
 }
 
 #[cfg(test)]

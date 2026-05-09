@@ -358,7 +358,7 @@ pub(crate) async fn handle_endpoint(
     request_id: request_id.clone(),
     success: false,
     total_attempts: (MAX_RETRIES as u32) + 1,
-    final_status: None,
+    final_status: Some(status.as_u16()),
     total_latency_ms: started.elapsed().as_millis() as u64,
     error: Some(msg.clone()),
   });

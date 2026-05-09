@@ -24,6 +24,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
+console = { workspace = true }
 directories = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
