@@ -5,7 +5,6 @@ pub mod api;
 pub mod pipeline;
 pub mod proxy;
 pub mod relay;
-pub mod routing;
 
 pub use llm_config as config;
 pub use llm_config::profiles;

@@ -1,11 +1,11 @@
 pub mod codec;
-pub(crate) mod completion;
 pub mod endpoints;
 pub mod error;
 pub mod models;
+pub mod routing;
 
 use crate::accounts::AccountPool;
-use crate::routing::RouteResolver;
+use crate::api::routing::RouteResolver;
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};

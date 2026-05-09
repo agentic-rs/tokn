@@ -1,214 +1,20 @@
-use crate::accounts::{AccountHandle, EndpointAcquire};
-use crate::api::error::ApiError;
-use crate::api::{first_header, AppState, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
-use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
-use crate::relay::{buffered_response, stream_response, ForwardContext};
-use crate::routing::RouteResolution;
-use async_trait::async_trait;
-use axum::http::header::ACCEPT;
+pub(crate) mod completion;
+pub(crate) mod parse;
+mod request;
+mod transformer;
+
+pub(crate) use parse::{infer_stream_request, ChatParser, MessagesParser, RequestParser, ResponsesParser};
+
+use crate::api::{error::ApiError, AppState};
+use request::{prepare_request, PoolResolver, ProviderSender};
+use transformer::{EndpointOutputTransformer, UpstreamResponse};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
-use bytes::Bytes;
-use llm_config::RouteMode;
-use llm_core::pipeline::{OutputTransformer, ParsedRequest, RequestMeta, RequestResolver, RequestSender};
-use serde_json::Value;
-use std::sync::Arc;
+use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
 use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
 
 const MAX_RETRIES: usize = 2;
-
-pub(crate) fn infer_stream_request(headers: &HeaderMap, body: &Value) -> bool {
-  if let Some(stream) = body.get("stream").and_then(|v| v.as_bool()) {
-    return stream;
-  }
-  headers
-    .get(ACCEPT)
-    .and_then(|v| v.to_str().ok())
-    .map(|v| {
-      v.split(',')
-        .any(|part| part.split(';').next().map(str::trim) == Some("text/event-stream"))
-    })
-    .unwrap_or(false)
-}
-
-pub(crate) trait RequestParser: Send + Sync {
-  fn endpoint(&self) -> Endpoint;
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str;
-
-  fn parse(&self, headers: HeaderMap, body: Value) -> ParsedRequest {
-    let model = body
-      .get("model")
-      .and_then(|v| v.as_str())
-      .unwrap_or("unknown")
-      .to_string();
-    let stream = infer_stream_request(&headers, &body);
-    let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
-    let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
-    let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
-    let header_initiator = headers
-      .get("x-initiator")
-      .and_then(|v| v.to_str().ok())
-      .map(|v| v.trim().to_ascii_lowercase())
-      .filter(|v| v == "user" || v == "agent");
-    let initiator = header_initiator
-      .clone()
-      .unwrap_or_else(|| self.auto_classify_initiator(&body).to_string());
-    let behave_as = headers
-      .get("x-behave-as")
-      .and_then(|v| v.to_str().ok())
-      .map(|s| s.trim().to_string())
-      .filter(|s| !s.is_empty());
-
-    ParsedRequest {
-      meta: RequestMeta {
-        endpoint: self.endpoint(),
-        upstream_endpoint: self.endpoint(),
-        model: model.clone(),
-        upstream_model: model,
-        stream,
-        session_id,
-        request_id,
-        attempt: 0,
-        project_id,
-        initiator,
-        header_initiator,
-        behave_as,
-        inbound_headers: headers,
-      },
-      body,
-    }
-  }
-}
-
-pub(crate) struct ChatParser;
-pub(crate) struct ResponsesParser;
-pub(crate) struct MessagesParser;
-
-impl RequestParser for ChatParser {
-  fn endpoint(&self) -> Endpoint {
-    Endpoint::ChatCompletions
-  }
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
-    crate::util::initiator::classify_initiator(body)
-  }
-}
-
-impl RequestParser for ResponsesParser {
-  fn endpoint(&self) -> Endpoint {
-    Endpoint::Responses
-  }
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
-    crate::util::initiator::classify_initiator_responses(body)
-  }
-}
-
-impl RequestParser for MessagesParser {
-  fn endpoint(&self) -> Endpoint {
-    Endpoint::Messages
-  }
-
-  fn auto_classify_initiator(&self, body: &Value) -> &'static str {
-    crate::util::initiator::classify_initiator(body)
-  }
-}
-
-#[derive(Clone)]
-struct ResolvedRequest {
-  meta: RequestMeta,
-  body: Value,
-  raw_body: Bytes,
-  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
-  route: RouteResolution,
-  account: Arc<AccountHandle>,
-}
-
-struct PreparedRequest {
-  meta: RequestMeta,
-  inbound_body: Value,
-  upstream_body: Value,
-  upstream_wire_body: Bytes,
-  debug_outbound_body: Bytes,
-  content_encoding: Option<crate::api::codec::ContentEncodingKind>,
-  account: Arc<AccountHandle>,
-  capture: crate::provider::OutboundCapture,
-}
-
-struct UpstreamResponse {
-  meta: RequestMeta,
-  inbound_body: Value,
-  resp: reqwest::Response,
-  started: Instant,
-}
-
-struct PoolResolver;
-struct ProviderSender;
-struct EndpointOutputTransformer;
-
-impl RequestResolver for PoolResolver {
-  type State = AppState;
-  type Resolved = ResolvedRequest;
-  type Error = ApiError;
-
-  fn resolve(&self, state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError> {
-    resolve_request(state, parsed, attempt)
-  }
-}
-
-impl RequestSender for ProviderSender {
-  type State = AppState;
-  type Request = PreparedRequest;
-  type Response = reqwest::Response;
-  type Error = crate::provider::error::Error;
-
-  fn send<'a>(
-    &'a self,
-    state: &'a AppState,
-    req: &'a PreparedRequest,
-  ) -> std::pin::Pin<Box<dyn std::future::Future<Output = crate::provider::Result<reqwest::Response>> + Send + 'a>> {
-    Box::pin(send_request(state, req))
-  }
-}
-
-#[async_trait]
-impl OutputTransformer for EndpointOutputTransformer {
-  type State = AppState;
-  type Upstream = UpstreamResponse;
-  type Output = Response;
-
-  async fn transform_result(&self, state: AppState, upstream: UpstreamResponse) -> Response {
-    let ctx = ForwardContext::from_pipeline(
-      upstream.meta.endpoint,
-      upstream.meta.upstream_endpoint,
-      upstream.meta.model,
-      upstream.meta.session_id,
-      upstream.meta.request_id.unwrap_or_default(),
-      upstream.meta.attempt,
-      upstream.started,
-    );
-    let mut ctx = ctx;
-    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
-    buffered_response(state, upstream.resp, ctx, &upstream.inbound_body).await
-  }
-
-  async fn transform_sse(&self, state: AppState, upstream: UpstreamResponse) -> Response {
-    let ctx = ForwardContext::from_pipeline(
-      upstream.meta.endpoint,
-      upstream.meta.upstream_endpoint,
-      upstream.meta.model,
-      upstream.meta.session_id,
-      upstream.meta.request_id.unwrap_or_default(),
-      upstream.meta.attempt,
-      upstream.started,
-    );
-    let mut ctx = ctx;
-    ctx.downstream_headers = upstream.meta.inbound_headers.clone();
-    stream_response(state, upstream.resp, ctx, &upstream.inbound_body).await
-  }
-}
 
 pub(crate) async fn handle_endpoint(
   state: AppState,
@@ -248,7 +54,7 @@ pub(crate) async fn handle_endpoint(
       body: raw_body,
     },
   });
-  let mut completion = crate::api::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
+  let mut completion = completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
 
   let span = tracing::Span::current();
   span.record("model", parsed.meta.model.as_str());
@@ -384,7 +190,7 @@ pub(crate) async fn handle_endpoint(
 
     let upstream = UpstreamResponse {
       meta,
-      inbound_body: prepared.inbound_body,
+      inbound_body: prepared.inbound_body.clone(),
       resp,
       started,
     };
@@ -424,123 +230,20 @@ pub(crate) async fn handle_endpoint(
   Err(ApiError::upstream(status, msg))
 }
 
-fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> Result<ResolvedRequest, ApiError> {
-  let route = state
-    .route
-    .resolve(
-      &parsed.meta.model,
-      parsed
-        .meta
-        .inbound_headers
-        .get(crate::routing::RouteResolver::mode_header())
-        .and_then(|v| v.to_str().ok()),
-    )
-    .map_err(|e| ApiError::bad_request(e.to_string()))?;
-  if route.mode == RouteMode::Passthrough {
-    return Err(ApiError::bad_request("passthrough mode only applies in proxy mode"));
-  }
-  let (account, upstream_endpoint) =
-    match state
-      .pool
-      .acquire_for_route(parsed.meta.session_id.as_deref(), &route, parsed.meta.endpoint)
-    {
-      EndpointAcquire::Account { acct, endpoint } => (acct, endpoint),
-      EndpointAcquire::SessionExpired => {
-        let id = parsed.meta.session_id.clone().unwrap_or_default();
-        warn!(%parsed.meta.endpoint, model = %parsed.meta.model, session_id = %id, attempt, "session expired");
-        return Err(ApiError::session_expired(id));
-      }
-      EndpointAcquire::None => {
-        warn!(%parsed.meta.endpoint, model = %parsed.meta.model, attempt, "no account supports endpoint/model");
-        return Err(ApiError::not_implemented(
-          parsed.meta.endpoint.to_string(),
-          parsed.meta.model.clone(),
-        ));
-      }
-    };
-
-  let mut meta = parsed.meta;
-  meta.upstream_endpoint = upstream_endpoint;
-  meta.upstream_model = route.upstream_model.clone();
-  Ok(ResolvedRequest {
-    meta,
-    body: parsed.body,
-    raw_body: Bytes::new(),
-    content_encoding: None,
-    route,
-    account,
-  })
-}
-
-fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<PreparedRequest> {
-  let mut upstream_body = rewrite_model(&req.body, &req.meta.upstream_model);
-  if req.meta.upstream_endpoint != req.meta.endpoint {
-    upstream_body = crate::convert::convert_request(req.meta.endpoint, req.meta.upstream_endpoint, &upstream_body)
-      .map_err(|source| crate::provider::error::Error::Profiles {
-        message: format!("request conversion failed: {source}"),
-      })?;
-  }
-  if let Some(transformer) = req.account.provider.input_transformer() {
-    upstream_body = transformer.transform_input(&req.meta, upstream_body)?;
-  }
-  let debug_outbound_body = Bytes::from(serde_json::to_vec(&upstream_body).unwrap_or_default());
-  let upstream_wire_body = if upstream_body == req.body {
-    req.raw_body.clone()
-  } else {
-    crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
-      .map_err(|message| crate::provider::error::Error::Profiles { message })?
-  };
-  Ok(PreparedRequest {
-    meta: req.meta,
-    inbound_body: req.body,
-    upstream_body,
-    upstream_wire_body,
-    debug_outbound_body,
-    content_encoding: req.content_encoding,
-    account: req.account,
-    capture: new_outbound_capture(),
-  })
-}
-
-async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provider::Result<reqwest::Response> {
-  let ctx = RequestCtx {
-    endpoint: req.meta.upstream_endpoint,
-    http: &state.http,
-    body: &req.upstream_body,
-    body_bytes: Some(&req.upstream_wire_body),
-    content_encoding: req.content_encoding.map(|encoding| encoding.as_str()),
-    stream: req.meta.stream,
-    initiator: req.meta.initiator.as_str(),
-    inbound_headers: &req.meta.inbound_headers,
-    behave_as: req.meta.behave_as.as_deref(),
-    outbound: Some(req.capture.clone()),
-  };
-  match req.meta.upstream_endpoint {
-    Endpoint::ChatCompletions => req.account.provider.chat(ctx).await,
-    Endpoint::Responses => req.account.provider.responses(ctx).await,
-    Endpoint::Messages => req.account.provider.messages(ctx).await,
-  }
-}
-
-fn rewrite_model(body: &Value, model: &str) -> Value {
-  let mut body = body.clone();
-  if let Some(obj) = body.as_object_mut() {
-    obj.insert("model".into(), Value::String(model.to_string()));
-  }
-  body
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::config::{Account as AccountCfg, Config};
   use crate::provider::{Endpoint, Provider};
+  use crate::pipeline::request::ResolvedRequest;
   use crate::api::build_state;
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
+  use bytes::Bytes;
   use llm_core::event::EventBus;
-  use llm_core::pipeline::InputTransformer;
+  use llm_core::pipeline::{InputTransformer, RequestMeta};
   use serde_json::json;
+  use std::sync::Arc;
 
   fn zai_account() -> AccountCfg {
     AccountCfg {
