@@ -354,7 +354,9 @@ pub(crate) async fn handle_endpoint(
     // Emit RequestResponded with upstream status
     state.events.emit(llm_core::event::Event::RequestResponded {
       request_id: request_id.clone(),
+      attempt: attempt_u32,
       status: status.as_u16(),
+      latency_ms: started.elapsed().as_millis() as u64,
       resp_headers: resp.headers().clone(),
     });
 

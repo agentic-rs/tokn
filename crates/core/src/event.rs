@@ -33,7 +33,11 @@ pub enum Event {
   /// Upstream response headers received.
   RequestResponded {
     request_id: String,
+    /// Retry attempt number (0 = first attempt).
+    attempt: u32,
     status: u16,
+    /// Time from inbound request start until upstream response headers arrived.
+    latency_ms: u64,
     resp_headers: HeaderMap,
   },
 

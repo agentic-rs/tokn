@@ -22,6 +22,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_usage_breakdown",
     sql: include_str!("../../../../scripts/migrations/requests/003_add_usage_breakdown.sql"),
   },
+  migrate::Migration {
+    version: 4,
+    name: "add_response_header_latency",
+    sql: include_str!("../../../../scripts/migrations/requests/004_add_response_header_latency.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -68,14 +73,14 @@ impl RequestsDb {
     let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
 
     conn.execute(
-      "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms,
+      "INSERT INTO requests (ts, session_id, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
                              input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
                              outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
                              outbound_resp_status, outbound_resp_headers, outbound_resp_body,
                              inbound_resp_status, inbound_resp_headers, inbound_resp_body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)",
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+               ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
       params![
         r.ts,
         r.session_id,
@@ -88,7 +93,8 @@ impl RequestsDb {
         r.initiator,
         r.status as i64,
         r.stream as i64,
-        r.latency_ms as i64,
+        r.latency_ms.map(|v| v as i64),
+        r.latency_header_ms.map(|v| v as i64),
         r.usage.input_tokens.map(|v| v as i64),
         r.usage.output_tokens.map(|v| v as i64),
         r.usage.details.cache_read.map(|v| v as i64),
@@ -176,6 +182,7 @@ mod tests {
       "output_tok",
       "cached_tok",
       "reasoning_tok",
+      "latency_header_ms",
       "inbound_req_headers",
       "inbound_req_body",
       "outbound_req_headers",
@@ -197,7 +204,7 @@ mod tests {
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 3);
+    assert_eq!(v, 4);
   }
 
   #[test]
@@ -240,7 +247,8 @@ mod tests {
       initiator: "user".into(),
       status: 200,
       stream: true,
-      latency_ms: 1,
+      latency_ms: Some(1),
+      latency_header_ms: Some(1),
       usage: Usage::default(),
       inbound_req: HttpSnapshot::default(),
       outbound_req: None,

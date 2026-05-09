@@ -102,6 +102,7 @@ struct PendingRequest {
   provider_id: String,
   inbound_req: HttpSnapshot,
   outbound_req: Option<HttpSnapshot>,
+  latency_header_ms: Option<u64>,
 }
 
 /// Database writer that implements `EventHandler` for use with the event bus.
@@ -159,6 +160,7 @@ impl EventHandler for DbEventHandler {
             provider_id: String::new(),
             inbound_req: inbound_req.clone(),
             outbound_req: None,
+            latency_header_ms: None,
           },
         );
       }
@@ -176,7 +178,9 @@ impl EventHandler for DbEventHandler {
         let key = (request_id.clone(), *attempt);
         if *attempt > 0 && !self.pending.contains_key(&key) {
           if let Some(base) = self.pending.get(&(request_id.clone(), 0)).cloned() {
-            self.pending.insert(key.clone(), base);
+            let mut retry = base;
+            retry.latency_header_ms = None;
+            self.pending.insert(key.clone(), retry);
           }
         }
         if let Some(p) = self.pending.get_mut(&key) {
@@ -186,6 +190,17 @@ impl EventHandler for DbEventHandler {
           p.stream = *stream;
           p.initiator = initiator.clone();
           p.outbound_req = outbound_req.clone();
+        }
+      }
+      Event::RequestResponded {
+        request_id,
+        attempt,
+        latency_ms,
+        ..
+      } => {
+        let key = (request_id.clone(), *attempt);
+        if let Some(p) = self.pending.get_mut(&key) {
+          p.latency_header_ms = Some(*latency_ms);
         }
       }
       Event::RequestResult {
@@ -222,7 +237,8 @@ impl EventHandler for DbEventHandler {
             initiator: p.initiator,
             status: *status,
             stream: p.stream,
-            latency_ms: *latency_ms,
+            latency_ms: Some(*latency_ms),
+            latency_header_ms: p.latency_header_ms,
             usage: usage.clone(),
             inbound_req: p.inbound_req,
             outbound_req: p.outbound_req,
@@ -246,7 +262,8 @@ impl EventHandler for DbEventHandler {
             initiator: String::new(),
             status: *status,
             stream: false,
-            latency_ms: *latency_ms,
+            latency_ms: Some(*latency_ms),
+            latency_header_ms: None,
             usage: usage.clone(),
             inbound_req: HttpSnapshot::default(),
             outbound_req: None,
@@ -338,6 +355,16 @@ mod tests {
     }
   }
 
+  fn responded(req_id: &str, attempt: u32, latency_ms: u64) -> Event {
+    Event::RequestResponded {
+      request_id: req_id.into(),
+      attempt,
+      status: 200,
+      latency_ms,
+      resp_headers: HeaderMap::new(),
+    }
+  }
+
   fn completed(
     req_id: &str,
     success: bool,
@@ -355,8 +382,8 @@ mod tests {
     }
   }
 
-  /// Open all `*.db` files in requests dir and return rows of (request_id, status, request_error).
-  fn fetch_rows(dir: &std::path::Path) -> Vec<(String, i64, Option<String>)> {
+  /// Open all `*.db` files in requests dir and return selected request row fields.
+  fn fetch_rows(dir: &std::path::Path) -> Vec<(String, i64, Option<String>, Option<i64>)> {
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
       let p = entry.unwrap().path();
@@ -365,7 +392,9 @@ mod tests {
       }
       let conn = Connection::open(&p).unwrap();
       let mut stmt = conn
-        .prepare("SELECT request_id, status, request_error FROM requests ORDER BY request_id")
+        .prepare(
+          "SELECT request_id, status, request_error, latency_header_ms FROM requests ORDER BY request_id",
+        )
         .unwrap();
       let iter = stmt
         .query_map([], |r| {
@@ -373,6 +402,7 @@ mod tests {
             r.get::<_, String>(0)?,
             r.get::<_, i64>(1)?,
             r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<i64>>(3)?,
           ))
         })
         .unwrap();
@@ -399,6 +429,23 @@ mod tests {
     assert_eq!(rows[0].0, "req-1");
     assert_eq!(rows[0].1, 200);
     assert_eq!(rows[0].2, None);
+  }
+
+  #[test]
+  fn response_header_latency_is_recorded() {
+    let (mut h, dir) = make_handler();
+    let req = "req-header-latency";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&parsed(req, 0));
+    h.handle(&responded(req, 0, 42));
+    h.handle(&result(req, 0, 200, None));
+    h.handle(&completed(req, true, 1, Some(200), None));
+
+    let rows = fetch_rows(&dir);
+    assert_eq!(rows.len(), 1, "expected exactly one row, got {rows:?}");
+    assert_eq!(rows[0].0, "req-header-latency");
+    assert_eq!(rows[0].3, Some(42));
   }
 
   /// Pending in-memory state may exist (started + parsed observed), but

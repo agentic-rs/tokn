@@ -83,7 +83,8 @@ mod tests {
               initiator: initiator.clone().unwrap_or_default(),
               status: 0,
               stream: false,
-              latency_ms: 0,
+              latency_ms: None,
+              latency_header_ms: None,
               usage: Usage::default(),
               inbound_req: inbound_req.clone(),
               outbound_req: None,
@@ -107,7 +108,9 @@ mod tests {
           let key = (request_id.clone(), *attempt);
           if *attempt > 0 && !self.pending.contains_key(&key) {
             if let Some(base) = self.pending.get(&(request_id.clone(), 0)).cloned() {
-              self.pending.insert(key.clone(), base);
+              let mut retry = base;
+              retry.latency_header_ms = None;
+              self.pending.insert(key.clone(), retry);
             }
           }
           if let Some(r) = self.pending.get_mut(&key) {
@@ -155,7 +158,8 @@ mod tests {
             initiator: String::new(),
             status: 0,
             stream: false,
-            latency_ms: 0,
+            latency_ms: None,
+            latency_header_ms: None,
             usage: Usage::default(),
             inbound_req: Default::default(),
             outbound_req: None,
@@ -164,7 +168,7 @@ mod tests {
             messages: Vec::new(),
           });
           r.session_source = *session_source;
-          r.latency_ms = *latency_ms;
+          r.latency_ms = Some(*latency_ms);
           r.status = *status;
           r.usage = usage.clone();
           r.request_error = request_error.clone();
@@ -172,6 +176,17 @@ mod tests {
           r.outbound_resp = outbound_resp.clone();
           r.messages = messages.clone();
           self.records.lock().unwrap().push(r);
+        }
+        Event::RequestResponded {
+          request_id,
+          attempt,
+          latency_ms,
+          ..
+        } => {
+          let key = (request_id.clone(), *attempt);
+          if let Some(r) = self.pending.get_mut(&key) {
+            r.latency_header_ms = Some(*latency_ms);
+          }
         }
         _ => {}
       }

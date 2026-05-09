@@ -601,6 +601,14 @@ async fn proxy_passthrough(
   });
 
   let response = upstream.send().await.context("send passthrough upstream request")?;
+  let status = response.status();
+  state.events.emit(llm_core::event::Event::RequestResponded {
+    request_id: ctx.request_id.clone(),
+    attempt: ctx.attempt,
+    status: status.as_u16(),
+    latency_ms: started.elapsed().as_millis() as u64,
+    resp_headers: response.headers().clone(),
+  });
 
   if is_sse_response(response.headers(), stream) {
     // Background recorder emits RequestCompleted after stream ends.
