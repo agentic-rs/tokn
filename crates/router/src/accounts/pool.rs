@@ -61,6 +61,18 @@ pub enum EndpointAcquire {
 }
 
 impl AccountPool {
+  pub fn empty(cfg: &Config) -> Arc<Self> {
+    Arc::new(Self {
+      buckets: BTreeMap::new(),
+      accounts: Vec::new(),
+      cooldown_base: Duration::from_secs(cfg.pool.failure_cooldown_secs),
+      affinity: Affinity::new(
+        Duration::from_secs(cfg.pool.session_ttl_secs),
+        Duration::from_secs(cfg.pool.session_tombstone_secs),
+      ),
+    })
+  }
+
   pub fn from_config_with<F>(cfg: &Config, build_provider: F) -> Result<Arc<Self>>
   where
     F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,

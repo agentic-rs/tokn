@@ -12,6 +12,7 @@ use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
 use llm_config::Config;
+use llm_config::RouteMode;
 use llm_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -194,7 +195,11 @@ async fn health() -> &'static str {
 
 pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
-  let pool = AccountPool::from_config_with(cfg, crate::accounts::registry::build_for_account)?;
+  let pool = if cfg.accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
+    AccountPool::empty(cfg)
+  } else {
+    AccountPool::from_config_with(cfg, crate::accounts::registry::build_for_account)?
+  };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
@@ -268,5 +273,29 @@ mod tests {
     headers.insert("x-opencode-session", "opencode-session".parse().unwrap());
 
     assert_eq!(first_header(&headers, SESSION_ID_HEADERS), Some("client-session"));
+  }
+
+  #[test]
+  fn build_state_allows_empty_accounts_in_passthrough_mode() {
+    let mut cfg = Config::default();
+    cfg.server.route_mode = RouteMode::Passthrough;
+    cfg.accounts.clear();
+    let (bus, _rx) = EventBus::new(16);
+
+    let state = build_state(&cfg, Arc::new(bus)).expect("passthrough mode should allow empty accounts");
+    assert_eq!(state.pool.len(), 0);
+  }
+
+  #[test]
+  fn build_state_rejects_empty_accounts_in_non_passthrough_mode() {
+    let mut cfg = Config::default();
+    cfg.server.route_mode = RouteMode::Route;
+    cfg.accounts.clear();
+    let (bus, _rx) = EventBus::new(16);
+
+    let res = build_state(&cfg, Arc::new(bus));
+    assert!(res.is_err(), "non-passthrough mode should require accounts");
+    let err = res.err().expect("checked above");
+    assert!(err.to_string().contains("no accounts configured"));
   }
 }
