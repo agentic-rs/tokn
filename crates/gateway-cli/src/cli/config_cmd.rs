@@ -2,9 +2,13 @@
 //! helpers. Comment-preserving edits via `toml_edit`.
 
 use crate::config::{paths, Config};
+use crate::provider::ID_GITHUB_COPILOT;
 use crate::provider::profiles::{self, Profiles};
+use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
+use inquire::{Confirm, Select, Text};
+use llm_config::RouteMode;
 use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value as EditValue};
 
@@ -35,6 +39,53 @@ pub enum ConfigCmd {
   },
   /// List known persona profiles and verified status
   ListProfiles,
+  /// Initialize config with onboarding wizard
+  Init(InitArgs),
+}
+
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+pub enum RouteModeArg {
+  Passthrough,
+  Exact,
+  Route,
+  Fuzzy,
+}
+
+impl From<RouteModeArg> for RouteMode {
+  fn from(value: RouteModeArg) -> Self {
+    match value {
+      RouteModeArg::Passthrough => RouteMode::Passthrough,
+      RouteModeArg::Exact => RouteMode::Exact,
+      RouteModeArg::Route => RouteMode::Route,
+      RouteModeArg::Fuzzy => RouteMode::Fuzzy,
+    }
+  }
+}
+
+#[derive(Args, Debug)]
+pub struct InitArgs {
+  /// Non-interactive mode.
+  #[arg(long)]
+  pub yes: bool,
+  /// Runtime route mode override.
+  #[arg(long, value_enum)]
+  pub route_mode: Option<RouteModeArg>,
+  /// Runtime serve host override.
+  #[arg(long)]
+  pub host: Option<String>,
+  /// Runtime serve port override.
+  #[arg(long)]
+  pub port: Option<u16>,
+  /// Runtime proxy host override.
+  #[arg(long)]
+  pub proxy_host: Option<String>,
+  /// Runtime proxy port override.
+  #[arg(long)]
+  pub proxy_port: Option<u16>,
+  /// Non-interactive repeatable account specs:
+  /// id=...,provider=...,from=...[,env_var=...]
+  #[arg(long = "account")]
+  pub accounts: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -80,6 +131,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ConfigArgs) -> Result<()> {
     ConfigCmd::EditProfiles => cmd_edit_profiles(),
     ConfigCmd::Path { profiles } => cmd_path(&path, profiles),
     ConfigCmd::ListProfiles => cmd_list_profiles(),
+    ConfigCmd::Init(a) => cmd_init(&path, a).await,
   }
 }
 
@@ -255,6 +307,295 @@ fn cmd_list_profiles() -> Result<()> {
     println!("{name:<16}  {tag}");
   }
   Ok(())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AccountSpec {
+  id: String,
+  provider: String,
+  from: String,
+  env_var: Option<String>,
+  refresh_token: Option<String>,
+  refresh_token_env_var: Option<String>,
+}
+
+async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
+  let (mut cfg, _) = Config::load(Some(path))?;
+  println!("Config path: {}", path.display());
+
+  apply_runtime_overrides(&mut cfg, &args);
+
+  if args.yes {
+    if args.accounts.is_empty() {
+      bail!("--yes requires at least one --account spec");
+    }
+    let client = build_client(&cfg.proxy)?;
+    for raw in &args.accounts {
+      let spec = parse_account_spec(raw)?;
+      let source = account_source_from_spec(&spec, false)?;
+      let account = crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
+      cfg.upsert_account(account);
+    }
+    cfg.save(path)?;
+    println!("Initialized config and upserted {} account(s).", args.accounts.len());
+    return Ok(());
+  }
+
+  interactive_runtime_prompts(&mut cfg)?;
+  let client = build_client(&cfg.proxy)?;
+  let mut upserted = 0usize;
+  loop {
+    let provider = pick_provider()?;
+    let source = pick_source_interactive(&provider)?;
+    let id = pick_account_id(&provider, &source)?;
+    let account = crate::cli::onboarding::resolve_account(&client, &provider, id, source).await?;
+    cfg.upsert_account(account);
+    upserted += 1;
+    let more = Confirm::new("Add another account?")
+      .with_default(false)
+      .prompt()
+      .context("account loop cancelled")?;
+    if !more {
+      break;
+    }
+  }
+
+  cfg.save(path)?;
+  println!("Initialized config and upserted {upserted} account(s).");
+  println!("Next: llm-router serve  # or llm-router proxy start");
+  Ok(())
+}
+
+fn apply_runtime_overrides(cfg: &mut Config, args: &InitArgs) {
+  if let Some(mode) = args.route_mode {
+    cfg.server.route_mode = mode.into();
+  }
+  if let Some(host) = &args.host {
+    cfg.server.host = host.clone();
+  }
+  if let Some(port) = args.port {
+    cfg.server.port = port;
+  }
+  if let Some(host) = &args.proxy_host {
+    cfg.proxy_mode.host = host.clone();
+  }
+  if let Some(port) = args.proxy_port {
+    cfg.proxy_mode.port = port;
+  }
+}
+
+fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
+  let route_options = vec!["route", "passthrough", "exact", "fuzzy"];
+  let default_idx = match cfg.server.route_mode {
+    RouteMode::Route => 0,
+    RouteMode::Passthrough => 1,
+    RouteMode::Exact => 2,
+    RouteMode::Fuzzy => 3,
+  };
+  let selected = Select::new("Route mode:", route_options)
+    .with_starting_cursor(default_idx)
+    .prompt()
+    .context("route mode selection cancelled")?;
+  cfg.server.route_mode = match selected {
+    "route" => RouteMode::Route,
+    "passthrough" => RouteMode::Passthrough,
+    "exact" => RouteMode::Exact,
+    "fuzzy" => RouteMode::Fuzzy,
+    _ => RouteMode::Route,
+  };
+
+  if Confirm::new("Set serve host/port?")
+    .with_default(false)
+    .prompt()
+    .context("serve host/port prompt cancelled")?
+  {
+    let host = Text::new("Serve host:")
+      .with_initial_value(&cfg.server.host)
+      .prompt()
+      .context("serve host prompt cancelled")?;
+    let port = Text::new("Serve port:")
+      .with_initial_value(&cfg.server.port.to_string())
+      .prompt()
+      .context("serve port prompt cancelled")?;
+    cfg.server.host = host;
+    cfg.server.port = port.parse().context("serve port must be a valid u16")?;
+  }
+
+  if Confirm::new("Set proxy host/port?")
+    .with_default(false)
+    .prompt()
+    .context("proxy host/port prompt cancelled")?
+  {
+    let host = Text::new("Proxy host:")
+      .with_initial_value(&cfg.proxy_mode.host)
+      .prompt()
+      .context("proxy host prompt cancelled")?;
+    let port = Text::new("Proxy port:")
+      .with_initial_value(&cfg.proxy_mode.port.to_string())
+      .prompt()
+      .context("proxy port prompt cancelled")?;
+    cfg.proxy_mode.host = host;
+    cfg.proxy_mode.port = port.parse().context("proxy port must be a valid u16")?;
+  }
+  Ok(())
+}
+
+fn pick_provider() -> Result<String> {
+  let options = crate::cli::onboarding::known_providers();
+  let selected = Select::new("Pick account provider:", options)
+    .with_starting_cursor(0)
+    .prompt()
+    .context("provider selection cancelled")?;
+  Ok(selected.to_string())
+}
+
+fn pick_source_interactive(provider: &str) -> Result<crate::cli::onboarding::CredentialSource> {
+  let options: Vec<&str> = if provider == ID_GITHUB_COPILOT {
+    vec!["login", "gh", "copilot-plugin", "refresh-token"]
+  } else {
+    vec!["login", "env"]
+  };
+  let picked = Select::new("Credential source:", options)
+    .with_starting_cursor(0)
+    .prompt()
+    .context("credential source selection cancelled")?;
+  match picked {
+    "login" => Ok(crate::cli::onboarding::CredentialSource::Login),
+    "gh" => Ok(crate::cli::onboarding::CredentialSource::Gh),
+    "copilot-plugin" => Ok(crate::cli::onboarding::CredentialSource::CopilotPlugin),
+    "refresh-token" => {
+      let token = Text::new("GitHub Copilot refresh token (leave empty to use env var):")
+        .prompt()
+        .context("refresh token prompt cancelled")?;
+      let trimmed = token.trim().to_string();
+      let token = if trimmed.is_empty() {
+        let env_var = Text::new("Refresh token env var:")
+          .with_initial_value("GITHUB_COPILOT_REFRESH_TOKEN")
+          .prompt()
+          .context("refresh token env var prompt cancelled")?;
+        let value = std::env::var(&env_var)
+          .map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
+        let v = value.trim().to_string();
+        if v.is_empty() {
+          bail!("environment variable `{env_var}` is empty");
+        }
+        v
+      } else {
+        trimmed
+      };
+      Ok(crate::cli::onboarding::CredentialSource::RefreshToken { token })
+    }
+    "env" => {
+      let env_var = Text::new("Environment variable containing API key:")
+        .with_initial_value("ZAI_API_KEY")
+        .prompt()
+        .context("env var prompt cancelled")?;
+      Ok(crate::cli::onboarding::CredentialSource::Env { env_var })
+    }
+    _ => bail!("unsupported credential source"),
+  }
+}
+
+fn pick_account_id(provider: &str, source: &crate::cli::onboarding::CredentialSource) -> Result<Option<String>> {
+  let default_id = if provider == ID_GITHUB_COPILOT {
+    "imported"
+  } else {
+    provider
+  };
+  let prompt = match source {
+    crate::cli::onboarding::CredentialSource::Login => "Account id (leave empty for auto):",
+    _ => "Account id:",
+  };
+  let text = Text::new(prompt)
+    .with_initial_value(default_id)
+    .prompt()
+    .context("account id prompt cancelled")?;
+  let trimmed = text.trim().to_string();
+  if trimmed.is_empty() {
+    return Ok(None);
+  }
+  Ok(Some(trimmed))
+}
+
+fn parse_account_spec(raw: &str) -> Result<AccountSpec> {
+  let mut id: Option<String> = None;
+  let mut provider: Option<String> = None;
+  let mut from: Option<String> = None;
+  let mut env_var: Option<String> = None;
+  let mut refresh_token: Option<String> = None;
+  let mut refresh_token_env_var: Option<String> = None;
+
+  for part in raw.split(',') {
+    let (k, v) = part
+      .split_once('=')
+      .ok_or_else(|| anyhow!("invalid account spec segment '{part}', expected key=value"))?;
+    let key = k.trim();
+    let val = v.trim();
+    if val.is_empty() {
+      bail!("account spec key '{key}' cannot be empty");
+    }
+    match key {
+      "id" => id = Some(val.to_string()),
+      "provider" => provider = Some(val.to_string()),
+      "from" => from = Some(val.to_string()),
+      "env_var" => env_var = Some(val.to_string()),
+      "refresh_token" => refresh_token = Some(val.to_string()),
+      "refresh_token_env_var" => refresh_token_env_var = Some(val.to_string()),
+      _ => bail!("unknown account spec key '{key}'"),
+    }
+  }
+
+  let spec = AccountSpec {
+    id: id.ok_or_else(|| anyhow!("account spec missing required key 'id'"))?,
+    provider: provider.ok_or_else(|| anyhow!("account spec missing required key 'provider'"))?,
+    from: from.ok_or_else(|| anyhow!("account spec missing required key 'from'"))?,
+    env_var,
+    refresh_token,
+    refresh_token_env_var,
+  };
+  crate::cli::onboarding::validate_provider(&spec.provider)?;
+  Ok(spec)
+}
+
+fn account_source_from_spec(spec: &AccountSpec, allow_login: bool) -> Result<crate::cli::onboarding::CredentialSource> {
+  let source = match spec.from.as_str() {
+    "login" => {
+      if !allow_login {
+        bail!("from=login is interactive-only; use env/gh/copilot-plugin/refresh-token in --yes mode");
+      }
+      crate::cli::onboarding::CredentialSource::Login
+    }
+    "gh" => crate::cli::onboarding::CredentialSource::Gh,
+    "copilot-plugin" => crate::cli::onboarding::CredentialSource::CopilotPlugin,
+    "refresh-token" => {
+      let token = if let Some(t) = spec.refresh_token.clone() {
+        let trimmed = t.trim().to_string();
+        if trimmed.is_empty() {
+          bail!("refresh_token cannot be empty");
+        }
+        trimmed
+      } else {
+        let env_name = spec
+          .refresh_token_env_var
+          .clone()
+          .unwrap_or_else(|| "GITHUB_COPILOT_REFRESH_TOKEN".to_string());
+        let value = std::env::var(&env_name)
+          .map_err(|_| anyhow!("environment variable `{env_name}` is not set; set it or pass refresh_token=..."))?;
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+          bail!("environment variable `{env_name}` is empty");
+        }
+        trimmed
+      };
+      crate::cli::onboarding::CredentialSource::RefreshToken { token }
+    }
+    "env" => crate::cli::onboarding::CredentialSource::Env {
+      env_var: spec.env_var.clone().unwrap_or_else(|| "ZAI_API_KEY".to_string()),
+    },
+    other => bail!("unsupported from='{other}'; expected login|gh|copilot-plugin|refresh-token|env"),
+  };
+  crate::cli::onboarding::validate_provider_source(&spec.provider, &source)?;
+  Ok(source)
 }
 
 fn open_in_editor(path: &std::path::Path) -> Result<()> {
@@ -496,5 +837,75 @@ mod tests {
     let prior = value(true);
     let new = coerce("false", Some(&prior));
     assert!(matches!(new, Item::Value(EditValue::Boolean(_))));
+  }
+
+  #[test]
+  fn parse_account_spec_happy_path() {
+    let spec = parse_account_spec("id=work,provider=github-copilot,from=gh").unwrap();
+    assert_eq!(spec.id, "work");
+    assert_eq!(spec.provider, "github-copilot");
+    assert_eq!(spec.from, "gh");
+    assert_eq!(spec.env_var, None);
+    assert_eq!(spec.refresh_token, None);
+    assert_eq!(spec.refresh_token_env_var, None);
+  }
+
+  #[test]
+  fn parse_account_spec_requires_id_provider_from() {
+    let err = parse_account_spec("provider=github-copilot,from=gh").unwrap_err().to_string();
+    assert!(err.contains("missing required key 'id'"));
+
+    let err = parse_account_spec("id=work,from=gh").unwrap_err().to_string();
+    assert!(err.contains("missing required key 'provider'"));
+
+    let err = parse_account_spec("id=work,provider=github-copilot")
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("missing required key 'from'"));
+  }
+
+  #[test]
+  fn account_source_rejects_incompatible_provider_source() {
+    let spec = AccountSpec {
+      id: "cn".into(),
+      provider: "zai".into(),
+      from: "gh".into(),
+      env_var: None,
+      refresh_token: None,
+      refresh_token_env_var: None,
+    };
+    let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
+    assert!(err.contains("static-API-key provider"));
+  }
+
+  #[test]
+  fn account_source_rejects_login_in_non_interactive() {
+    let spec = AccountSpec {
+      id: "work".into(),
+      provider: "github-copilot".into(),
+      from: "login".into(),
+      env_var: None,
+      refresh_token: None,
+      refresh_token_env_var: None,
+    };
+    let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
+    assert!(err.contains("interactive-only"));
+  }
+
+  #[test]
+  fn account_source_accepts_refresh_token_literal() {
+    let spec = AccountSpec {
+      id: "work".into(),
+      provider: "github-copilot".into(),
+      from: "refresh-token".into(),
+      env_var: None,
+      refresh_token: Some("rtok".into()),
+      refresh_token_env_var: None,
+    };
+    let source = account_source_from_spec(&spec, false).unwrap();
+    assert!(matches!(
+      source,
+      crate::cli::onboarding::CredentialSource::RefreshToken { .. }
+    ));
   }
 }

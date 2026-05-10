@@ -11,6 +11,7 @@ mod headers;
 mod import;
 mod login;
 mod migration;
+mod onboarding;
 mod proxy;
 mod serve;
 mod update;
@@ -96,7 +97,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
     Cmd::Login(_) | Cmd::Import(_) | Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Config(args) => match args.cmd {
-      Set(_) | Unset(_) | Edit | EditProfiles => RunMode::MutatingCli,
+      Set(_) | Unset(_) | Edit | EditProfiles | Init(_) => RunMode::MutatingCli,
       _ => RunMode::ReadOnlyCli,
     },
     Cmd::Account(account::AccountCmd::Remove { .. }) => RunMode::MutatingCli,

@@ -1,7 +1,7 @@
-use crate::config::{Account, AuthType, Config, ProxyConfig};
-use crate::provider::{github_copilot as gh, zai, ID_GITHUB_COPILOT, ID_ZAI_CODING_PLAN, ZAI_PROVIDERS};
+use crate::cli::onboarding::{known_providers, resolve_account, CredentialSource};
+use crate::config::{Config, ProxyConfig};
+use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::http::build_client;
-use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use std::io::IsTerminal;
@@ -42,18 +42,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
     Some(p) => p,
     None => pick_provider_interactive()?,
   };
-
-  let account = match provider.as_str() {
-    ID_GITHUB_COPILOT => copilot_login(&client, &cfg, args.id).await?,
-    p if ZAI_PROVIDERS.contains(&p) => zai_login(&client, p, args.id).await?,
-    other => {
-      return Err(anyhow!(
-        "unknown provider '{other}'. Try one of: {}, {}",
-        ID_GITHUB_COPILOT,
-        ZAI_PROVIDERS.join(" | ")
-      ));
-    }
-  };
+  let account = resolve_account(&client, &provider, args.id, CredentialSource::Login).await?;
 
   let id = account.id.clone();
   let provider = account.provider.clone();
@@ -75,9 +64,7 @@ fn pick_provider_interactive() -> Result<String> {
       ZAI_PROVIDERS.join(" | ")
     ));
   }
-  let mut options: Vec<&'static str> = Vec::with_capacity(1 + ZAI_PROVIDERS.len());
-  options.push(ID_GITHUB_COPILOT);
-  options.extend(ZAI_PROVIDERS.iter().copied());
+  let options = known_providers();
 
   let pick = inquire::Select::new("Pick a provider:", options)
     .with_starting_cursor(0) // github-copilot
@@ -85,134 +72,4 @@ fn pick_provider_interactive() -> Result<String> {
     .prompt()
     .context("provider selection cancelled")?;
   Ok(pick.to_string())
-}
-
-async fn copilot_login(client: &reqwest::Client, _cfg: &Config, id_override: Option<String>) -> Result<Account> {
-  println!("Requesting device code from GitHub…");
-  let dc = gh::oauth::request_device_code(client).await?;
-  println!();
-  println!("  Open: {}", dc.verification_uri);
-  println!("  Code: {}", dc.user_code);
-  println!();
-  println!("Waiting for authorization (expires in {}s)…", dc.expires_in);
-
-  let gh_token = gh::oauth::poll_for_token(client, &dc).await?;
-  println!("Got GitHub token. Verifying Copilot access…");
-
-  let headers = llm_provider_copilot::config::CopilotHeaders::default();
-  let resp = gh::token::exchange(client, &gh_token, &headers).await?;
-
-  let id = match id_override {
-    Some(s) => s,
-    None => fetch_username(client, &gh_token)
-      .await
-      .unwrap_or_else(|_| "default".into()),
-  };
-
-  Ok(Account {
-    id,
-    provider: ID_GITHUB_COPILOT.into(),
-    enabled: true,
-    tags: Vec::new(),
-    label: None,
-    base_url: None,
-    headers: Default::default(),
-    auth_type: Some(AuthType::Bearer),
-    username: None,
-    api_key: None,
-    api_key_expires_at: None,
-    access_token: Some(Secret::new(resp.token)),
-    access_token_expires_at: Some(resp.expires_at),
-    id_token: None,
-    refresh_token: Some(Secret::new(gh_token)),
-    extra: Default::default(),
-    refresh_url: Some(gh::TOKEN_EXCHANGE_URL.into()),
-    last_refresh: Some(time::OffsetDateTime::now_utc().unix_timestamp()),
-    settings: toml::Table::new(),
-  })
-}
-
-async fn zai_login(client: &reqwest::Client, provider_alias: &str, id_override: Option<String>) -> Result<Account> {
-  println!("Z.ai uses a static API key. Create one at https://z.ai/manage-apikey/apikey-list");
-  println!("(China endpoint: https://open.bigmodel.cn/usercenter/apikeys)");
-  let key = rpassword::prompt_password("API key: ")
-    .context("reading API key from stdin")?
-    .trim()
-    .to_string();
-  if key.is_empty() {
-    return Err(anyhow!("empty API key"));
-  }
-
-  println!("Verifying key against {} …", zai::DEFAULT_BASE_URL);
-  verify_zai_key(client, &key).await?;
-  println!("Key OK.");
-
-  let id = id_override.unwrap_or_else(|| {
-    // Default to the canonical id; users can pass --id to disambiguate.
-    if provider_alias == ID_ZAI_CODING_PLAN {
-      "coding-plan".into()
-    } else {
-      provider_alias.into()
-    }
-  });
-
-  Ok(Account {
-    id,
-    provider: provider_alias.into(),
-    enabled: true,
-    tags: Vec::new(),
-    label: None,
-    base_url: Some(zai::default_base_url(provider_alias).into()),
-    headers: Default::default(),
-    auth_type: Some(AuthType::Bearer),
-    username: None,
-    api_key: Some(Secret::new(key)),
-    api_key_expires_at: None,
-    access_token: None,
-    access_token_expires_at: None,
-    id_token: None,
-    refresh_token: None,
-    extra: Default::default(),
-    refresh_url: None,
-    last_refresh: None,
-    settings: toml::Table::new(),
-  })
-}
-
-async fn verify_zai_key(client: &reqwest::Client, key: &str) -> Result<()> {
-  let url = format!("{}/models", zai::DEFAULT_BASE_URL.trim_end_matches('/'));
-  let resp = client
-    .get(&url)
-    .header("authorization", format!("Bearer {key}"))
-    .header("accept", "application/json")
-    .send()
-    .await
-    .context("contacting Z.ai")?;
-  let status = resp.status();
-  if status.is_success() {
-    return Ok(());
-  }
-  let body = resp.text().await.unwrap_or_default();
-  Err(anyhow!(
-    "Z.ai rejected the key (HTTP {status}). Body: {}",
-    body.chars().take(200).collect::<String>()
-  ))
-}
-
-async fn fetch_username(client: &reqwest::Client, gh_token: &str) -> Result<String> {
-  #[derive(serde::Deserialize)]
-  struct Me {
-    login: String,
-  }
-  let me: Me = client
-    .get("https://api.github.com/user")
-    .header("authorization", format!("token {gh_token}"))
-    .header("accept", "application/json")
-    .header("user-agent", "llm-router")
-    .send()
-    .await?
-    .error_for_status()?
-    .json()
-    .await?;
-  Ok(me.login)
 }
