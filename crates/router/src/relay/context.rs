@@ -1,7 +1,7 @@
+use crate::pipeline::{BodyExtract, HeaderExtract};
 use crate::provider::Endpoint;
 use crate::relay::passthrough::passthrough_endpoint;
 use axum::http::Method;
-use serde_json::Value;
 use std::time::Instant;
 
 /// Bundled request metadata needed by forward/response functions.
@@ -46,32 +46,60 @@ impl ForwardContext {
   pub fn from_passthrough(
     method: &Method,
     path: &str,
-    req_headers: &reqwest::header::HeaderMap,
-    req_body: &Value,
+    headers: &HeaderExtract,
+    body: &BodyExtract,
+    downstream_headers: reqwest::header::HeaderMap,
     started: Instant,
   ) -> Self {
     let endpoint = passthrough_endpoint(method, path);
-    let model = req_body
-      .get("model")
-      .and_then(|v| v.as_str())
-      .unwrap_or("unknown")
-      .to_string();
-    let request_id = crate::api::first_header(req_headers, crate::api::REQUEST_ID_HEADERS)
-      .map(|s| s.to_string())
-      .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    let session_id = crate::api::first_header(req_headers, crate::api::SESSION_ID_HEADERS).map(|s| s.to_string());
     // For passthrough, upstream_endpoint == endpoint (no translation)
     let upstream_endpoint = endpoint.unwrap_or(Endpoint::ChatCompletions);
 
     Self {
-      request_id,
+      request_id: headers.request_id.clone(),
       attempt: 0,
-      session_id,
+      session_id: headers.session_id.clone(),
       endpoint,
       upstream_endpoint,
-      downstream_headers: req_headers.clone(),
-      model,
+      downstream_headers,
+      model: body.model.clone(),
       started,
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn passthrough_context_preserves_ingress_ids() {
+    let headers = HeaderExtract {
+      request_id: "request-123".to_string(),
+      session_id: Some("session-123".to_string()),
+      project_id: None,
+      header_initiator: None,
+      route_mode_hint: None,
+    };
+    let body = BodyExtract {
+      model: "gpt-5".to_string(),
+      stream: true,
+      initiator: "user".to_string(),
+      header_initiator: None,
+    };
+    let ctx = ForwardContext::from_passthrough(
+      &Method::POST,
+      "/v1/chat/completions",
+      &headers,
+      &body,
+      reqwest::header::HeaderMap::new(),
+      Instant::now(),
+    );
+
+    assert_eq!(ctx.request_id, "request-123");
+    assert_eq!(ctx.session_id.as_deref(), Some("session-123"));
+    assert_eq!(ctx.endpoint, Some(Endpoint::ChatCompletions));
+    assert_eq!(ctx.upstream_endpoint, Endpoint::ChatCompletions);
+    assert_eq!(ctx.model, "gpt-5");
   }
 }

@@ -138,6 +138,10 @@ impl DbEventHandler {
       _ => None,
     }
   }
+
+  fn fallback_ts() -> i64 {
+    time::OffsetDateTime::now_utc().unix_timestamp()
+  }
 }
 
 impl EventHandler for DbEventHandler {
@@ -387,9 +391,15 @@ impl EventHandler for DbEventHandler {
             messages: messages.clone(),
           }
         } else {
-          tracing::debug!(request_id = %request_id, attempt = *attempt, "RequestResult without prior RequestParsed");
+          let fallback_ts = Self::fallback_ts();
+          tracing::warn!(
+            request_id = %request_id,
+            attempt = *attempt,
+            fallback_ts,
+            "RequestResult without prior RequestParsed; persisting with current timestamp"
+          );
           CallRecord {
-            ts: 0,
+            ts: fallback_ts,
             session_id: String::new(),
             session_source: *session_source,
             source: None,
@@ -633,6 +643,28 @@ mod tests {
     rows
   }
 
+  fn fetch_request_timestamps(dir: &std::path::Path) -> Vec<(String, i64)> {
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn
+        .prepare("SELECT request_id, ts FROM requests ORDER BY request_id")
+        .unwrap();
+      let iter = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+        .unwrap();
+      for r in iter {
+        rows.push(r.unwrap());
+      }
+    }
+    rows.sort();
+    rows
+  }
+
   fn fetch_sessions(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
@@ -861,6 +893,19 @@ mod tests {
     assert_eq!(rows[0].0, "req-no-complete");
     assert_eq!(rows[0].1, Some(200));
     assert_eq!(rows[0].2, None);
+  }
+
+  #[test]
+  fn orphan_result_uses_current_timestamp_instead_of_epoch() {
+    let (mut h, dir) = make_handler();
+    let req = "req-orphan";
+
+    h.handle(&result(req, 0, 200, None));
+
+    let rows = fetch_request_timestamps(&dir);
+    assert_eq!(rows.len(), 1, "expected one orphan result row, got {rows:?}");
+    assert_eq!(rows[0].0, "req-orphan");
+    assert!(rows[0].1 > 0, "expected current timestamp fallback, got {rows:?}");
   }
 
   #[test]

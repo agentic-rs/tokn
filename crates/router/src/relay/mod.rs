@@ -25,6 +25,7 @@ mod tests {
   use super::usage::parse_usage_any_value;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource, Usage};
+  use crate::pipeline::{BodyExtract, HeaderExtract};
   use crate::provider::Endpoint;
   use crate::api::build_state;
   use crate::util::secret::Secret;
@@ -478,14 +479,30 @@ mod tests {
       Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
 
     let req_body_json: serde_json::Value = serde_json::from_slice(&req_body).unwrap();
+    let request_id = "request-123".to_string();
+    let header_extract = HeaderExtract {
+      request_id: request_id.clone(),
+      session_id: Some("client-session".to_string()),
+      project_id: None,
+      header_initiator: None,
+      route_mode_hint: None,
+    };
+    let body_extract = BodyExtract {
+      model: "gpt-4.1".to_string(),
+      stream: true,
+      initiator: "user".to_string(),
+      header_initiator: None,
+    };
 
     let ctx = ForwardContext::from_passthrough(
       &Method::POST,
       "/v1/chat/completions",
-      &req_headers,
-      &req_body_json,
+      &header_extract,
+      &body_extract,
+      req_headers.clone(),
       Instant::now(),
     );
+    assert_eq!(ctx.request_id, request_id);
 
     // Emit lifecycle events as caller would
     state.events.emit(llm_core::event::Event::RequestStarted {
@@ -615,14 +632,30 @@ mod tests {
     let req_body_bytes =
       Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
     let req_body_json: serde_json::Value = serde_json::from_slice(&req_body_bytes).unwrap();
+    let request_id = "request-456".to_string();
+    let header_extract = HeaderExtract {
+      request_id: request_id.clone(),
+      session_id: None,
+      project_id: None,
+      header_initiator: None,
+      route_mode_hint: None,
+    };
+    let body_extract = BodyExtract {
+      model: "gpt-4.1".to_string(),
+      stream: true,
+      initiator: "user".to_string(),
+      header_initiator: None,
+    };
 
     let ctx = ForwardContext::from_passthrough(
       &Method::POST,
       "/v1/chat/completions",
-      &HeaderMap::new(),
-      &req_body_json,
+      &header_extract,
+      &body_extract,
+      HeaderMap::new(),
       Instant::now(),
     );
+    assert_eq!(ctx.request_id, request_id);
 
     let streamed = passthrough_streaming_response(state, ctx, &req_body_json, response);
     let streamed_body = to_bytes(streamed.into_body(), usize::MAX).await.unwrap();
