@@ -1,12 +1,15 @@
 use crate::cli::config_cmd::RouteModeArg;
 use crate::config::Config;
-use crate::provider::{Endpoint, RequestCtx};
+use crate::provider::Endpoint;
 use anyhow::{anyhow, Result};
+use axum::body::Bytes;
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
+use axum::response::Response;
 use clap::{Args, ValueEnum};
 use llm_config::RouteMode;
-use llm_core::event::EventBus;
+use llm_router::api::AppState;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
 pub enum EndpointArg {
@@ -53,6 +56,10 @@ pub struct SmokeArgs {
   #[arg(long, value_enum, default_value_t = EndpointArg::ChatCompletions)]
   pub endpoint: EndpointArg,
 
+  /// Request streaming SSE response.
+  #[arg(long)]
+  pub stream: bool,
+
   /// Output format.
   #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
   pub format: OutputFormat,
@@ -63,13 +70,27 @@ pub struct SmokeArgs {
 
 pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+
+  // --route defaults to the configured serve mode.
   let route_mode = args
     .route
     .map(RouteMode::from)
     .unwrap_or(cfg.server.route_mode);
   cfg.server.route_mode = route_mode;
 
-  let state = llm_router::api::build_state(&cfg, Arc::new(EventBus::noop()))?;
+  if route_mode == RouteMode::Passthrough {
+    anyhow::bail!("passthrough mode requires the proxy; use a different --route mode");
+  }
+
+  // Filter accounts to honour --provider / --account before building the pool.
+  filter_accounts(&mut cfg, args.provider.as_deref(), args.account.as_deref())?;
+
+  // Build the same event bus the server uses: DB writer + progress spinner +
+  // progress log + archive worker, all attached automatically per config + TTY.
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
+  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+
+  let state = crate::server_runtime::build_state(&cfg, events.clone())?;
 
   let model = match &args.model {
     Some(m) => m.clone(),
@@ -77,199 +98,123 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   };
 
   let endpoint: Endpoint = args.endpoint.into();
-  let route = state
-    .route
-    .resolve(&model, None)
-    .map_err(|e| anyhow!("{e}"))?;
 
-  if route_mode == RouteMode::Passthrough {
-    anyhow::bail!("passthrough mode requires the proxy; use a different --route mode");
-  }
-
-  let (acct, upstream_endpoint) = match (&args.provider, &args.account) {
-    (None, None) => acquire_from_pool(&state, &route, endpoint, route_mode)?,
-    (Some(provider_id), None) => acquire_from_provider(&state, provider_id, &route, endpoint, route_mode)?,
-    (Some(provider_id), Some(account_id)) => {
-      acquire_specific(&state, provider_id, account_id, &route, endpoint, route_mode)?
-    }
-    (None, Some(_)) => unreachable!("clap requires= prevents this"),
-  };
-
-  let provider = &acct.provider;
-  let account_cfg = acct.config.load();
+  // Resolve once just to print a friendly header in text mode; the handler
+  // resolves again internally.
+  let route = state.route.resolve(&model, None).map_err(|e| anyhow!("{e}"))?;
 
   if args.format == OutputFormat::Text {
-    println!("account:  {}", account_cfg.id);
-    println!("provider: {}", provider.info().id);
+    println!("provider: {}", args.provider.as_deref().unwrap_or("(any)"));
+    println!("account:  {}", args.account.as_deref().unwrap_or("(any)"));
     println!("model:    {} -> {}", route.requested_model, route.upstream_model);
-    println!("endpoint: {} -> {}", endpoint, upstream_endpoint);
+    println!("endpoint: {}", endpoint);
     println!("route:    {}", route_mode_name(route_mode));
+    println!("stream:   {}", args.stream);
     println!();
   }
 
-  let mut body = serde_json::json!({
-    "model": route.upstream_model,
-    "stream": false,
-    "messages": [{"role": "user", "content": args.message}],
-  });
+  let body_value = build_request_body(endpoint, &route.upstream_model, &args.message, args.stream);
+  let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
+  let headers = build_headers();
 
-  if upstream_endpoint != endpoint {
-    body = llm_router::convert::convert_request(endpoint, upstream_endpoint, &body)
-      .map_err(|e| anyhow!("request conversion failed: {e}"))?;
-  }
-
-  if let Some(transformer) = provider.input_transformer() {
-    let meta = llm_core::pipeline::RequestMeta {
-      endpoint,
-      upstream_endpoint,
-      model: route.requested_model.clone(),
-      upstream_model: route.upstream_model.clone(),
-      stream: false,
-      session_id: None,
-      request_id: None,
-      attempt: 0,
-      project_id: None,
-      initiator: "smoke".into(),
-      header_initiator: None,
-      behave_as: None,
-      inbound_headers: Default::default(),
-    };
-    body = transformer.transform_input(&meta, body)?;
-  }
-
-  let ctx = RequestCtx {
-    endpoint: upstream_endpoint,
-    http: &state.http,
-    body: &body,
-    body_bytes: None,
-    content_encoding: None,
-    stream: false,
-    initiator: "smoke",
-    inbound_headers: &Default::default(),
-    behave_as: None,
-    outbound: None,
+  // Invoke the public axum handler directly. This goes through the same
+  // pipeline used for real HTTP requests, so all events fire (DB rows are
+  // written, progress bar is driven, observers record).
+  let resp_result: Result<Response> = match endpoint {
+    Endpoint::ChatCompletions => llm_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
+      .await
+      .map_err(|e| anyhow!("{e}")),
+    Endpoint::Responses => llm_router::api::endpoints::responses(State(state.clone()), headers, body_bytes)
+      .await
+      .map_err(|e| anyhow!("{e}")),
+    Endpoint::Messages => llm_router::api::endpoints::messages(State(state.clone()), headers, body_bytes)
+      .await
+      .map_err(|e| anyhow!("{e}")),
   };
 
-  let resp = match upstream_endpoint {
-    Endpoint::ChatCompletions => provider.chat(ctx).await?,
-    Endpoint::Responses => provider.responses(ctx).await?,
-    Endpoint::Messages => provider.messages(ctx).await?,
-  };
-
+  let resp = resp_result?;
   let status = resp.status();
-  let body_bytes = resp.bytes().await?;
+  let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+    .await
+    .map_err(|e| anyhow!("read response body: {e}"))?;
+
+  // Flush events so progress bar finalises and DB writes complete before exit.
+  if let Some(archive_runtime) = archive_runtime {
+    archive_runtime.shutdown().await;
+  }
+  events.shutdown().await;
 
   if args.format == OutputFormat::Json {
-    print_json_response(status, &body_bytes)?;
+    print_json_response(status, &resp_body, args.stream)?;
   } else {
-    print_text_response(status, &body_bytes)?;
+    print_text_response(status, &resp_body, args.stream)?;
   }
 
-  if status.is_success() {
-    acct.mark_success();
-  } else {
-    acct.mark_failure(state.pool.cooldown_base());
+  if !status.is_success() {
     std::process::exit(1);
   }
-
   Ok(())
 }
 
-fn acquire_from_pool(
-  state: &llm_router::api::AppState,
-  route: &llm_router::api::routing::RouteResolution,
-  endpoint: Endpoint,
-  route_mode: RouteMode,
-) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
-  match state.pool.acquire_for_route(None, route, endpoint) {
-    llm_router::accounts::EndpointAcquire::Account { acct, endpoint } => Ok((acct, endpoint)),
-    llm_router::accounts::EndpointAcquire::SessionExpired => {
-      Err(anyhow!("session expired (unexpected for smoke test)"))
-    }
-    llm_router::accounts::EndpointAcquire::None => Err(anyhow!(
-      "no account supports model '{}' on endpoint {} with route mode {}",
-      route.requested_model,
-      endpoint,
-      route_mode_name(route_mode),
-    )),
+/// Mutate `cfg.accounts` in-place to keep only entries matching the optional
+/// provider/account filters. Errors if the filter excludes everything.
+fn filter_accounts(cfg: &mut Config, provider: Option<&str>, account: Option<&str>) -> Result<()> {
+  if provider.is_none() && account.is_none() {
+    return Ok(());
   }
-}
-
-fn acquire_from_provider(
-  state: &llm_router::api::AppState,
-  provider_id: &str,
-  route: &llm_router::api::routing::RouteResolution,
-  endpoint: Endpoint,
-  route_mode: RouteMode,
-) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
-  let upstream_model = &route.upstream_model;
-  for acct in state.pool.all() {
-    if acct.provider.info().id != provider_id {
-      continue;
+  let before = cfg.accounts.len();
+  cfg.accounts.retain(|a| {
+    if let Some(p) = provider {
+      if a.provider != p {
+        return false;
+      }
     }
-    if let Some(ep) = matching_endpoint(&acct, upstream_model, endpoint) {
-      return Ok((acct.clone(), ep));
+    if let Some(id) = account {
+      if a.id != id {
+        return false;
+      }
     }
-  }
-  Err(anyhow!(
-    "no account for provider '{}' supports model '{}' on endpoint {} with route mode {}",
-    provider_id,
-    route.requested_model,
-    endpoint,
-    route_mode_name(route_mode),
-  ))
-}
-
-fn acquire_specific(
-  state: &llm_router::api::AppState,
-  provider_id: &str,
-  account_id: &str,
-  route: &llm_router::api::routing::RouteResolution,
-  endpoint: Endpoint,
-  route_mode: RouteMode,
-) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
-  let upstream_model = &route.upstream_model;
-  for acct in state.pool.all() {
-    if acct.config.load().id != account_id {
-      continue;
-    }
-    if acct.provider.info().id != provider_id {
-      anyhow::bail!(
-        "account '{}' belongs to provider '{}', not '{}'",
-        account_id,
-        acct.provider.info().id,
-        provider_id,
-      );
-    }
-    if let Some(ep) = matching_endpoint(&acct, upstream_model, endpoint) {
-      return Ok((acct.clone(), ep));
-    }
+    true
+  });
+  if cfg.accounts.is_empty() {
     anyhow::bail!(
-      "account '{}' does not support model '{}' on endpoint {}",
-      account_id,
-      route.requested_model,
-      endpoint,
+      "no accounts match the requested filters (provider={:?}, account={:?}); had {before} configured",
+      provider,
+      account
     );
   }
-  Err(anyhow!(
-    "no account with id '{}' (provider '{}') found for route mode {}",
-    account_id,
-    provider_id,
-    route_mode_name(route_mode),
-  ))
+  Ok(())
 }
 
-fn matching_endpoint(
-  acct: &llm_router::accounts::AccountHandle,
-  model: &str,
-  requested: Endpoint,
-) -> Option<Endpoint> {
-  [requested, Endpoint::ChatCompletions, Endpoint::Responses, Endpoint::Messages]
-    .into_iter()
-    .find(|ep| acct.provider.model_info(model).is_some() && acct.provider.supports(model, *ep))
+fn build_request_body(endpoint: Endpoint, model: &str, message: &str, stream: bool) -> serde_json::Value {
+  match endpoint {
+    Endpoint::ChatCompletions | Endpoint::Messages => serde_json::json!({
+      "model": model,
+      "stream": stream,
+      "messages": [{"role": "user", "content": message}],
+    }),
+    Endpoint::Responses => serde_json::json!({
+      "model": model,
+      "stream": stream,
+      "input": message,
+    }),
+  }
 }
 
-fn pick_default_model(state: &llm_router::api::AppState, provider_filter: Option<&str>) -> Result<String> {
+fn build_headers() -> HeaderMap {
+  let mut h = HeaderMap::new();
+  h.insert(
+    HeaderName::from_static("content-type"),
+    HeaderValue::from_static("application/json"),
+  );
+  h.insert(
+    HeaderName::from_static("x-request-id"),
+    HeaderValue::from_str(&uuid::Uuid::new_v4().to_string()).unwrap(),
+  );
+  h
+}
+
+fn pick_default_model(state: &AppState, provider_filter: Option<&str>) -> Result<String> {
   for acct in state.pool.all() {
     if let Some(p) = provider_filter {
       if acct.provider.info().id != p {
@@ -295,8 +240,15 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
   }
 }
 
-fn print_text_response(status: reqwest::StatusCode, body: &[u8]) -> Result<()> {
+fn print_text_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -> Result<()> {
   println!("status: {}", status.as_u16());
+  if stream {
+    // SSE: the body is a sequence of `event:`/`data:` lines; print verbatim.
+    let text = String::from_utf8_lossy(body);
+    println!("{text}");
+    return Ok(());
+  }
+
   let text = String::from_utf8_lossy(body);
   let json: serde_json::Value = match serde_json::from_slice(body) {
     Ok(v) => v,
@@ -343,7 +295,17 @@ fn print_text_response(status: reqwest::StatusCode, body: &[u8]) -> Result<()> {
   Ok(())
 }
 
-fn print_json_response(status: reqwest::StatusCode, body: &[u8]) -> Result<()> {
+fn print_json_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -> Result<()> {
+  if stream {
+    // SSE bodies are not JSON; emit a wrapper so JSON consumers stay happy.
+    let wrapper = serde_json::json!({
+      "status": status.as_u16(),
+      "stream": true,
+      "body": String::from_utf8_lossy(body),
+    });
+    println!("{}", serde_json::to_string_pretty(&wrapper)?);
+    return Ok(());
+  }
   let json: serde_json::Value = serde_json::from_slice(body).unwrap_or_else(|_| {
     serde_json::json!({
       "status": status.as_u16(),
