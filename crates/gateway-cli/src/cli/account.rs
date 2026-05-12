@@ -1,7 +1,6 @@
 use crate::cli::import::ImportArgs;
 use crate::cli::login::LoginArgs;
 use crate::config::{Account, AccountState, AccountTier, Config};
-use crate::provider::{ID_GITHUB_COPILOT, ZAI_PROVIDERS};
 use crate::util::http::build_client;
 use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
@@ -141,15 +140,19 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
   // second request. This is a no-op under `--no-quota`.
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
-    if let QuotaResult::Copilot(c) = q {
+    if let QuotaResult::Ok {
+      refreshed: Some(llm_auth::RefreshOutcome::Refreshed { access_token, expires_at }),
+      ..
+    } = q
+    {
       let same_tok = a
         .access_token
         .as_ref()
-        .map(|s| s.expose().as_str() == c.fresh_token.as_str())
+        .map(|s| s.expose().as_str() == access_token.as_str())
         .unwrap_or(false);
-      if !same_tok || a.access_token_expires_at != Some(c.fresh_expires_at) {
-        a.access_token = Some(crate::util::secret::Secret::new(c.fresh_token.clone()));
-        a.access_token_expires_at = Some(c.fresh_expires_at);
+      if !same_tok || a.access_token_expires_at != Some(*expires_at) {
+        a.access_token = Some(crate::util::secret::Secret::new(access_token.clone()));
+        a.access_token_expires_at = Some(*expires_at);
         a.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         dirty = true;
       }
@@ -185,88 +188,50 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
 enum QuotaResult {
   Skipped,
   None, // not applicable to this provider
-  Copilot(CopilotMonthly),
-  Zai(crate::provider::zai::quota::ZaiQuota),
+  Ok {
+    snap: llm_auth::QuotaSnapshot,
+    /// Fresh access token returned by a piggy-backed `refresh_credential`
+    /// call (Copilot only). Persisted to auth.yaml so the daemon — which
+    /// never writes at runtime — starts up with a non-expired cache.
+    refreshed: Option<llm_auth::RefreshOutcome>,
+  },
   Err(String),
 }
 
-#[derive(Debug)]
-struct CopilotMonthly {
-  /// Headline figure to display: `(label, remaining, Some(entitlement))`
-  /// for metered features, `(label, 0, None)` rendered as "unlimited".
-  headline: Option<(String, u64, Option<u64>)>,
-  /// Marketing plan name (e.g. `individual_pro`).
-  plan: Option<String>,
-  reset_date: Option<String>, // ISO YYYY-MM-DD
-  /// Fresh short-lived Copilot access token returned by the same exchange
-  /// call that produced the quota. Persisted back to config so that the
-  /// daemon (which never writes to disk at runtime) starts up with a
-  /// non-expired cache.
-  fresh_token: String,
-  fresh_expires_at: i64,
-}
-
 async fn fetch_quota(http: reqwest::Client, account: Account, timeout: Duration) -> QuotaResult {
-  if account.provider == ID_GITHUB_COPILOT {
-    let Some(gh) = account.refresh_token.clone() else {
-      return QuotaResult::None;
-    };
-    let header_value = serde_json::to_value(&account.settings).unwrap_or_else(|_| serde_json::json!({}));
-    let core_headers = match llm_provider_copilot::config::CopilotHeaders::from_value(&header_value) {
-      Ok(h) => h,
-      Err(e) => return QuotaResult::Err(short_err(&e)),
-    };
-    // Two parallel probes:
-    //   1. token exchange — refreshes access_token (always needed on `list`)
-    //   2. user-info     — quota_snapshots (Plus/Business plans)
-    let http2 = http.clone();
-    let gh2 = gh.clone();
-    let h2 = core_headers.clone();
-    let fut = async move {
-      let (tok, info) = tokio::join!(
-        crate::provider::github_copilot::token::exchange(&http, gh.expose(), &core_headers),
-        crate::provider::github_copilot::user::fetch(&http2, gh2.expose(), &h2),
-      );
-      (tok, info)
-    };
-    return match tokio::time::timeout(timeout, fut).await {
-      Err(_) => QuotaResult::Err("timeout".into()),
-      Ok((Err(e), _)) => QuotaResult::Err(short_err(&e)),
-      Ok((Ok(tok), info_res)) => {
-        // Pick the most informative bucket:
-        //   premium_interactions (metered on Plus) > chat > completions.
-        // Fall back to the first metered snapshot if the well-known
-        // ones are all unlimited.
-        let headline = info_res.as_ref().ok().and_then(pick_headline);
-        let (plan, reset_date) = info_res
-          .as_ref()
-          .map(|i| (i.copilot_plan.clone(), i.quota_reset_date.clone()))
-          .unwrap_or((None, None));
-        QuotaResult::Copilot(CopilotMonthly {
-          headline,
-          plan,
-          reset_date,
-          fresh_token: tok.token,
-          fresh_expires_at: tok.expires_at,
-        })
+  let Some(provider_auth) = crate::auth_registry::provider_auth_for(&account.provider) else {
+    return QuotaResult::None;
+  };
+  // Two parallel calls so the operator gets a single round-trip latency:
+  //   * refresh_credential — for Copilot also doubles as a "token still
+  //     valid?" check; for Z.ai it's a NotApplicable no-op.
+  //   * probe_quota       — the actual quota snapshot.
+  // We bound the *combined* future by the caller-supplied timeout so a
+  // single hung upstream cannot freeze the entire CLI invocation.
+  let acct = account.clone();
+  let acct2 = account.clone();
+  let http2 = http.clone();
+  let fut = async move {
+    let (refresh_res, quota_res) = tokio::join!(
+      provider_auth.refresh_credential(&http, &acct),
+      provider_auth.probe_quota(&http2, &acct2),
+    );
+    (refresh_res, quota_res)
+  };
+  match tokio::time::timeout(timeout, fut).await {
+    Err(_) => QuotaResult::Err("timeout".into()),
+    Ok((Err(e), _)) => QuotaResult::Err(short_err(&e)),
+    Ok((Ok(refresh), quota_res)) => {
+      let refreshed = match refresh {
+        llm_auth::RefreshOutcome::Refreshed { .. } => Some(refresh),
+        llm_auth::RefreshOutcome::NotApplicable => None,
+      };
+      match quota_res {
+        Err(e) => QuotaResult::Err(short_err(&e)),
+        Ok(snap) => QuotaResult::Ok { snap, refreshed },
       }
-    };
+    }
   }
-
-  if ZAI_PROVIDERS.contains(&account.provider.as_str()) {
-    let Some(key) = account.api_key.clone() else {
-      return QuotaResult::None;
-    };
-    let provider = account.provider.clone();
-    let fut = async move { crate::provider::zai::quota::fetch(&http, &provider, key.expose()).await };
-    return match tokio::time::timeout(timeout, fut).await {
-      Err(_) => QuotaResult::Err("timeout".into()),
-      Ok(Err(e)) => QuotaResult::Err(short_err(&e)),
-      Ok(Ok(q)) => QuotaResult::Zai(q),
-    };
-  }
-
-  QuotaResult::None
 }
 
 fn short_err<E: std::fmt::Display>(e: &E) -> String {
@@ -295,114 +260,57 @@ fn render_account(a: &Account, q: &QuotaResult) {
     QuotaResult::Skipped => {}
     QuotaResult::None => {}
     QuotaResult::Err(e) => println!("  quota       : unavailable ({e})"),
-    QuotaResult::Copilot(c) => {
-      if c.headline.is_some() || c.reset_date.is_some() || c.plan.is_some() {
-        render_copilot(c);
-      }
-    }
-    QuotaResult::Zai(z) => render_zai(z),
+    QuotaResult::Ok { snap, .. } => render_snapshot(snap),
   }
 }
 
-fn render_copilot(c: &CopilotMonthly) {
-  // Copilot's premium-request budget is a *monthly* counter; we display
-  // remaining count + reset date for metered features, "unlimited" for
-  // unmetered ones (e.g. chat on Plus).
-  if let Some(plan) = &c.plan {
-    println!("  copilot plan: {plan}");
+fn render_snapshot(snap: &llm_auth::QuotaSnapshot) {
+  if let Some(plan) = &snap.plan {
+    println!("  plan        : {plan}");
   }
-  let reset = c
+  let reset = snap
     .reset_date
     .as_deref()
     .map(|d| format!(" — resets {d}"))
     .unwrap_or_default();
-  match &c.headline {
-    Some((label, remaining, Some(entitlement))) => {
-      let pct = if *entitlement > 0 {
-        100.0 * (*remaining as f64) / (*entitlement as f64)
-      } else {
-        0.0
-      };
-      println!("  copilot     : {remaining} / {entitlement} {label} ({pct:.1}%){reset}");
-    }
-    Some((label, _, None)) => {
-      println!("  copilot     : unlimited {label}{reset}");
-    }
-    None => {
-      // No metered feature reported but we have a reset date or plan.
-      if !reset.is_empty() {
-        println!("  copilot     : monthly quota{reset}");
+  if let Some(m) = &snap.metered {
+    match m.entitlement {
+      Some(0) => println!("  quota       : 0 / 0 {} (0.0%){reset}", m.label),
+      Some(e) => {
+        let pct = 100.0 * (m.remaining as f64) / (e as f64);
+        println!(
+          "  quota       : {} / {e} {} ({pct:.1}%){reset}",
+          m.remaining, m.label
+        );
       }
+      None => println!("  quota       : unlimited {}{reset}", m.label),
     }
+  } else if !reset.is_empty() {
+    println!("  quota       : monthly{reset}");
+  }
+  for b in &snap.secondary {
+    print_usage_bucket(b);
   }
 }
 
-/// Pick the most informative quota snapshot for one-line display.
-///
-/// Preference order:
-///   1. `premium_interactions` (the visible Plus quota)
-///   2. `chat`
-///   3. `completions`
-///   4. first remaining metered snapshot
-///
-/// For unmetered features we still surface them (as `unlimited <label>`),
-/// but only if no metered candidate is available.
-fn pick_headline(info: &crate::provider::github_copilot::user::CopilotUserInfo) -> Option<(String, u64, Option<u64>)> {
-  let snaps = &info.quota_snapshots;
-  let preferred = ["premium_interactions", "chat", "completions"];
-
-  // First pass: preferred metered.
-  for k in preferred {
-    if let Some(s) = snaps.get(k) {
-      if !s.unlimited {
-        return Some((k.to_string(), s.remaining.unwrap_or(0), s.entitlement));
-      }
+fn print_usage_bucket(b: &llm_auth::UsageBucket) {
+  let body = match (b.used, b.total, b.percent_used) {
+    (Some(u), Some(t), Some(p)) => format!("{u} / {t} ({p:.1}%)"),
+    (Some(u), Some(t), None) if t > 0 => {
+      let p = 100.0 * (u as f64) / (t as f64);
+      format!("{u} / {t} ({p:.1}%)")
     }
-  }
-  // Second pass: any metered.
-  for (k, s) in snaps {
-    if !s.unlimited && s.entitlement.is_some() {
-      return Some((k.clone(), s.remaining.unwrap_or(0), s.entitlement));
-    }
-  }
-  // Third pass: preferred unmetered.
-  for k in preferred {
-    if snaps.get(k).map(|s| s.unlimited).unwrap_or(false) {
-      return Some((k.to_string(), 0, None));
-    }
-  }
-  None
-}
-
-fn render_zai(z: &crate::provider::zai::quota::ZaiQuota) {
-  if let Some(level) = &z.level {
-    println!("  zai plan    : {level}");
-  }
-  if let Some(b) = &z.five_hour {
-    println!("  5h tokens   : {}", fmt_token_bucket(b));
-  }
-  if let Some(b) = &z.weekly {
-    println!("  weekly tok  : {}", fmt_token_bucket(b));
-  }
-  if let Some(m) = &z.mcp_monthly {
-    let reset = m
-      .next_reset_ms
-      .map(|t| format!(" — resets {}", relative_from_now_ms(t)))
-      .unwrap_or_default();
-    println!(
-      "  mcp monthly : {} / {} ({:.1}%){reset}",
-      m.used, m.total, m.percent_used
-    );
-  }
-}
-
-fn fmt_token_bucket(b: &crate::provider::zai::quota::TokenBucket) -> String {
-  let total = b.total.map(|t| format!(" of {}", fmt_int(t))).unwrap_or_default();
+    (Some(u), Some(t), None) => format!("{u} / {t}"),
+    (None, Some(t), Some(p)) => format!("{p:.1}% of {}", fmt_int(t)),
+    (None, None, Some(p)) => format!("{p:.1}%"),
+    (Some(u), None, _) => format!("{u} used"),
+    _ => "-".to_string(),
+  };
   let reset = b
-    .next_reset_ms
+    .reset_at_ms
     .map(|t| format!(" — resets {}", relative_from_now_ms(t)))
     .unwrap_or_default();
-  format!("{:.1}%{total}{reset}", b.percent_used)
+  println!("  {:<12}: {body}{reset}", b.label);
 }
 
 fn fmt_int(mut n: u64) -> String {
@@ -539,35 +447,36 @@ async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
     .ok_or_else(|| anyhow!("no account with id '{id}'"))?
     .clone();
 
-  if account.provider != ID_GITHUB_COPILOT {
-    if account.api_key.is_some() {
-      println!("nothing to refresh: provider '{}' uses a static api_key", account.provider);
-      return Ok(());
-    }
-    bail!("refresh is only supported for github-copilot accounts");
-  }
-  let Some(gh) = account.refresh_token.clone() else {
-    bail!("account '{id}' has no refresh_token; re-add it via `account login` or `account import`");
+  let Some(provider_auth) = crate::auth_registry::provider_auth_for(&account.provider) else {
+    bail!("unknown provider '{}'", account.provider);
   };
-  let header_value = serde_json::to_value(toml::Value::Table(account.settings.clone()))
-    .unwrap_or(serde_json::Value::Null);
-  let core_headers = llm_provider_copilot::config::CopilotHeaders::from_value(&header_value)
-    .map_err(|e| anyhow!("invalid copilot headers: {e}"))?;
   let http = build_client(&cfg.proxy)?;
-  let resp = crate::provider::github_copilot::token::exchange(&http, gh.expose(), &core_headers)
+  match provider_auth
+    .refresh_credential(&http, &account)
     .await
-    .map_err(|e| anyhow!("token exchange failed: {e}"))?;
-  let acct = store.get_mut(id).expect("checked above");
-  acct.access_token = Some(Secret::new(resp.token));
-  acct.access_token_expires_at = Some(resp.expires_at);
-  acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-  store.save()?;
-  tracing::info!(account = %id, "access token refreshed");
-  println!(
-    "Refreshed '{id}': access_token expires {}",
-    relative_from_now(resp.expires_at)
-  );
-  Ok(())
+    .map_err(|e| anyhow!("refresh failed: {e}"))?
+  {
+    llm_auth::RefreshOutcome::NotApplicable => {
+      println!(
+        "nothing to refresh: provider '{}' uses a static credential",
+        account.provider
+      );
+      Ok(())
+    }
+    llm_auth::RefreshOutcome::Refreshed { access_token, expires_at } => {
+      let acct = store.get_mut(id).expect("checked above");
+      acct.access_token = Some(Secret::new(access_token));
+      acct.access_token_expires_at = Some(expires_at);
+      acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+      store.save()?;
+      tracing::info!(account = %id, "access token refreshed");
+      println!(
+        "Refreshed '{id}': access_token expires {}",
+        relative_from_now(expires_at)
+      );
+      Ok(())
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -590,15 +499,19 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
   // Persist any token side-effects, same as `list`.
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
-    if let QuotaResult::Copilot(c) = q {
+    if let QuotaResult::Ok {
+      refreshed: Some(llm_auth::RefreshOutcome::Refreshed { access_token, expires_at }),
+      ..
+    } = q
+    {
       let same_tok = a
         .access_token
         .as_ref()
-        .map(|s| s.expose().as_str() == c.fresh_token.as_str())
+        .map(|s| s.expose().as_str() == access_token.as_str())
         .unwrap_or(false);
-      if !same_tok || a.access_token_expires_at != Some(c.fresh_expires_at) {
-        a.access_token = Some(Secret::new(c.fresh_token.clone()));
-        a.access_token_expires_at = Some(c.fresh_expires_at);
+      if !same_tok || a.access_token_expires_at != Some(*expires_at) {
+        a.access_token = Some(Secret::new(access_token.clone()));
+        a.access_token_expires_at = Some(*expires_at);
         a.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         dirty = true;
       }
@@ -632,8 +545,7 @@ fn print_status_line(a: &Account, q: &QuotaResult) {
     None => "-".into(),
   };
   let extra = match q {
-    QuotaResult::Copilot(c) => c.plan.clone().unwrap_or_default(),
-    QuotaResult::Zai(z) => z.level.clone().unwrap_or_default(),
+    QuotaResult::Ok { snap, .. } => snap.plan.clone().unwrap_or_default(),
     QuotaResult::Err(e) => format!("quota: {e}"),
     _ => String::new(),
   };

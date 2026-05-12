@@ -4,10 +4,6 @@
 //! only crate that legitimately depends on every provider implementation
 //! at once. Putting it here keeps `llm-auth` provider-agnostic and avoids
 //! a dependency cycle (providers → llm-auth → providers).
-//!
-//! Functions are `#[allow(dead_code)]` until Phase 5 wires the CLI
-//! account subcommands through them.
-#![allow(dead_code)]
 
 use llm_auth::ProviderAuth;
 

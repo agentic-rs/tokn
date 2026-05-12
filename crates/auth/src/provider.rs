@@ -52,15 +52,63 @@ pub struct QuotaSnapshot {
   /// Human-readable plan name (e.g. `"copilot_pro"`, `"GLM Coding Plan"`).
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub plan: Option<String>,
-  /// One-line headline (e.g. `"Premium requests 12 / 300"`).
+  /// Short one-line headline for compact rendering (e.g. `"premium_interactions: 12/300"`).
+  /// Used by `account status`; `account list` prefers `metered` for richer formatting.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub headline: Option<String>,
   /// ISO-8601 reset date if the upstream advertises one.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub reset_date: Option<String>,
+  /// The primary metered request bucket — typically the visible
+  /// "premium" / "headline" allowance the user cares about. Renderers
+  /// display this with a percent gauge.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub metered: Option<MeteredBucket>,
+  /// Additional usage buckets (e.g. Z.ai 5h tokens, weekly tokens, MCP
+  /// monthly). Rendered as one row each by the CLI list command.
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub secondary: Vec<UsageBucket>,
   /// Provider-specific blob for extras the generic shape can't capture.
   #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
   pub provider_extra: serde_json::Value,
+}
+
+/// A metered request bucket — counts down as the user spends premium
+/// requests. `entitlement = None` means the bucket is unlimited (some
+/// Copilot plans expose `chat` as unmetered).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeteredBucket {
+  /// Display label, e.g. `"premium_interactions"`.
+  pub label: String,
+  /// Remaining count in the bucket.
+  pub remaining: u64,
+  /// Total entitlement; `None` = unlimited.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub entitlement: Option<u64>,
+}
+
+/// A used/total token (or request) bucket — counts up as usage accrues.
+/// Z.ai exposes several of these (5-hour window, weekly, MCP monthly).
+///
+/// Either `used`/`total` or `percent_used` (or both) may be populated;
+/// renderers should fall back gracefully. `total = 0` is treated as
+/// "unknown total" for renderers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageBucket {
+  /// Display label, e.g. `"5h tokens"`.
+  pub label: String,
+  /// Amount already used, when the upstream reports a discrete count.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub used: Option<u64>,
+  /// Total cap for this window, when known.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub total: Option<u64>,
+  /// Percent used (0.0–100.0), when the upstream only exposes a ratio.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub percent_used: Option<f64>,
+  /// Optional epoch-ms timestamp at which the bucket resets.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reset_at_ms: Option<i64>,
 }
 
 /// Errors surfaced by the auth layer. Kept lightweight (string payload)

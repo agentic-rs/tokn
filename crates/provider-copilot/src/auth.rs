@@ -106,21 +106,67 @@ impl ProviderAuth for CopilotAuth {
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
 
-    // Pick a sensible headline: prefer premium_interactions, fall back to
-    // any quota with remaining < entitlement.
-    let headline = info.quota_snapshots.iter().find_map(|(k, q)| {
-      if q.unlimited {
-        return None;
-      }
-      let r = q.remaining?;
-      let e = q.entitlement.unwrap_or(0);
-      Some(format!("{k}: {r}/{e}"))
+    // Pick the most informative metered bucket. Preference order matches
+    // the legacy CLI: premium_interactions > chat > completions > any
+    // other metered bucket > preferred unmetered (rendered as unlimited).
+    let snaps = &info.quota_snapshots;
+    let preferred = ["premium_interactions", "chat", "completions"];
+    let metered: Option<llm_auth::MeteredBucket> = preferred
+      .iter()
+      .find_map(|k| {
+        snaps.get(*k).and_then(|s| {
+          if s.unlimited {
+            None
+          } else {
+            Some(llm_auth::MeteredBucket {
+              label: k.to_string(),
+              remaining: s.remaining.unwrap_or(0),
+              entitlement: s.entitlement,
+            })
+          }
+        })
+      })
+      .or_else(|| {
+        snaps.iter().find_map(|(k, s)| {
+          if !s.unlimited && s.entitlement.is_some() {
+            Some(llm_auth::MeteredBucket {
+              label: k.clone(),
+              remaining: s.remaining.unwrap_or(0),
+              entitlement: s.entitlement,
+            })
+          } else {
+            None
+          }
+        })
+      })
+      .or_else(|| {
+        preferred.iter().find_map(|k| {
+          snaps.get(*k).and_then(|s| {
+            if s.unlimited {
+              Some(llm_auth::MeteredBucket {
+                label: k.to_string(),
+                remaining: 0,
+                entitlement: None,
+              })
+            } else {
+              None
+            }
+          })
+        })
+      });
+
+    // Headline mirrors the metered bucket for compact display.
+    let headline = metered.as_ref().map(|m| match m.entitlement {
+      Some(e) => format!("{}: {}/{}", m.label, m.remaining, e),
+      None => format!("{}: unlimited", m.label),
     });
 
     Ok(QuotaSnapshot {
       plan: info.copilot_plan.clone(),
       headline,
       reset_date: info.quota_reset_date.clone(),
+      metered,
+      secondary: Vec::new(),
       // Forward the full snapshot blob for any UI that wants per-feature
       // detail. `serde_json::to_value` is infallible for our types.
       provider_extra: serde_json::to_value(&info).unwrap_or(serde_json::Value::Null),

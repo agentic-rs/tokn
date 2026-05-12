@@ -117,10 +117,42 @@ impl ProviderAuth for ZaiAuth {
         .map(|m| format!("mcp: {}/{}", m.used, m.total))
     };
 
+    // Map every advertised bucket into UsageBucket for richer display.
+    let mut secondary: Vec<llm_auth::UsageBucket> = Vec::new();
+    if let Some(b) = &raw.five_hour {
+      secondary.push(llm_auth::UsageBucket {
+        label: "5h tokens".to_string(),
+        used: None,
+        total: b.total,
+        percent_used: Some(b.percent_used),
+        reset_at_ms: b.next_reset_ms,
+      });
+    }
+    if let Some(b) = &raw.weekly {
+      secondary.push(llm_auth::UsageBucket {
+        label: "weekly tokens".to_string(),
+        used: None,
+        total: b.total,
+        percent_used: Some(b.percent_used),
+        reset_at_ms: b.next_reset_ms,
+      });
+    }
+    if let Some(m) = &raw.mcp_monthly {
+      secondary.push(llm_auth::UsageBucket {
+        label: "mcp monthly".to_string(),
+        used: Some(m.used),
+        total: Some(m.total),
+        percent_used: Some(m.percent_used),
+        reset_at_ms: m.next_reset_ms,
+      });
+    }
+
     Ok(QuotaSnapshot {
       plan: raw.level.clone(),
       headline,
       reset_date: None,
+      metered: None,
+      secondary,
       // `ZaiQuota` doesn't impl Serialize; serialise a minimal view.
       provider_extra: serde_json::json!({
         "level": raw.level,

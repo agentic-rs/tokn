@@ -13,14 +13,12 @@ pub enum CredentialSource {
 }
 
 pub fn known_providers() -> Vec<&'static str> {
-  let mut out: Vec<&'static str> = Vec::with_capacity(1 + ZAI_PROVIDERS.len());
-  out.push(ID_GITHUB_COPILOT);
-  out.extend(ZAI_PROVIDERS.iter().copied());
-  out
+  // Single source of truth: the auth registry.
+  crate::auth_registry::known_providers().to_vec()
 }
 
 pub fn validate_provider(provider: &str) -> Result<()> {
-  if provider == ID_GITHUB_COPILOT || ZAI_PROVIDERS.contains(&provider) {
+  if crate::auth_registry::provider_auth_for(provider).is_some() {
     return Ok(());
   }
   Err(anyhow!(
