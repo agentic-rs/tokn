@@ -19,6 +19,7 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use bytes::Bytes;
 use serde_json::json;
 use snafu::Snafu;
 
@@ -97,6 +98,22 @@ impl Error {
     }
   }
 
+  pub(crate) fn body_bytes(&self) -> Bytes {
+    Bytes::from(
+      serde_json::to_vec(&json!({
+          "error": {
+              "message": self.message(),
+              "type": self.kind(),
+              "code": self.status().as_u16(),
+              // Body field reserved for compatibility; the authoritative
+              // request id is in the `x-request-id` response header.
+              "request_id": serde_json::Value::Null,
+          }
+      }))
+      .unwrap_or_default(),
+    )
+  }
+
   pub(crate) fn status(&self) -> StatusCode {
     match self {
       Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
@@ -125,7 +142,13 @@ impl Error {
     match self {
       Error::BadRequest { message } => message.clone(),
       Error::UnsupportedMediaType { message } => message.clone(),
-      Error::Upstream { body, .. } => body.clone(),
+      Error::Upstream { status, body } => {
+        if body.trim().is_empty() {
+          fallback_upstream_message(*status)
+        } else {
+          body.clone()
+        }
+      }
       Error::NotImplemented { endpoint, model } => {
         format!("no configured account supports endpoint '{endpoint}' for model '{model}'")
       }
@@ -139,23 +162,40 @@ impl Error {
 impl IntoResponse for Error {
   fn into_response(self) -> Response {
     let status = self.status();
-    let body = Json(json!({
-        "error": {
-            "message": self.message(),
-            "type": self.kind(),
+    let body = Json(
+      serde_json::from_slice::<serde_json::Value>(&self.body_bytes()).unwrap_or_else(|_| {
+        json!({
+          "error": {
+            "message": "internal error",
+            "type": "internal_error",
             "code": status.as_u16(),
-            // Body field reserved for compatibility; the authoritative
-            // request id is in the `x-request-id` response header.
             "request_id": serde_json::Value::Null,
-        }
-    }));
+          }
+        })
+      }),
+    );
     (status, body).into_response()
+  }
+}
+
+pub(crate) fn fallback_upstream_message(status: StatusCode) -> String {
+  format!("upstream returned {} with an empty response body", status.as_u16())
+}
+
+pub(crate) fn sanitized_transport_failure_message(host: &str, err: &reqwest::Error) -> String {
+  if err.is_timeout() {
+    format!("upstream request to '{host}' timed out before any response was received")
+  } else if err.is_connect() {
+    format!("upstream request to '{host}' could not connect before any response was received")
+  } else {
+    format!("upstream request to '{host}' failed before any response was received")
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use axum::response::IntoResponse;
 
   #[test]
   fn status_mapping() {
@@ -183,5 +223,18 @@ mod tests {
     assert_eq!(Error::session_expired("s").kind(), "session_expired");
     assert_eq!(Error::bad_gateway("x").kind(), "bad_gateway");
     assert_eq!(Error::internal("x").kind(), "internal_error");
+  }
+
+  #[tokio::test]
+  async fn blank_upstream_body_gets_fallback_message() {
+    let resp = Error::upstream(StatusCode::NOT_IMPLEMENTED, "").into_response();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], 501);
+    assert_eq!(json["error"]["type"], "upstream_error");
+    assert_eq!(
+      json["error"]["message"],
+      serde_json::Value::String("upstream returned 501 with an empty response body".into())
+    );
   }
 }

@@ -3,11 +3,12 @@ use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
 use super::usage::parse_usage_any_json;
 use crate::api::codec::maybe_compress_buffered_response;
+use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::db::HttpSnapshot;
 use crate::provider::Endpoint;
 use axum::body::Body;
-use axum::http::header::CONTENT_TYPE;
+use axum::http::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use axum::http::{HeaderMap, Method};
 use axum::response::Response;
 use bytes::Bytes;
@@ -37,8 +38,14 @@ pub(crate) async fn passthrough_buffered_response(
 ) -> Response {
   let status = resp.status();
   let resp_headers = resp.headers().clone();
-  let resp_body = resp.bytes().await.unwrap_or_default();
+  let mut resp_body = resp.bytes().await.unwrap_or_default();
   let mut downstream_headers = resp_headers.clone();
+
+  if !status.is_success() && is_blank_response_body(&resp_body) {
+    resp_body = ApiError::upstream(status, "").body_bytes();
+    downstream_headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    downstream_headers.remove(CONTENT_LENGTH);
+  }
 
   let usage = parse_usage_any_json(&resp_body);
 
@@ -137,6 +144,10 @@ fn response_with_body(status: reqwest::StatusCode, headers: &HeaderMap, body: Bo
     builder = builder.header(name, value);
   }
   builder.body(body).unwrap_or_else(|_| Response::new(Body::empty()))
+}
+
+fn is_blank_response_body(bytes: &Bytes) -> bool {
+  bytes.is_empty() || bytes.iter().all(|b| b.is_ascii_whitespace())
 }
 
 pub(crate) fn passthrough_endpoint(method: &Method, path: &str) -> Option<Endpoint> {

@@ -1,8 +1,10 @@
+use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::pipeline::{request_body_extract, request_header_extract};
 use crate::relay::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response, ForwardContext};
 use anyhow::{Context, Result};
 use axum::body::Body;
+use axum::http::StatusCode;
 use axum::http::{Request, Response};
 use axum::response::IntoResponse;
 use http::header::{HeaderValue, HOST};
@@ -111,8 +113,9 @@ pub(super) async fn proxy_passthrough(
   let response = match upstream.send().await {
     Ok(response) => response,
     Err(err) => {
-      completion.failure(None, err.to_string());
-      return Err(err).context("send passthrough upstream request");
+      let message = crate::api::error::sanitized_transport_failure_message(host, &err);
+      completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), message.clone());
+      return Ok(ApiError::bad_gateway(message).into_response());
     }
   };
   let status = response.status();
@@ -133,4 +136,35 @@ pub(super) async fn proxy_passthrough(
   let resp = passthrough_buffered_response(state, &ctx, &req_body_json, response).await;
   completion.disarm();
   Ok(resp)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::body::to_bytes;
+
+  #[tokio::test]
+  async fn transport_failure_response_uses_sanitized_message() {
+    let err = reqwest::Client::new()
+      .get("http://127.0.0.1:1/backend-api/codex/responses?secret=1")
+      .send()
+      .await
+      .unwrap_err();
+
+    let resp = ApiError::bad_gateway(crate::api::error::sanitized_transport_failure_message(
+      "chatgpt.com",
+      &err,
+    ))
+    .into_response();
+    assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["error"]["message"].as_str().unwrap();
+    assert!(!message.is_empty());
+    assert!(message.contains("chatgpt.com"));
+    assert!(!message.contains("/backend-api/codex/responses"));
+    assert!(!message.contains("?secret=1"));
+    assert!(!message.contains("http://127.0.0.1"));
+  }
 }

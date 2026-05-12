@@ -19,6 +19,7 @@ pub(crate) use stream::stream_response;
 
 #[cfg(test)]
 mod tests {
+  use super::buffered_response;
   use super::context::ForwardContext;
   use super::passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
   use super::recording::{extract_request_messages, CompletedEventBuilder};
@@ -33,6 +34,7 @@ mod tests {
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
   use llm_core::event::{Event, EventBus, EventHandler};
+  use reqwest::ResponseBuilderExt;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
   use std::time::Instant;
@@ -578,6 +580,61 @@ mod tests {
     assert_eq!(
       records[0].outbound_req.as_ref().and_then(|s| s.url.as_deref()),
       Some("https://api.openai.com/v1/chat/completions")
+    );
+  }
+
+  #[tokio::test]
+  async fn buffered_response_synthesizes_json_error_for_blank_upstream_error() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(AuthType::Bearer),
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    });
+    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    let response = reqwest::Response::from(
+      http::Response::builder()
+        .status(501)
+        .url(reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap())
+        .body("")
+        .unwrap(),
+    );
+    let ctx = ForwardContext::from_pipeline(
+      Endpoint::Responses,
+      Endpoint::Responses,
+      "unknown".into(),
+      None,
+      "request-blank-501".into(),
+      0,
+      Instant::now(),
+    );
+
+    let resp = buffered_response(state, response, ctx, &json!({ "model": "unknown", "input": "hi" })).await;
+    assert_eq!(resp.status(), axum::http::StatusCode::NOT_IMPLEMENTED);
+
+    let resp_body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
+    assert_eq!(json["error"]["type"], "upstream_error");
+    assert_eq!(json["error"]["code"], 501);
+    assert_eq!(
+      json["error"]["message"],
+      serde_json::Value::String("upstream returned 501 with an empty response body".into())
     );
   }
 

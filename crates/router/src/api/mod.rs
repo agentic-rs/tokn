@@ -215,10 +215,37 @@ pub fn build_state(cfg: &Config, events: Arc<EventBus>) -> Result<AppState> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use axum::body::Body;
+  use crate::config::{Account as AccountCfg, Config};
+  use crate::util::secret::Secret;
+  use axum::body::{to_bytes, Body};
   use axum::http::{Request, StatusCode};
   use axum::routing::get;
+  use bytes::Bytes;
   use tower::ServiceExt;
+
+  fn zai_account() -> AccountCfg {
+    AccountCfg {
+      id: "acct".into(),
+      provider: "zai-coding-plan".into(),
+      enabled: true,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
 
   /// Build the same layer stack the real router uses, around a stub handler.
   /// This isolates the request-id middleware from `AppState` construction.
@@ -297,5 +324,40 @@ mod tests {
     assert!(res.is_err(), "non-passthrough mode should require accounts");
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("no accounts configured"));
+  }
+
+  #[tokio::test]
+  async fn route_mode_not_implemented_returns_json_error_body() {
+    let mut cfg = Config::default();
+    cfg.accounts.push(zai_account());
+    let state = build_state(&cfg, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("POST")
+      .uri("/v1/responses")
+      .header("content-type", "application/json")
+      .header("x-route-mode", "route")
+      .body(Body::from(Bytes::from_static(br#"{"model":"unknown","input":"hi"}"#)))
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(
+      resp
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok()),
+      Some("application/json")
+    );
+
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let message = json["error"]["message"].as_str().unwrap();
+    assert!(!message.is_empty());
+    assert!(message.contains("responses"));
+    assert!(message.contains("unknown"));
+    assert_eq!(json["error"]["type"], "not_implemented_error");
+    assert_eq!(json["error"]["code"], 501);
   }
 }

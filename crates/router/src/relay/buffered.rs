@@ -39,7 +39,9 @@ pub(crate) async fn buffered_response(
   }
 
   let endpoint = ctx.endpoint.unwrap_or(ctx.upstream_endpoint);
-  let bytes = if ctx.upstream_endpoint == endpoint {
+  let bytes = if !status.is_success() && is_blank_response_body(&bytes) {
+    ApiError::upstream(status, "").body_bytes()
+  } else if ctx.upstream_endpoint == endpoint {
     bytes
   } else {
     match serde_json::from_slice::<Value>(&bytes)
@@ -90,4 +92,8 @@ pub(crate) async fn buffered_response(
   } else {
     (status, headers, response_body).into_response()
   }
+}
+
+fn is_blank_response_body(bytes: &Bytes) -> bool {
+  bytes.is_empty() || bytes.iter().all(|b| b.is_ascii_whitespace())
 }
