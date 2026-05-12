@@ -1,8 +1,8 @@
 use super::context::ForwardContext;
 use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
-use crate::db::HttpSnapshot;
 use crate::api::AppState;
+use crate::db::HttpSnapshot;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};

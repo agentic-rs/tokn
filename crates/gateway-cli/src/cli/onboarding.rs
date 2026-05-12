@@ -155,7 +155,9 @@ async fn copilot_login(client: &reqwest::Client, id_override: Option<String>) ->
   let resp = gh::token::exchange(client, &gh_token, &headers).await?;
   let id = match id_override {
     Some(s) => s,
-    None => fetch_username(client, &gh_token).await.unwrap_or_else(|_| "default".into()),
+    None => fetch_username(client, &gh_token)
+      .await
+      .unwrap_or_else(|_| "default".into()),
   };
 
   Ok(Account {

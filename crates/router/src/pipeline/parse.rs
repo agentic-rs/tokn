@@ -54,7 +54,9 @@ pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExt
     .and_then(|v| v.to_str().ok())
     .map(|v| v.trim().to_ascii_lowercase())
     .filter(|v| v == "user" || v == "agent");
-  let initiator = header_initiator.clone().unwrap_or_else(|| classify_initiator(body).to_string());
+  let initiator = header_initiator
+    .clone()
+    .unwrap_or_else(|| classify_initiator(body).to_string());
   BodyExtract {
     model: body
       .get("model")

@@ -341,7 +341,9 @@ impl AccountPool {
   fn acquire_from_route(&self, route: &RouteResolution, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
     match &route.selector {
       RouteSelector::Any => self.acquire_any_convertible(requested),
-      RouteSelector::Provider(provider) => self.acquire_provider_convertible(provider, &route.upstream_model, requested),
+      RouteSelector::Provider(provider) => {
+        self.acquire_provider_convertible(provider, &route.upstream_model, requested)
+      }
       RouteSelector::Model => self.acquire_from_buckets_convertible(Some(&route.upstream_model), requested),
       RouteSelector::Fuzzy { candidates } => {
         for candidate in candidates {

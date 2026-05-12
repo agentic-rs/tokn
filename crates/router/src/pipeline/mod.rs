@@ -9,16 +9,16 @@ pub(crate) use parse::{
 };
 
 use crate::api::{error::ApiError, AppState};
-use request::{prepare_request, PoolResolver, ProviderSender};
-use transformer::{EndpointOutputTransformer, UpstreamResponse};
-use axum::http::StatusCode;
-use axum::response::Response;
 #[cfg(test)]
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
+use axum::response::Response;
 use llm_core::pipeline::ParsedRequest;
 use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
+use request::{prepare_request, PoolResolver, ProviderSender};
 use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
+use transformer::{EndpointOutputTransformer, UpstreamResponse};
 
 const MAX_RETRIES: usize = 2;
 
@@ -211,10 +211,10 @@ pub(crate) async fn handle_endpoint(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::{Account as AccountCfg, Config};
-  use crate::provider::{Endpoint, Provider};
-  use crate::pipeline::request::ResolvedRequest;
   use crate::api::build_state;
+  use crate::config::{Account as AccountCfg, Config};
+  use crate::pipeline::request::ResolvedRequest;
+  use crate::provider::{Endpoint, Provider};
   use crate::util::secret::Secret;
   use axum::http::HeaderValue;
   use bytes::Bytes;

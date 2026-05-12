@@ -271,7 +271,12 @@ impl RequestsDb {
          outbound_resp_status=?2,
          outbound_resp_headers=?4
        WHERE request_id=?1",
-      params![request_id, status as i64, latency_header_ms as i64, outbound_resp_headers.as_ref()],
+      params![
+        request_id,
+        status as i64,
+        latency_header_ms as i64,
+        outbound_resp_headers.as_ref()
+      ],
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %base_request_id, attempt, "RequestResponded without started requests row");

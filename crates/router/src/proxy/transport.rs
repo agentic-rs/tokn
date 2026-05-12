@@ -1,8 +1,8 @@
 use super::ca::DynamicResolver;
 use super::passthrough::proxy_passthrough;
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
-use crate::api::{error::ApiError, AppState};
 use crate::api::routing::RouteResolver;
+use crate::api::{error::ApiError, AppState};
 use anyhow::{Context, Result};
 use axum::body::Body;
 use axum::http::{HeaderMap, Method, Request, Response, Uri};
@@ -67,7 +67,10 @@ pub(super) async fn handle_client(
       .strip_prefix("Upgrade:")
       .or_else(|| header_line.strip_prefix("upgrade:"))
     {
-      websocket_upgrade = value.trim().trim_end_matches(['\r', '\n']).eq_ignore_ascii_case("websocket");
+      websocket_upgrade = value
+        .trim()
+        .trim_end_matches(['\r', '\n'])
+        .eq_ignore_ascii_case("websocket");
     }
   }
 
@@ -90,7 +93,18 @@ pub(super) async fn handle_client(
   if intercept {
     stream.write_all(CONNECT_OK).await?;
     stream.flush().await?;
-    intercept_tls(stream, peer, &host, state, router, ca, route_resolver, http, proxy_route_mode).await
+    intercept_tls(
+      stream,
+      peer,
+      &host,
+      state,
+      router,
+      ca,
+      route_resolver,
+      http,
+      proxy_route_mode,
+    )
+    .await
   } else {
     tunnel(stream, &host, port).await
   }
@@ -193,7 +207,7 @@ async fn route_intercepted_request(
       proxy_passthrough(state.as_ref(), &http, &host, source, req)
         .await
         .inspect(|b| {
-         if !b.status().is_success() {
+          if !b.status().is_success() {
             tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "passthrough request failed");
           }
         })

@@ -1,8 +1,8 @@
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration as StdDuration;
 use time::{Date, Duration, Month, OffsetDateTime};
 use tokio::sync::{mpsc, oneshot};
@@ -33,11 +33,17 @@ impl ArchiveFormat {
       "zstd" | "db.zstd" => Self::Zstd,
       "xz" | "db.xz" | "lzma" | "db.lzma" if cfg!(feature = "lzma") => Self::Xz,
       "xz" | "db.xz" | "lzma" | "db.lzma" => {
-        tracing::warn!(archive_extension = value, "LZMA archive extension requested without lzma feature; falling back to zstd");
+        tracing::warn!(
+          archive_extension = value,
+          "LZMA archive extension requested without lzma feature; falling back to zstd"
+        );
         Self::Zstd
       }
       _ => {
-        tracing::warn!(archive_extension = value, "unsupported archive extension; falling back to zstd");
+        tracing::warn!(
+          archive_extension = value,
+          "unsupported archive extension; falling back to zstd"
+        );
         Self::Zstd
       }
     }
@@ -293,12 +299,7 @@ fn archive_requests_once_with_events(
 ) -> io::Result<ArchiveStats> {
   let mut stats = ArchiveStats::default();
   let cutoff = today - Duration::days(retention_days);
-  emit(
-    events,
-    ArchiveEvent::ScanStarted {
-      dir: dir.to_path_buf(),
-    },
-  );
+  emit(events, ArchiveEvent::ScanStarted { dir: dir.to_path_buf() });
   if !dir.exists() {
     emit(
       events,
@@ -322,13 +323,7 @@ fn archive_requests_once_with_events(
     let id = archive_id(&path);
     if archive.exists() {
       stats.skipped_existing += 1;
-      emit(
-        events,
-        ArchiveEvent::FileSkipped {
-          path,
-          archive,
-        },
-      );
+      emit(events, ArchiveEvent::FileSkipped { path, archive });
       continue;
     }
 
@@ -520,7 +515,10 @@ fn emit(events: Option<&dyn ArchiveEmitter>, event: ArchiveEvent) {
 
 fn check_cancelled(cancelled: Option<&AtomicBool>) -> io::Result<()> {
   if cancelled.is_some_and(|cancelled| cancelled.load(Ordering::Relaxed)) {
-    Err(io::Error::new(io::ErrorKind::Interrupted, "archive compression cancelled"))
+    Err(io::Error::new(
+      io::ErrorKind::Interrupted,
+      "archive compression cancelled",
+    ))
   } else {
     Ok(())
   }
@@ -670,11 +668,21 @@ mod tests {
 
     assert_eq!(stats.archived, 1);
     let events = emitter.events.lock();
-    assert!(events.iter().any(|event| matches!(event, ArchiveEvent::ScanStarted { .. })));
-    assert!(events.iter().any(|event| matches!(event, ArchiveEvent::FileStarted { .. })));
-    assert!(events.iter().any(|event| matches!(event, ArchiveEvent::FileProgress { .. })));
-    assert!(events.iter().any(|event| matches!(event, ArchiveEvent::FileCompleted { .. })));
-    assert!(events.iter().any(|event| matches!(event, ArchiveEvent::ScanCompleted { .. })));
+    assert!(events
+      .iter()
+      .any(|event| matches!(event, ArchiveEvent::ScanStarted { .. })));
+    assert!(events
+      .iter()
+      .any(|event| matches!(event, ArchiveEvent::FileStarted { .. })));
+    assert!(events
+      .iter()
+      .any(|event| matches!(event, ArchiveEvent::FileProgress { .. })));
+    assert!(events
+      .iter()
+      .any(|event| matches!(event, ArchiveEvent::FileCompleted { .. })));
+    assert!(events
+      .iter()
+      .any(|event| matches!(event, ArchiveEvent::ScanCompleted { .. })));
   }
 
   #[test]
@@ -683,19 +691,17 @@ mod tests {
     write_db(&dir, "2026-05-01.db", &vec![b'x'; 1024 * 1024]);
     let cancelled = AtomicBool::new(true);
 
-    let err = archive_requests_once_with_events(
-      &dir,
-      date!(2026 - 05 - 09),
-      7,
-      archive_format(),
-      None,
-      Some(&cancelled),
-    )
-    .unwrap_err();
+    let err =
+      archive_requests_once_with_events(&dir, date!(2026 - 05 - 09), 7, archive_format(), None, Some(&cancelled))
+        .unwrap_err();
 
     assert_eq!(err.kind(), io::ErrorKind::Interrupted);
-    assert!(!dir.join(format!("2026-05-01.{}", archive_format().extension())).exists());
-    assert!(!dir.join(format!("2026-05-01.{}.tmp", archive_format().extension())).exists());
+    assert!(!dir
+      .join(format!("2026-05-01.{}", archive_format().extension()))
+      .exists());
+    assert!(!dir
+      .join(format!("2026-05-01.{}.tmp", archive_format().extension()))
+      .exists());
   }
 
   fn decode_archive(path: &Path, format: ArchiveFormat, out: &mut Vec<u8>) {

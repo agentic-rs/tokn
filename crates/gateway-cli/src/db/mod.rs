@@ -8,10 +8,10 @@ use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use snafu::Snafu;
 
+use llm_core::db::SessionSource;
 pub use llm_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
 pub(crate) use llm_core::db::{Usage, UsageDetails};
-use llm_core::db::SessionSource;
 pub use usage::UsageDb;
 
 /// Serialise an HTTP header map to JSON bytes, redacting values whose name
@@ -64,11 +64,7 @@ impl From<rusqlite::Error> for Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-fn write_record(
-  usage: &mut usage::UsageDb,
-  sessions: &mut Option<sessions::SessionsDb>,
-  record: &CallRecord,
-) {
+fn write_record(usage: &mut usage::UsageDb, sessions: &mut Option<sessions::SessionsDb>, record: &CallRecord) {
   if let Err(e) = usage.record(record) {
     tracing::warn!(error = %e, "failed to write usage db row");
   }
@@ -165,18 +161,15 @@ impl EventHandler for DbEventHandler {
           headers: HeaderMap::new(),
           body: Bytes::new(),
         };
-        if let Err(e) = self
-          .requests
-          .started(
-            request_id,
-            *ts,
-            endpoint,
-            session_id.as_deref(),
-            source.as_deref(),
-            Some(method.as_str()),
-            &inbound_req,
-          )
-        {
+        if let Err(e) = self.requests.started(
+          request_id,
+          *ts,
+          endpoint,
+          session_id.as_deref(),
+          source.as_deref(),
+          Some(method.as_str()),
+          &inbound_req,
+        ) {
           tracing::warn!(error = %e, "failed to insert started requests db row");
         }
         self.pending.insert(
@@ -222,19 +215,16 @@ impl EventHandler for DbEventHandler {
           headers: inbound_headers.clone(),
           body: Bytes::new(),
         };
-        if let Err(e) = self
-          .requests
-          .headers(
-            request_id,
-            requests::HeadersUpdate {
-              ts: *ts,
-              endpoint: &endpoint,
-              session_id: session_id.as_deref(),
-              method: method.as_deref(),
-              inbound_req: &inbound_req,
-            },
-          )
-        {
+        if let Err(e) = self.requests.headers(
+          request_id,
+          requests::HeadersUpdate {
+            ts: *ts,
+            endpoint: &endpoint,
+            session_id: session_id.as_deref(),
+            method: method.as_deref(),
+            inbound_req: &inbound_req,
+          },
+        ) {
           tracing::warn!(error = %e, "failed to insert/update headers requests db row");
         }
         let key = (request_id.clone(), 0);
@@ -270,11 +260,7 @@ impl EventHandler for DbEventHandler {
           .method
           .clone()
           .or_else(|| method.map(str::to_string));
-        pending.inbound_req.url = pending
-          .inbound_req
-          .url
-          .clone()
-          .or_else(|| url.map(str::to_string));
+        pending.inbound_req.url = pending.inbound_req.url.clone().or_else(|| url.map(str::to_string));
         pending.inbound_req.headers = inbound_headers.clone();
       }
       Event::RequestParsed {
@@ -333,7 +319,10 @@ impl EventHandler for DbEventHandler {
         let key = (request_id.clone(), *attempt);
         if let Some(p) = self.pending.get_mut(&key) {
           p.latency_header_ms = Some(*latency_ms);
-          if let Err(e) = self.requests.responded(p.ts, request_id, *attempt, *latency_ms, *status, resp_headers) {
+          if let Err(e) = self
+            .requests
+            .responded(p.ts, request_id, *attempt, *latency_ms, *status, resp_headers)
+          {
             tracing::warn!(error = %e, "failed to update responded requests db row");
           }
         }
@@ -621,9 +610,7 @@ mod tests {
       }
       let conn = Connection::open(&p).unwrap();
       let mut stmt = conn
-        .prepare(
-          "SELECT request_id, status, request_error, latency_header_ms FROM requests ORDER BY request_id",
-        )
+        .prepare("SELECT request_id, status, request_error, latency_header_ms FROM requests ORDER BY request_id")
         .unwrap();
       let iter = stmt
         .query_map([], |r| {
@@ -870,7 +857,11 @@ mod tests {
     let source_rows = fetch_source_and_method(&dir);
     assert_eq!(
       source_rows,
-      vec![("req-parse-fail".into(), Some("127.0.0.1:4142".into()), Some("POST".into()))]
+      vec![(
+        "req-parse-fail".into(),
+        Some("127.0.0.1:4142".into()),
+        Some("POST".into())
+      )]
     );
   }
 

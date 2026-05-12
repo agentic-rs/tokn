@@ -8,8 +8,8 @@
 //!
 //! Only registered when stdout is a TTY (see `server_runtime.rs`).
 
-use console::style;
 use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
+use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
 use llm_core::event::{Event, EventHandler};
@@ -337,9 +337,7 @@ impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
       Event::RequestStarted {
-        request_id,
-        endpoint,
-        ..
+        request_id, endpoint, ..
       } => {
         // Insert above the footer.
         let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
@@ -611,7 +609,12 @@ impl ArchiveEventHandler for ArchiveProgressEventHandler {
       ArchiveEvent::FileSkipped { path, archive } => {
         tracing::debug!(path = %path.display(), archive = %archive.display(), "request db archive already exists");
       }
-      ArchiveEvent::FileFailed { id, path, archive, error } => {
+      ArchiveEvent::FileFailed {
+        id,
+        path,
+        archive,
+        error,
+      } => {
         if let Some(state) = self.bars.remove(id) {
           state.bar.disable_steady_tick();
           state.bar.finish_and_clear();
@@ -695,14 +698,11 @@ impl EventHandler for ProgressLogEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
       Event::RequestStarted {
-        request_id,
-        endpoint,
-        ..
+        request_id, endpoint, ..
       } => {
-        self.requests.insert(
-          request_id.clone(),
-          RequestState::new(endpoint_label(endpoint, None)),
-        );
+        self
+          .requests
+          .insert(request_id.clone(), RequestState::new(endpoint_label(endpoint, None)));
         self.in_flight = self.in_flight.saturating_add(1);
       }
       Event::RequestParsed {
