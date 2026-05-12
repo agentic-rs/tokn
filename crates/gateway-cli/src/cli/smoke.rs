@@ -1,7 +1,10 @@
+use crate::cli::config_cmd::RouteModeArg;
 use crate::config::Config;
 use crate::provider::{Endpoint, RequestCtx};
 use anyhow::{anyhow, Result};
 use clap::{Args, ValueEnum};
+use llm_config::RouteMode;
+use llm_core::event::EventBus;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,12 +33,16 @@ pub enum OutputFormat {
 
 #[derive(Args, Debug)]
 pub struct SmokeArgs {
-  /// Filter by provider id.
+  /// Route mode (defaults to the serve route-mode from config).
+  #[arg(long, value_enum)]
+  pub route: Option<RouteModeArg>,
+
+  /// Constrain account selection to this provider.
   #[arg(long)]
   pub provider: Option<String>,
 
-  /// Filter by account id.
-  #[arg(long)]
+  /// Pick a specific account by id (requires --provider).
+  #[arg(long, requires = "provider")]
   pub account: Option<String>,
 
   /// Model to use for the smoke request.
@@ -55,46 +62,84 @@ pub struct SmokeArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
-  let (cfg, _) = Config::load(cfg_path.as_deref())?;
+  let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
+  let route_mode = args
+    .route
+    .map(RouteMode::from)
+    .unwrap_or(cfg.server.route_mode);
+  cfg.server.route_mode = route_mode;
 
-  let account_cfg = resolve_account(&cfg, args.account.as_deref(), args.provider.as_deref())?;
-  let provider = llm_router::accounts::registry::build_for_account(Arc::new(account_cfg.clone()))?;
+  let state = llm_router::api::build_state(&cfg, Arc::new(EventBus::noop()))?;
 
   let model = match &args.model {
     Some(m) => m.clone(),
-    None => provider
-      .info()
-      .default_models
-      .first()
-      .map(|m| m.id.clone())
-      .ok_or_else(|| anyhow!("no default model for provider '{}'; pass --model", account_cfg.provider))?,
+    None => pick_default_model(&state, args.provider.as_deref())?,
   };
 
-  let http = crate::util::http::build_client(&cfg.proxy)?;
   let endpoint: Endpoint = args.endpoint.into();
+  let route = state
+    .route
+    .resolve(&model, None)
+    .map_err(|e| anyhow!("{e}"))?;
 
-  if !provider.supports(&model, endpoint) {
-    anyhow::bail!(
-      "provider '{}' does not support model '{}' on endpoint {}",
-      provider.info().id,
-      model,
-      endpoint,
-    );
+  if route_mode == RouteMode::Passthrough {
+    anyhow::bail!("passthrough mode requires the proxy; use a different --route mode");
   }
+
+  let (acct, upstream_endpoint) = match (&args.provider, &args.account) {
+    (None, None) => acquire_from_pool(&state, &route, endpoint, route_mode)?,
+    (Some(provider_id), None) => acquire_from_provider(&state, provider_id, &route, endpoint, route_mode)?,
+    (Some(provider_id), Some(account_id)) => {
+      acquire_specific(&state, provider_id, account_id, &route, endpoint, route_mode)?
+    }
+    (None, Some(_)) => unreachable!("clap requires= prevents this"),
+  };
+
+  let provider = &acct.provider;
+  let account_cfg = acct.config.load();
 
   if args.format == OutputFormat::Text {
     println!("account:  {}", account_cfg.id);
-    println!("provider: {}", account_cfg.provider);
-    println!("model:    {model}");
-    println!("endpoint: {endpoint}");
+    println!("provider: {}", provider.info().id);
+    println!("model:    {} -> {}", route.requested_model, route.upstream_model);
+    println!("endpoint: {} -> {}", endpoint, upstream_endpoint);
+    println!("route:    {}", route_mode_name(route_mode));
     println!();
   }
 
-  let body = build_request_body(&model, &args.message);
+  let mut body = serde_json::json!({
+    "model": route.upstream_model,
+    "stream": false,
+    "messages": [{"role": "user", "content": args.message}],
+  });
+
+  if upstream_endpoint != endpoint {
+    body = llm_router::convert::convert_request(endpoint, upstream_endpoint, &body)
+      .map_err(|e| anyhow!("request conversion failed: {e}"))?;
+  }
+
+  if let Some(transformer) = provider.input_transformer() {
+    let meta = llm_core::pipeline::RequestMeta {
+      endpoint,
+      upstream_endpoint,
+      model: route.requested_model.clone(),
+      upstream_model: route.upstream_model.clone(),
+      stream: false,
+      session_id: None,
+      request_id: None,
+      attempt: 0,
+      project_id: None,
+      initiator: "smoke".into(),
+      header_initiator: None,
+      behave_as: None,
+      inbound_headers: Default::default(),
+    };
+    body = transformer.transform_input(&meta, body)?;
+  }
 
   let ctx = RequestCtx {
-    endpoint,
-    http: &http,
+    endpoint: upstream_endpoint,
+    http: &state.http,
     body: &body,
     body_bytes: None,
     content_encoding: None,
@@ -105,7 +150,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     outbound: None,
   };
 
-  let resp = match endpoint {
+  let resp = match upstream_endpoint {
     Endpoint::ChatCompletions => provider.chat(ctx).await?,
     Endpoint::Responses => provider.responses(ctx).await?,
     Endpoint::Messages => provider.messages(ctx).await?,
@@ -120,55 +165,134 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     print_text_response(status, &body_bytes)?;
   }
 
-  if !status.is_success() {
+  if status.is_success() {
+    acct.mark_success();
+  } else {
+    acct.mark_failure(state.pool.cooldown_base());
     std::process::exit(1);
   }
 
   Ok(())
 }
 
-fn resolve_account<'a>(
-  cfg: &'a Config,
-  account_id: Option<&str>,
-  provider_id: Option<&str>,
-) -> Result<crate::config::AccountConfig> {
-  let matches: Vec<&crate::config::AccountConfig> = cfg
-    .accounts
-    .iter()
-    .filter(|a| a.enabled)
-    .filter(|a| match account_id {
-      Some(id) => a.id == id,
-      None => true,
-    })
-    .filter(|a| match provider_id {
-      Some(id) => a.provider == id,
-      None => true,
-    })
-    .collect();
-
-  match matches.len() {
-    0 => Err(anyhow!(
-      "no matching account found (--account={:?}, --provider={:?})",
-      account_id,
-      provider_id,
-    )),
-    1 => Ok(matches[0].clone()),
-    n => {
-      let names: Vec<&str> = matches.iter().map(|a| a.id.as_str()).collect();
-      Err(anyhow!(
-        "{n} accounts match; narrow with --account or --provider: {}",
-        names.join(", "),
-      ))
+fn acquire_from_pool(
+  state: &llm_router::api::AppState,
+  route: &llm_router::api::routing::RouteResolution,
+  endpoint: Endpoint,
+  route_mode: RouteMode,
+) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
+  match state.pool.acquire_for_route(None, route, endpoint) {
+    llm_router::accounts::EndpointAcquire::Account { acct, endpoint } => Ok((acct, endpoint)),
+    llm_router::accounts::EndpointAcquire::SessionExpired => {
+      Err(anyhow!("session expired (unexpected for smoke test)"))
     }
+    llm_router::accounts::EndpointAcquire::None => Err(anyhow!(
+      "no account supports model '{}' on endpoint {} with route mode {}",
+      route.requested_model,
+      endpoint,
+      route_mode_name(route_mode),
+    )),
   }
 }
 
-fn build_request_body(model: &str, message: &str) -> serde_json::Value {
-  serde_json::json!({
-    "model": model,
-    "stream": false,
-    "messages": [{"role": "user", "content": message}],
-  })
+fn acquire_from_provider(
+  state: &llm_router::api::AppState,
+  provider_id: &str,
+  route: &llm_router::api::routing::RouteResolution,
+  endpoint: Endpoint,
+  route_mode: RouteMode,
+) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
+  let upstream_model = &route.upstream_model;
+  for acct in state.pool.all() {
+    if acct.provider.info().id != provider_id {
+      continue;
+    }
+    if let Some(ep) = matching_endpoint(&acct, upstream_model, endpoint) {
+      return Ok((acct.clone(), ep));
+    }
+  }
+  Err(anyhow!(
+    "no account for provider '{}' supports model '{}' on endpoint {} with route mode {}",
+    provider_id,
+    route.requested_model,
+    endpoint,
+    route_mode_name(route_mode),
+  ))
+}
+
+fn acquire_specific(
+  state: &llm_router::api::AppState,
+  provider_id: &str,
+  account_id: &str,
+  route: &llm_router::api::routing::RouteResolution,
+  endpoint: Endpoint,
+  route_mode: RouteMode,
+) -> Result<(Arc<llm_router::accounts::AccountHandle>, Endpoint)> {
+  let upstream_model = &route.upstream_model;
+  for acct in state.pool.all() {
+    if acct.config.load().id != account_id {
+      continue;
+    }
+    if acct.provider.info().id != provider_id {
+      anyhow::bail!(
+        "account '{}' belongs to provider '{}', not '{}'",
+        account_id,
+        acct.provider.info().id,
+        provider_id,
+      );
+    }
+    if let Some(ep) = matching_endpoint(&acct, upstream_model, endpoint) {
+      return Ok((acct.clone(), ep));
+    }
+    anyhow::bail!(
+      "account '{}' does not support model '{}' on endpoint {}",
+      account_id,
+      route.requested_model,
+      endpoint,
+    );
+  }
+  Err(anyhow!(
+    "no account with id '{}' (provider '{}') found for route mode {}",
+    account_id,
+    provider_id,
+    route_mode_name(route_mode),
+  ))
+}
+
+fn matching_endpoint(
+  acct: &llm_router::accounts::AccountHandle,
+  model: &str,
+  requested: Endpoint,
+) -> Option<Endpoint> {
+  [requested, Endpoint::ChatCompletions, Endpoint::Responses, Endpoint::Messages]
+    .into_iter()
+    .find(|ep| acct.provider.model_info(model).is_some() && acct.provider.supports(model, *ep))
+}
+
+fn pick_default_model(state: &llm_router::api::AppState, provider_filter: Option<&str>) -> Result<String> {
+  for acct in state.pool.all() {
+    if let Some(p) = provider_filter {
+      if acct.provider.info().id != p {
+        continue;
+      }
+    }
+    if let Some(m) = acct.provider.info().default_models.first() {
+      return Ok(m.id.clone());
+    }
+  }
+  match provider_filter {
+    Some(p) => anyhow::bail!("no models available for provider '{}'; pass --model", p),
+    None => anyhow::bail!("no models available; pass --model explicitly"),
+  }
+}
+
+fn route_mode_name(mode: RouteMode) -> &'static str {
+  match mode {
+    RouteMode::Passthrough => "passthrough",
+    RouteMode::Exact => "exact",
+    RouteMode::Route => "route",
+    RouteMode::Fuzzy => "fuzzy",
+  }
 }
 
 fn print_text_response(status: reqwest::StatusCode, body: &[u8]) -> Result<()> {
