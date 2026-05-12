@@ -2,18 +2,18 @@ mod ca;
 mod passthrough;
 mod transport;
 
-pub use ca::{load_or_generate_ca, ProxyCa};
-use transport::handle_client;
 use crate::api::AppState;
 use anyhow::{Context, Result};
 use axum::http::Method;
 use axum::Router;
+pub use ca::{load_or_generate_ca, ProxyCa};
 use std::collections::HashSet;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use transport::handle_client;
 const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
   "api.openai.com",
   "api.anthropic.com",
@@ -35,7 +35,10 @@ pub struct ProxyOptions {
   pub passthrough_hosts: Vec<String>,
 }
 
-pub async fn serve(state: AppState, options: ProxyOptions) -> Result<()> {
+pub async fn serve<F>(state: AppState, options: ProxyOptions, shutdown: F) -> Result<()>
+where
+  F: Future<Output = ()> + Send,
+{
   let listener = TcpListener::bind(options.addr)
     .await
     .with_context(|| format!("bind {}", options.addr))?;
@@ -48,15 +51,11 @@ pub async fn serve(state: AppState, options: ProxyOptions) -> Result<()> {
 
   tracing::info!(addr = %options.addr, ca_dir = %options.ca_dir.display(), "llm-router proxy listening");
 
-  let (shutdown_tx, mut shutdown_rx) = oneshot::channel::<()>();
-  tokio::spawn(async move {
-    let _ = tokio::signal::ctrl_c().await;
-    let _ = shutdown_tx.send(());
-  });
+  tokio::pin!(shutdown);
 
   loop {
     tokio::select! {
-      _ = &mut shutdown_rx => break,
+      _ = &mut shutdown => break,
       accept = listener.accept() => {
         let (stream, peer) = accept?;
         let router = router.clone();

@@ -2,8 +2,8 @@
 //! helpers. Comment-preserving edits via `toml_edit`.
 
 use crate::config::{paths, Config};
-use crate::provider::ID_GITHUB_COPILOT;
 use crate::provider::profiles::{self, Profiles};
+use crate::provider::ID_GITHUB_COPILOT;
 use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -82,6 +82,9 @@ pub struct InitArgs {
   /// Runtime proxy port override.
   #[arg(long)]
   pub proxy_port: Option<u16>,
+  /// Runtime proxy default route mode override.
+  #[arg(long, value_enum)]
+  pub proxy_route_mode: Option<RouteModeArg>,
   /// Non-interactive repeatable account specs:
   /// id=...,provider=...,from=...[,env_var=...]
   #[arg(long = "account")]
@@ -333,7 +336,8 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
     for raw in &args.accounts {
       let spec = parse_account_spec(raw)?;
       let source = account_source_from_spec(&spec, false)?;
-      let account = crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
+      let account =
+        crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
       cfg.upsert_account(account);
     }
     cfg.save(path)?;
@@ -382,6 +386,9 @@ fn apply_runtime_overrides(cfg: &mut Config, args: &InitArgs) {
   if let Some(port) = args.proxy_port {
     cfg.proxy_mode.port = port;
   }
+  if let Some(mode) = args.proxy_route_mode {
+    cfg.proxy_mode.route_mode = mode.into();
+  }
 }
 
 fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
@@ -392,11 +399,29 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
     RouteMode::Exact => 2,
     RouteMode::Fuzzy => 3,
   };
-  let selected = Select::new("Route mode:", route_options)
+  let selected = Select::new("Route mode:", route_options.clone())
     .with_starting_cursor(default_idx)
     .prompt()
     .context("route mode selection cancelled")?;
   cfg.server.route_mode = match selected {
+    "route" => RouteMode::Route,
+    "passthrough" => RouteMode::Passthrough,
+    "exact" => RouteMode::Exact,
+    "fuzzy" => RouteMode::Fuzzy,
+    _ => RouteMode::Route,
+  };
+
+  let proxy_default_idx = match cfg.proxy_mode.route_mode {
+    RouteMode::Route => 0,
+    RouteMode::Passthrough => 1,
+    RouteMode::Exact => 2,
+    RouteMode::Fuzzy => 3,
+  };
+  let proxy_selected = Select::new("Proxy route mode:", route_options)
+    .with_starting_cursor(proxy_default_idx)
+    .prompt()
+    .context("proxy route mode selection cancelled")?;
+  cfg.proxy_mode.route_mode = match proxy_selected {
     "route" => RouteMode::Route,
     "passthrough" => RouteMode::Passthrough,
     "exact" => RouteMode::Exact,
@@ -473,8 +498,7 @@ fn pick_source_interactive(provider: &str) -> Result<crate::cli::onboarding::Cre
           .with_initial_value("GITHUB_COPILOT_REFRESH_TOKEN")
           .prompt()
           .context("refresh token env var prompt cancelled")?;
-        let value = std::env::var(&env_var)
-          .map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
+        let value = std::env::var(&env_var).map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
         let v = value.trim().to_string();
         if v.is_empty() {
           bail!("environment variable `{env_var}` is empty");
@@ -852,7 +876,9 @@ mod tests {
 
   #[test]
   fn parse_account_spec_requires_id_provider_from() {
-    let err = parse_account_spec("provider=github-copilot,from=gh").unwrap_err().to_string();
+    let err = parse_account_spec("provider=github-copilot,from=gh")
+      .unwrap_err()
+      .to_string();
     assert!(err.contains("missing required key 'id'"));
 
     let err = parse_account_spec("id=work,from=gh").unwrap_err().to_string();

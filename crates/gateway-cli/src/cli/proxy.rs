@@ -1,3 +1,4 @@
+use crate::cli::config_cmd::RouteModeArg;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -37,6 +38,8 @@ pub struct StartArgs {
   pub host: Option<String>,
   #[arg(long)]
   pub port: Option<u16>,
+  #[arg(long, value_enum)]
+  pub route_mode: Option<RouteModeArg>,
   #[arg(long)]
   pub ca_dir: Option<PathBuf>,
   /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
@@ -89,6 +92,7 @@ impl Default for StartArgs {
     Self {
       host: None,
       port: None,
+      route_mode: None,
       ca_dir: None,
       allow_remote: false,
       no_proxy: false,
@@ -107,30 +111,32 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
 }
 
 async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) -> Result<()> {
+  if passthrough && args.route_mode.is_some() {
+    anyhow::bail!("--passthrough and --route-mode cannot be used together");
+  }
   let (mut cfg, _) = Config::load(cfg_path.as_deref())?;
   if args.no_proxy {
     cfg.proxy = ProxyConfig::default();
   }
-  if passthrough {
-    cfg.server.route_mode = RouteMode::Passthrough;
-  }
 
   let host = args.host.unwrap_or_else(|| cfg.proxy_mode.host.clone());
   let port = args.port.unwrap_or(cfg.proxy_mode.port);
+  let route_mode = args
+    .route_mode
+    .map(Into::into)
+    .or_else(|| passthrough.then_some(RouteMode::Passthrough))
+    .unwrap_or(cfg.proxy_mode.route_mode);
   let ca_dir = args
     .ca_dir
     .clone()
     .map(Ok)
     .unwrap_or_else(|| cfg.proxy_mode.resolved_ca_dir())?;
 
-  crate::server_runtime::ensure_bind_host(&host, args.allow_remote)?;
-
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
-  let state = crate::server_runtime::build_state(&cfg, events.clone())?;
+  let state = crate::server_runtime::build_state_for_route_mode(&cfg, events.clone(), route_mode)?;
   let n = state.pool.len();
-  let addr: SocketAddr = format!("{host}:{port}")
-    .parse()
+  let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
   let ca = llm_router::proxy::load_or_generate_ca(&ca_dir, false)?;
@@ -138,9 +144,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   println!("llm-router proxy listening on http://{addr}");
   println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
   println!("Trust this CA, then run: eval \"$(llm-gateway proxy env)\"");
-  if passthrough {
-    println!("Route mode: passthrough");
-  }
+  println!("Route mode: {}", route_mode_name(route_mode));
   if let Some(url) = &cfg.proxy.url {
     println!("Outbound proxy: {url}");
     if !cfg.proxy.no_proxy.is_empty() {
@@ -158,7 +162,10 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
   };
 
-  let result = llm_router::proxy::serve(state, options).await;
+  let result = llm_router::proxy::serve(state, options, async {
+    let _ = tokio::signal::ctrl_c().await;
+  })
+  .await;
   if let Some(archive_runtime) = archive_runtime {
     archive_runtime.shutdown().await;
   }
@@ -311,4 +318,13 @@ fn detect_shell(explicit: Option<&Path>) -> Result<ShellExec> {
 
 fn shell_arg0(path: &Path) -> Option<String> {
   path.file_name().and_then(|name| name.to_str()).map(|s| s.to_string())
+}
+
+fn route_mode_name(mode: RouteMode) -> &'static str {
+  match mode {
+    RouteMode::Passthrough => "passthrough",
+    RouteMode::Exact => "exact",
+    RouteMode::Route => "route",
+    RouteMode::Fuzzy => "fuzzy",
+  }
 }

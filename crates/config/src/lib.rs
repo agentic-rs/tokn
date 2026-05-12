@@ -256,6 +256,8 @@ pub struct ProxyModeConfig {
   #[serde(default = "default_proxy_port")]
   pub port: u16,
   #[serde(default)]
+  pub route_mode: RouteMode,
+  #[serde(default)]
   pub ca_dir: Option<PathBuf>,
   #[serde(default)]
   pub intercept_hosts: Vec<String>,
@@ -268,6 +270,7 @@ impl Default for ProxyModeConfig {
     Self {
       host: default_host(),
       port: default_proxy_port(),
+      route_mode: RouteMode::default(),
       ca_dir: None,
       intercept_hosts: Vec::new(),
       passthrough_hosts: Vec::new(),
@@ -528,4 +531,26 @@ fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     to: path.to_path_buf(),
   })?;
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn proxy_mode_defaults_to_route_mode() {
+    assert_eq!(ProxyModeConfig::default().route_mode, RouteMode::Route);
+  }
+
+  #[test]
+  fn proxy_mode_route_mode_deserializes() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [proxy_mode]
+        route_mode = "exact"
+      "#,
+    )
+    .expect("config should deserialize");
+    assert_eq!(cfg.proxy_mode.route_mode, RouteMode::Exact);
+  }
 }

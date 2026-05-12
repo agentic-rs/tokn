@@ -101,8 +101,8 @@ llm-router login [--provider PROVIDER] [--no-proxy]
 llm-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
 llm-router account list|remove ID|show ID
 llm-router headers [--account ID]   # inspect resolved Copilot identity headers
-llm-router serve [--port N] [--no-proxy] [--allow-remote]
-llm-router proxy [start] [--port N] [--no-proxy] [--allow-remote]
+llm-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--allow-remote]
+llm-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--allow-remote]
 llm-router proxy env [--shell sh|fish|pwsh]
 llm-router proxy shell [--shell /path/to/shell]
 llm-router proxy ca path|show|regenerate
@@ -158,6 +158,7 @@ Config:
 [proxy_mode]
 host = "127.0.0.1"
 port = 4142
+route_mode = "route"
 
 # optional; defaults to ~/.config/llm-router/ca
 # ca_dir = "/some/path"
@@ -170,6 +171,11 @@ port = 4142
 ```
 
 Requests to hosts outside the allowlist are tunneled through untouched.
+
+`llm-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
+MITM proxy together in one process. They share the same account pool and event
+pipeline, but each listener can keep its own default route mode via
+`[server].route_mode` and `[proxy_mode].route_mode` (or `--proxy-route-mode`).
 
 ## Providers
 
