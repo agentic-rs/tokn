@@ -4,7 +4,7 @@ pub mod profiles;
 
 use directories::ProjectDirs;
 pub use error::{Error, Result};
-pub use llm_core::account::{Account, AccountConfig, AuthType};
+pub use llm_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
 
 use llm_core::provider::ID_GITHUB_COPILOT;
 use serde::{Deserialize, Serialize};

@@ -3,7 +3,6 @@
 
 use crate::config::{paths, Config};
 use crate::provider::profiles::{self, Profiles};
-use crate::provider::ID_GITHUB_COPILOT;
 use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -349,10 +348,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
   let client = build_client(&cfg.proxy)?;
   let mut upserted = 0usize;
   loop {
-    let provider = pick_provider()?;
-    let source = pick_source_interactive(&provider)?;
-    let id = pick_account_id(&provider, &source)?;
-    let account = crate::cli::onboarding::resolve_account(&client, &provider, id, source).await?;
+    let account = crate::cli::onboarding::interactive_add_account(&client, None, None).await?;
     cfg.upsert_account(account);
     upserted += 1;
     let more = Confirm::new("Add another account?")
@@ -463,82 +459,6 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
     cfg.proxy_mode.port = port.parse().context("proxy port must be a valid u16")?;
   }
   Ok(())
-}
-
-fn pick_provider() -> Result<String> {
-  let options = crate::cli::onboarding::known_providers();
-  let selected = Select::new("Pick account provider:", options)
-    .with_starting_cursor(0)
-    .prompt()
-    .context("provider selection cancelled")?;
-  Ok(selected.to_string())
-}
-
-fn pick_source_interactive(provider: &str) -> Result<crate::cli::onboarding::CredentialSource> {
-  let options: Vec<&str> = if provider == ID_GITHUB_COPILOT {
-    vec!["login", "gh", "copilot-plugin", "refresh-token"]
-  } else {
-    vec!["login", "env"]
-  };
-  let picked = Select::new("Credential source:", options)
-    .with_starting_cursor(0)
-    .prompt()
-    .context("credential source selection cancelled")?;
-  match picked {
-    "login" => Ok(crate::cli::onboarding::CredentialSource::Login),
-    "gh" => Ok(crate::cli::onboarding::CredentialSource::Gh),
-    "copilot-plugin" => Ok(crate::cli::onboarding::CredentialSource::CopilotPlugin),
-    "refresh-token" => {
-      let token = Text::new("GitHub Copilot refresh token (leave empty to use env var):")
-        .prompt()
-        .context("refresh token prompt cancelled")?;
-      let trimmed = token.trim().to_string();
-      let token = if trimmed.is_empty() {
-        let env_var = Text::new("Refresh token env var:")
-          .with_initial_value("GITHUB_COPILOT_REFRESH_TOKEN")
-          .prompt()
-          .context("refresh token env var prompt cancelled")?;
-        let value = std::env::var(&env_var).map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
-        let v = value.trim().to_string();
-        if v.is_empty() {
-          bail!("environment variable `{env_var}` is empty");
-        }
-        v
-      } else {
-        trimmed
-      };
-      Ok(crate::cli::onboarding::CredentialSource::RefreshToken { token })
-    }
-    "env" => {
-      let env_var = Text::new("Environment variable containing API key:")
-        .with_initial_value("ZAI_API_KEY")
-        .prompt()
-        .context("env var prompt cancelled")?;
-      Ok(crate::cli::onboarding::CredentialSource::Env { env_var })
-    }
-    _ => bail!("unsupported credential source"),
-  }
-}
-
-fn pick_account_id(provider: &str, source: &crate::cli::onboarding::CredentialSource) -> Result<Option<String>> {
-  let default_id = if provider == ID_GITHUB_COPILOT {
-    "imported"
-  } else {
-    provider
-  };
-  let prompt = match source {
-    crate::cli::onboarding::CredentialSource::Login => "Account id (leave empty for auto):",
-    _ => "Account id:",
-  };
-  let text = Text::new(prompt)
-    .with_initial_value(default_id)
-    .prompt()
-    .context("account id prompt cancelled")?;
-  let trimmed = text.trim().to_string();
-  if trimmed.is_empty() {
-    return Ok(None);
-  }
-  Ok(Some(trimmed))
 }
 
 fn parse_account_spec(raw: &str) -> Result<AccountSpec> {

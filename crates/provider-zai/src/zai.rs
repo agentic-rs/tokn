@@ -250,6 +250,7 @@ mod tests {
       id: "test".into(),
       provider: provider.into(),
       enabled: true,
+      tier: llm_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

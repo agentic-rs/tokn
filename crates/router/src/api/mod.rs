@@ -228,6 +228,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
+      tier: llm_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

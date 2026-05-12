@@ -33,11 +33,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-  /// Add a Copilot account via GitHub device-flow login
-  Login(login::LoginArgs),
-  /// Import an existing GitHub token (from `gh` or the Copilot plugin)
-  Import(import::ImportArgs),
-  /// Manage stored accounts
+  /// Manage stored accounts (add / login / import / list / switch / refresh / status / show / remove)
   #[command(subcommand)]
   Account(account::AccountCmd),
   /// Show the Copilot identity headers that will be sent upstream
@@ -76,8 +72,6 @@ impl Cli {
     };
 
     let r: anyhow::Result<()> = match self.cmd {
-      Cmd::Login(a) => login::run(cfg_path, a).await,
-      Cmd::Import(a) => import::run(cfg_path, a).await,
       Cmd::Account(c) => account::run(cfg_path, c).await,
       Cmd::Headers(a) => headers::run(cfg_path, a).await,
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
@@ -96,15 +90,24 @@ impl Cli {
 /// info-level chatter from `llm_router`. Mutating commands surface
 /// progress at info; the long-running server gets full info logging.
 fn run_mode_for(cmd: &Cmd) -> RunMode {
+  use account::AccountCmd;
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Login(_) | Cmd::Import(_) | Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
+    Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
+    Cmd::Account(c) => match c {
+      AccountCmd::List(_) | AccountCmd::Show { .. } | AccountCmd::Status { .. } => RunMode::ReadOnlyCli,
+      AccountCmd::Add(_)
+      | AccountCmd::Login(_)
+      | AccountCmd::Import(_)
+      | AccountCmd::Refresh { .. }
+      | AccountCmd::Remove { .. }
+      | AccountCmd::Switch(_) => RunMode::MutatingCli,
+    },
     Cmd::Config(args) => match args.cmd {
       Set(_) | Unset(_) | Edit | EditProfiles | Init(_) => RunMode::MutatingCli,
       _ => RunMode::ReadOnlyCli,
     },
-    Cmd::Account(account::AccountCmd::Remove { .. }) => RunMode::MutatingCli,
     _ => RunMode::ReadOnlyCli,
   }
 }

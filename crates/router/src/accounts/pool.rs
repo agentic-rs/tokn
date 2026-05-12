@@ -2,7 +2,7 @@ use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
 use crate::api::routing::{RouteResolution, RouteSelector};
 use llm_config::Config;
-use llm_core::account::AccountConfig;
+use llm_core::account::{AccountConfig, AccountTier};
 use llm_core::provider::{Endpoint, Provider};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use tracing::{debug, info};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-  #[snafu(display("no accounts configured. Run `llm-router login` or `llm-router import` first."))]
+  #[snafu(display("no accounts configured. Run `llm-router account add` first."))]
   NoAccounts,
 
   #[snafu(display("failed to build provider for account `{id}`"))]
@@ -40,8 +40,13 @@ pub struct AccountPool {
 
 struct ProviderBucket {
   provider: Arc<dyn Provider>,
+  /// Accounts whose effective state is `Active`. Tried first, round-robin.
   accounts: Vec<Arc<AccountHandle>>,
   cursor: AtomicUsize,
+  /// Accounts whose effective state is `Fallback`. Only consulted when
+  /// every `Active` account in this bucket is unhealthy / cooled down.
+  fallback_accounts: Vec<Arc<AccountHandle>>,
+  fallback_cursor: AtomicUsize,
 }
 
 #[allow(dead_code)]
@@ -83,21 +88,33 @@ impl AccountPool {
     let mut accounts = Vec::with_capacity(cfg.accounts.len());
     let mut buckets: BTreeMap<String, ProviderBucket> = BTreeMap::new();
     for a in &cfg.accounts {
+      // Disabled accounts are dropped at pool construction time and so
+      // never participate in routing. Re-enable via `account switch` or
+      // by editing the TOML.
+      if !a.enabled {
+        debug!(account = %a.id, "pool: skipped disabled account");
+        continue;
+      }
       let cfg = Arc::new(a.clone());
       let p = build_provider(cfg.clone()).context(BuildAccountSnafu { id: a.id.clone() })?;
-      debug!(account = %a.id, provider = %p.info().id, "pool: built account");
+      debug!(account = %a.id, provider = %p.info().id, tier = ?a.tier, "pool: built account");
       let acct = Arc::new(AccountHandle::new(cfg, p.clone()));
       let bucket_key = p.info().id.clone();
-      buckets
-        .entry(bucket_key)
-        .or_insert_with(|| ProviderBucket {
-          provider: p.clone(),
-          accounts: Vec::new(),
-          cursor: AtomicUsize::new(0),
-        })
-        .accounts
-        .push(acct.clone());
+      let bucket = buckets.entry(bucket_key).or_insert_with(|| ProviderBucket {
+        provider: p.clone(),
+        accounts: Vec::new(),
+        cursor: AtomicUsize::new(0),
+        fallback_accounts: Vec::new(),
+        fallback_cursor: AtomicUsize::new(0),
+      });
+      match a.tier {
+        AccountTier::Active => bucket.accounts.push(acct.clone()),
+        AccountTier::Fallback => bucket.fallback_accounts.push(acct.clone()),
+      }
       accounts.push(acct);
+    }
+    if accounts.is_empty() {
+      return NoAccountsSnafu.fail();
     }
     info!(
       accounts = accounts.len(),
@@ -424,33 +441,47 @@ impl ProviderBucket {
   }
 
   fn pick_healthy(&self) -> Option<Arc<AccountHandle>> {
-    let n = self.accounts.len();
-    if n == 0 {
-      return None;
+    if let Some(a) = pick_healthy_rr(&self.accounts, &self.cursor) {
+      return Some(a);
     }
-    let start = self.cursor.fetch_add(1, Ordering::Relaxed);
-    for i in 0..n {
-      let idx = (start + i) % n;
-      let a = &self.accounts[idx];
-      if a.is_healthy() {
-        return Some(a.clone());
-      }
-    }
-    None
+    pick_healthy_rr(&self.fallback_accounts, &self.fallback_cursor)
   }
 
   fn pick_earliest_cooldown(&self) -> Option<(Arc<AccountHandle>, Option<Instant>)> {
-    let mut best: Option<Arc<AccountHandle>> = None;
-    let mut best_t: Option<Instant> = None;
-    for a in &self.accounts {
-      let t = a.cooldown_until();
-      if best.is_none() || t < best_t {
-        best = Some(a.clone());
-        best_t = t;
-      }
+    if let Some(out) = earliest_cooldown(&self.accounts) {
+      return Some(out);
     }
-    best.map(|acct| (acct, best_t))
+    earliest_cooldown(&self.fallback_accounts)
   }
+}
+
+fn pick_healthy_rr(accounts: &[Arc<AccountHandle>], cursor: &AtomicUsize) -> Option<Arc<AccountHandle>> {
+  let n = accounts.len();
+  if n == 0 {
+    return None;
+  }
+  let start = cursor.fetch_add(1, Ordering::Relaxed);
+  for i in 0..n {
+    let idx = (start + i) % n;
+    let a = &accounts[idx];
+    if a.is_healthy() {
+      return Some(a.clone());
+    }
+  }
+  None
+}
+
+fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHandle>, Option<Instant>)> {
+  let mut best: Option<Arc<AccountHandle>> = None;
+  let mut best_t: Option<Instant> = None;
+  for a in accounts {
+    let t = a.cooldown_until();
+    if best.is_none() || t < best_t {
+      best = Some(a.clone());
+      best_t = t;
+    }
+  }
+  best.map(|acct| (acct, best_t))
 }
 
 #[cfg(test)]
@@ -518,11 +549,16 @@ mod tests {
   }
 
   fn acct(id: &str, provider: Arc<dyn Provider>) -> Arc<AccountHandle> {
+    acct_tier(id, provider, AccountTier::Active)
+  }
+
+  fn acct_tier(id: &str, provider: Arc<dyn Provider>, tier: AccountTier) -> Arc<AccountHandle> {
     Arc::new(AccountHandle::new(
       Arc::new(AccountConfig {
         id: id.into(),
         provider: provider.info().id.clone(),
         enabled: true,
+        tier,
         tags: Vec::new(),
         label: None,
         base_url: None,
@@ -559,6 +595,8 @@ mod tests {
         provider: pa,
         accounts: vec![a1.clone(), a2.clone()],
         cursor: AtomicUsize::new(0),
+        fallback_accounts: Vec::new(),
+        fallback_cursor: AtomicUsize::new(0),
       },
     );
     buckets.insert(
@@ -567,6 +605,8 @@ mod tests {
         provider: pb,
         accounts: vec![b1.clone()],
         cursor: AtomicUsize::new(0),
+        fallback_accounts: Vec::new(),
+        fallback_cursor: AtomicUsize::new(0),
       },
     );
     AccountPool {

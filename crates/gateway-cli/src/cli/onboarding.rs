@@ -96,6 +96,7 @@ fn copilot_account(id: String, token: String) -> Result<Account> {
     id,
     provider: ID_GITHUB_COPILOT.into(),
     enabled: true,
+    tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: None,
@@ -120,6 +121,7 @@ fn zai_account(id: String, provider: &str, key: String) -> Result<Account> {
     id,
     provider: provider.into(),
     enabled: true,
+    tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: Some(zai::default_base_url(provider).into()),
@@ -164,6 +166,7 @@ async fn copilot_login(client: &reqwest::Client, id_override: Option<String>) ->
     id,
     provider: ID_GITHUB_COPILOT.into(),
     enabled: true,
+    tier: llm_core::account::AccountTier::Active,
     tags: Vec::new(),
     label: None,
     base_url: None,
@@ -311,4 +314,105 @@ async fn fetch_username(client: &reqwest::Client, gh_token: &str) -> Result<Stri
     .json()
     .await?;
   Ok(me.login)
+}
+
+// ---------------------------------------------------------------------------
+// Interactive helpers (used by `account add` and `config init`).
+// ---------------------------------------------------------------------------
+
+/// One-shot interactive flow: pick provider → pick credential source →
+/// pick id → resolve account. Caller is responsible for upserting +
+/// saving the resulting `Account`.
+pub(crate) async fn interactive_add_account(
+  client: &reqwest::Client,
+  provider_override: Option<String>,
+  id_override: Option<String>,
+) -> Result<Account> {
+  let provider = match provider_override {
+    Some(p) => p,
+    None => pick_provider()?,
+  };
+  validate_provider(&provider)?;
+  let source = pick_source_interactive(&provider)?;
+  let id = match id_override {
+    Some(s) => Some(s),
+    None => pick_account_id(&provider, &source)?,
+  };
+  resolve_account(client, &provider, id, source).await
+}
+
+pub(crate) fn pick_provider() -> Result<String> {
+  let options = known_providers();
+  let selected = inquire::Select::new("Pick account provider:", options)
+    .with_starting_cursor(0)
+    .prompt()
+    .context("provider selection cancelled")?;
+  Ok(selected.to_string())
+}
+
+pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource> {
+  let options: Vec<&str> = if provider == ID_GITHUB_COPILOT {
+    vec!["login", "gh", "copilot-plugin", "refresh-token"]
+  } else {
+    vec!["login", "env"]
+  };
+  let picked = inquire::Select::new("Credential source:", options)
+    .with_starting_cursor(0)
+    .prompt()
+    .context("credential source selection cancelled")?;
+  match picked {
+    "login" => Ok(CredentialSource::Login),
+    "gh" => Ok(CredentialSource::Gh),
+    "copilot-plugin" => Ok(CredentialSource::CopilotPlugin),
+    "refresh-token" => {
+      let token = inquire::Text::new("GitHub Copilot refresh token (leave empty to use env var):")
+        .prompt()
+        .context("refresh token prompt cancelled")?;
+      let trimmed = token.trim().to_string();
+      let token = if trimmed.is_empty() {
+        let env_var = inquire::Text::new("Refresh token env var:")
+          .with_initial_value("GITHUB_COPILOT_REFRESH_TOKEN")
+          .prompt()
+          .context("refresh token env var prompt cancelled")?;
+        let value = std::env::var(&env_var).map_err(|_| anyhow!("environment variable `{env_var}` is not set"))?;
+        let v = value.trim().to_string();
+        if v.is_empty() {
+          return Err(anyhow!("environment variable `{env_var}` is empty"));
+        }
+        v
+      } else {
+        trimmed
+      };
+      Ok(CredentialSource::RefreshToken { token })
+    }
+    "env" => {
+      let env_var = inquire::Text::new("Environment variable containing API key:")
+        .with_initial_value("ZAI_API_KEY")
+        .prompt()
+        .context("env var prompt cancelled")?;
+      Ok(CredentialSource::Env { env_var })
+    }
+    _ => Err(anyhow!("unsupported credential source")),
+  }
+}
+
+pub(crate) fn pick_account_id(provider: &str, source: &CredentialSource) -> Result<Option<String>> {
+  let default_id = if provider == ID_GITHUB_COPILOT {
+    "imported"
+  } else {
+    provider
+  };
+  let prompt = match source {
+    CredentialSource::Login => "Account id (leave empty for auto):",
+    _ => "Account id:",
+  };
+  let text = inquire::Text::new(prompt)
+    .with_initial_value(default_id)
+    .prompt()
+    .context("account id prompt cancelled")?;
+  let trimmed = text.trim().to_string();
+  if trimmed.is_empty() {
+    return Ok(None);
+  }
+  Ok(Some(trimmed))
 }
