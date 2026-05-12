@@ -63,7 +63,9 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     model,
     system: (!system.is_empty()).then(|| system.join("\n\n")),
     messages,
-    tools: obj.get("tools").and_then(Value::as_array).cloned().unwrap_or_default(),
+    tools: super::tools::normalise_tools(
+      obj.get("tools").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]),
+    ),
     tool_choice: obj.get("tool_choice").cloned(),
     sampling: Sampling {
       temperature: obj.get("temperature").and_then(Value::as_f64),
@@ -94,7 +96,18 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   }
   out.insert("messages".into(), Value::Array(messages));
   if !req.tools.is_empty() {
-    out.insert("tools".into(), Value::Array(req.tools.clone()));
+    // Chat-completions only understands function tools. Drop provider-specific
+    // entries (e.g. `{type:"web_search"}`) instead of forwarding them and
+    // letting the upstream reject the whole request.
+    let tools: Vec<Value> = req
+      .tools
+      .iter()
+      .filter(|t| t.get("function").and_then(Value::as_object).is_some())
+      .cloned()
+      .collect();
+    if !tools.is_empty() {
+      out.insert("tools".into(), Value::Array(tools));
+    }
   }
   insert_opt(&mut out, "tool_choice", req.tool_choice.clone());
   insert_opt_f64(&mut out, "temperature", req.sampling.temperature);

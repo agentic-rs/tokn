@@ -38,7 +38,9 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
       .to_string(),
     system: system_to_string(obj.get("system")),
     messages,
-    tools: obj.get("tools").and_then(Value::as_array).cloned().unwrap_or_default(),
+    tools: super::tools::normalise_tools(
+      obj.get("tools").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]),
+    ),
     tool_choice: obj.get("tool_choice").cloned(),
     sampling: Sampling {
       temperature: obj.get("temperature").and_then(Value::as_f64),
@@ -65,7 +67,15 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
     Value::Array(req.messages.iter().map(message_to_messages).collect()),
   );
   if !req.tools.is_empty() {
-    out.insert("tools".into(), Value::Array(req.tools.clone()));
+    let tools: Vec<Value> = req
+      .tools
+      .iter()
+      .filter(|t| t.get("function").and_then(Value::as_object).is_some())
+      .map(super::tools::tool_to_messages)
+      .collect();
+    if !tools.is_empty() {
+      out.insert("tools".into(), Value::Array(tools));
+    }
   }
   if let Some(v) = &req.tool_choice {
     out.insert("tool_choice".into(), v.clone());
