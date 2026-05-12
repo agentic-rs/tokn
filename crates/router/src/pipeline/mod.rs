@@ -154,7 +154,7 @@ pub(crate) async fn handle_endpoint(
     // is now available via OutboundCapture (populated by the provider during send).
     let captured_outbound = prepared.capture.get().cloned();
     let (out_method, out_url, out_headers) = match captured_outbound.as_ref() {
-      Some(snap) => (snap.method.clone(), snap.url.clone(), Some(snap.headers.clone())),
+      Some(snap) => (snap.method.clone(), snap.url.clone(), Some(snap.req_headers.clone())),
       None => (None, None, None),
     };
     // Body sent upstream: prefer the debug body (decoded) so subscribers see plain JSON;
@@ -162,12 +162,12 @@ pub(crate) async fn handle_endpoint(
     let out_body = if !prepared.debug_outbound_body.is_empty() {
       Some(prepared.debug_outbound_body.clone())
     } else {
-      captured_outbound.as_ref().map(|s| s.body.clone())
+      captured_outbound.as_ref().map(|s| s.req_body.clone())
     };
     state.events.emit(llm_core::event::Event::RequestResponded {
       request_id: request_id.clone(),
       attempt: attempt_u32,
-      status: status.as_u16(),
+      outbound_status: status.as_u16(),
       latency_ms: started.elapsed().as_millis() as u64,
       outbound_resp_headers: resp.headers().clone(),
       outbound_req_method: out_method,

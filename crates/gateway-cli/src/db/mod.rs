@@ -94,9 +94,15 @@ struct PendingRequest {
   stream: bool,
   account_id: String,
   provider_id: String,
-  inbound_req: HttpSnapshot,
-  outbound_req: Option<HttpSnapshot>,
+  inbound_url: Option<String>,
+  inbound_req_headers: HeaderMap,
+  inbound_req_body: Bytes,
+  outbound_method: Option<String>,
+  outbound_url: Option<String>,
+  outbound_req_headers: HeaderMap,
+  outbound_req_body: Bytes,
   outbound_resp_headers: HeaderMap,
+  outbound_have: bool,
   latency_header_ms: Option<u64>,
   result_written: bool,
 }
@@ -159,8 +165,10 @@ impl EventHandler for DbEventHandler {
           method: Some(method.clone()),
           url: url.clone(),
           status: None,
-          headers: HeaderMap::new(),
-          body: Bytes::new(),
+          req_headers: HeaderMap::new(),
+          req_body: Bytes::new(),
+          resp_headers: HeaderMap::new(),
+          resp_body: Bytes::new(),
         };
         if let Err(e) = self.requests.started(
           request_id,
@@ -187,9 +195,15 @@ impl EventHandler for DbEventHandler {
             stream: false,
             account_id: String::new(),
             provider_id: String::new(),
-            inbound_req,
-            outbound_req: None,
+            inbound_url: url.clone(),
+            inbound_req_headers: HeaderMap::new(),
+            inbound_req_body: Bytes::new(),
+            outbound_method: None,
+            outbound_url: None,
+            outbound_req_headers: HeaderMap::new(),
+            outbound_req_body: Bytes::new(),
             outbound_resp_headers: HeaderMap::new(),
+            outbound_have: false,
             latency_header_ms: None,
             result_written: false,
           },
@@ -209,13 +223,15 @@ impl EventHandler for DbEventHandler {
         let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
         let pending_start = self.pending.get(&(request_id.clone(), 0)).cloned();
         let method = pending_start.as_ref().and_then(|p| p.method.as_deref());
-        let url = pending_start.as_ref().and_then(|p| p.inbound_req.url.as_deref());
+        let url = pending_start.as_ref().and_then(|p| p.inbound_url.as_deref());
         let inbound_req = HttpSnapshot {
           method: method.map(str::to_string),
           url: url.map(str::to_string),
           status: None,
-          headers: inbound_headers.clone(),
-          body: Bytes::new(),
+          req_headers: inbound_headers.clone(),
+          req_body: Bytes::new(),
+          resp_headers: HeaderMap::new(),
+          resp_body: Bytes::new(),
         };
         if let Err(e) = self.requests.headers(
           request_id,
@@ -242,9 +258,15 @@ impl EventHandler for DbEventHandler {
           stream: false,
           account_id: String::new(),
           provider_id: String::new(),
-          inbound_req: inbound_req.clone(),
-          outbound_req: None,
+          inbound_url: url.map(str::to_string),
+          inbound_req_headers: inbound_headers.clone(),
+          inbound_req_body: Bytes::new(),
+          outbound_method: None,
+          outbound_url: None,
+          outbound_req_headers: HeaderMap::new(),
+          outbound_req_body: Bytes::new(),
           outbound_resp_headers: HeaderMap::new(),
+          outbound_have: false,
           latency_header_ms: None,
           result_written: false,
         });
@@ -258,13 +280,10 @@ impl EventHandler for DbEventHandler {
         if let Some(initiator) = header_initiator.clone() {
           pending.initiator = initiator;
         }
-        pending.inbound_req.method = pending
-          .inbound_req
-          .method
-          .clone()
-          .or_else(|| method.map(str::to_string));
-        pending.inbound_req.url = pending.inbound_req.url.clone().or_else(|| url.map(str::to_string));
-        pending.inbound_req.headers = inbound_headers.clone();
+        if pending.inbound_url.is_none() {
+          pending.inbound_url = url.map(str::to_string);
+        }
+        pending.inbound_req_headers = inbound_headers.clone();
       }
       Event::RequestParsed {
         request_id,
@@ -292,7 +311,7 @@ impl EventHandler for DbEventHandler {
           p.model = model.clone();
           p.stream = *stream;
           p.initiator = initiator.clone();
-          p.inbound_req.body = inbound_body.clone();
+          p.inbound_req_body = inbound_body.clone();
           if let Err(e) = self.requests.parsed(
             request_id,
             *attempt,
@@ -314,7 +333,7 @@ impl EventHandler for DbEventHandler {
       Event::RequestResponded {
         request_id,
         attempt,
-        status,
+        outbound_status,
         latency_ms,
         outbound_resp_headers,
         outbound_req_method,
@@ -325,22 +344,26 @@ impl EventHandler for DbEventHandler {
         let key = (request_id.clone(), *attempt);
         if let Some(p) = self.pending.get_mut(&key) {
           p.latency_header_ms = Some(*latency_ms);
-          // Build/refresh outbound_req snapshot for later CallRecord reassembly.
-          let snap = HttpSnapshot {
-            method: outbound_req_method.clone(),
-            url: outbound_req_url.clone(),
-            status: Some(*status),
-            headers: outbound_req_headers.clone().unwrap_or_default(),
-            body: outbound_req_body.clone().unwrap_or_default(),
-          };
-          p.outbound_req = Some(snap);
+          if outbound_req_method.is_some() {
+            p.outbound_method = outbound_req_method.clone();
+          }
+          if outbound_req_url.is_some() {
+            p.outbound_url = outbound_req_url.clone();
+          }
+          if let Some(h) = outbound_req_headers.as_ref() {
+            p.outbound_req_headers = h.clone();
+          }
+          if let Some(b) = outbound_req_body.as_ref() {
+            p.outbound_req_body = b.clone();
+          }
           p.outbound_resp_headers = outbound_resp_headers.clone();
+          p.outbound_have = true;
           if let Err(e) = self.requests.responded(
             p.ts,
             request_id,
             *attempt,
             *latency_ms,
-            *status,
+            *outbound_status,
             outbound_resp_headers,
             outbound_req_method.as_deref(),
             outbound_req_url.as_deref(),
@@ -356,7 +379,7 @@ impl EventHandler for DbEventHandler {
         attempt,
         session_source,
         latency_ms,
-        status,
+        inbound_status,
         usage,
         request_error,
         inbound_resp_headers,
@@ -379,19 +402,27 @@ impl EventHandler for DbEventHandler {
           self.pending.remove(&key)
         };
         let record = if let Some(p) = pending {
-          let outbound_resp = Some(HttpSnapshot {
-            method: None,
-            url: None,
-            status: Some(*status),
-            headers: p.outbound_resp_headers.clone(),
-            body: outbound_resp_body.clone().unwrap_or_default(),
-          });
-          let inbound_resp = HttpSnapshot {
-            method: None,
-            url: None,
-            status: Some(*status),
-            headers: inbound_resp_headers.clone(),
-            body: inbound_resp_body.clone(),
+          let outbound = if p.outbound_have || outbound_resp_body.is_some() {
+            Some(HttpSnapshot {
+              method: p.outbound_method.clone(),
+              url: p.outbound_url.clone(),
+              status: Some(*inbound_status),
+              req_headers: p.outbound_req_headers.clone(),
+              req_body: p.outbound_req_body.clone(),
+              resp_headers: p.outbound_resp_headers.clone(),
+              resp_body: outbound_resp_body.clone().unwrap_or_default(),
+            })
+          } else {
+            None
+          };
+          let inbound = HttpSnapshot {
+            method: p.method.clone(),
+            url: p.inbound_url.clone(),
+            status: Some(*inbound_status),
+            req_headers: p.inbound_req_headers.clone(),
+            req_body: p.inbound_req_body.clone(),
+            resp_headers: inbound_resp_headers.clone(),
+            resp_body: inbound_resp_body.clone(),
           };
           CallRecord {
             ts: p.ts,
@@ -407,15 +438,13 @@ impl EventHandler for DbEventHandler {
             provider_id: p.provider_id,
             model: p.model,
             initiator: p.initiator,
-            status: *status,
+            status: *inbound_status,
             stream: p.stream,
             latency_ms: Some(*latency_ms),
             latency_header_ms: p.latency_header_ms,
             usage: usage.clone(),
-            inbound_req: p.inbound_req,
-            outbound_req: p.outbound_req,
-            outbound_resp,
-            inbound_resp,
+            inbound,
+            outbound,
             messages: messages.clone(),
           }
         } else {
@@ -440,27 +469,22 @@ impl EventHandler for DbEventHandler {
             provider_id: String::new(),
             model: String::new(),
             initiator: String::new(),
-            status: *status,
+            status: *inbound_status,
             stream: false,
             latency_ms: Some(*latency_ms),
             latency_header_ms: None,
             usage: usage.clone(),
-            inbound_req: HttpSnapshot::default(),
-            outbound_req: None,
-            outbound_resp: Some(HttpSnapshot {
-              method: None,
-              url: None,
-              status: Some(*status),
-              headers: HeaderMap::new(),
-              body: outbound_resp_body.clone().unwrap_or_default(),
-            }),
-            inbound_resp: HttpSnapshot {
-              method: None,
-              url: None,
-              status: Some(*status),
-              headers: inbound_resp_headers.clone(),
-              body: inbound_resp_body.clone(),
+            inbound: HttpSnapshot {
+              status: Some(*inbound_status),
+              resp_headers: inbound_resp_headers.clone(),
+              resp_body: inbound_resp_body.clone(),
+              ..Default::default()
             },
+            outbound: outbound_resp_body.as_ref().map(|b| HttpSnapshot {
+              status: Some(*inbound_status),
+              resp_body: b.clone(),
+              ..Default::default()
+            }),
             messages: messages.clone(),
           }
         };
@@ -479,6 +503,28 @@ impl EventHandler for DbEventHandler {
         if !success {
           let key = (request_id.clone(), 0);
           if let Some(p) = self.pending.get(&key).cloned().filter(|p| !p.result_written) {
+            let inbound = HttpSnapshot {
+              method: p.method.clone(),
+              url: p.inbound_url.clone(),
+              status: *final_status,
+              req_headers: p.inbound_req_headers.clone(),
+              req_body: p.inbound_req_body.clone(),
+              resp_headers: HeaderMap::new(),
+              resp_body: Bytes::new(),
+            };
+            let outbound = if p.outbound_have {
+              Some(HttpSnapshot {
+                method: p.outbound_method.clone(),
+                url: p.outbound_url.clone(),
+                status: *final_status,
+                req_headers: p.outbound_req_headers.clone(),
+                req_body: p.outbound_req_body.clone(),
+                resp_headers: p.outbound_resp_headers.clone(),
+                resp_body: Bytes::new(),
+              })
+            } else {
+              None
+            };
             let record = CallRecord {
               ts: p.ts,
               session_id: p.session_id.unwrap_or_default(),
@@ -498,16 +544,8 @@ impl EventHandler for DbEventHandler {
               latency_ms: None,
               latency_header_ms: p.latency_header_ms,
               usage: Usage::default(),
-              inbound_req: p.inbound_req,
-              outbound_req: p.outbound_req,
-              outbound_resp: None,
-              inbound_resp: HttpSnapshot {
-                method: None,
-                url: None,
-                status: *final_status,
-                headers: HeaderMap::new(),
-                body: Bytes::new(),
-              },
+              inbound,
+              outbound,
               messages: Vec::new(),
             };
             if let Err(e) = self.requests.result(&record) {
@@ -529,7 +567,7 @@ mod tests {
   use super::*;
   use llm_core::event::{Event, EventHandler};
   use reqwest::header::HeaderMap;
-  use rusqlite::Connection;
+  use rusqlite::{params, Connection};
 
   fn tempdir() -> std::path::PathBuf {
     let p = std::env::temp_dir().join(format!("llm-router-db-events-{}", uuid::Uuid::new_v4()));
@@ -608,7 +646,7 @@ mod tests {
       attempt,
       session_source: SessionSource::Header,
       latency_ms: 10,
-      status,
+      inbound_status: status,
       usage: Usage::default(),
       request_error: error.map(str::to_string),
       inbound_resp_headers: HeaderMap::new(),
@@ -622,7 +660,7 @@ mod tests {
     Event::RequestResponded {
       request_id: req_id.into(),
       attempt,
-      status: 200,
+      outbound_status: 200,
       latency_ms,
       outbound_resp_headers: HeaderMap::new(),
       outbound_req_method: None,
@@ -1010,6 +1048,296 @@ mod tests {
     for r in &rows {
       assert_eq!(r.1, Some(500));
       assert!(r.2.is_some());
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Per-event field-persistence test.
+  //
+  // Drives the full lifecycle (Started -> Headers -> Parsed -> Responded ->
+  // Result -> Completed) with non-default values for every field, and after
+  // each event verifies the columns the writer is responsible for setting at
+  // that point match the event's payload. Locks in the current upsert/COALESCE
+  // behavior as a regression net for the field-rename refactor.
+  // ---------------------------------------------------------------------------
+
+  /// Read the single matching row from any per-day requests db as a column-name
+  /// keyed map. Strings come back as Some(String); blobs as Some(String) via
+  /// from_utf8 (good enough for header-JSON / body assertions in this test).
+  fn fetch_row_map(
+    dir: &std::path::Path,
+    request_id: &str,
+  ) -> std::collections::HashMap<String, rusqlite::types::Value> {
+    use rusqlite::types::Value;
+    let mut out: Option<std::collections::HashMap<String, Value>> = None;
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ?1").unwrap();
+      let col_names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+      let mut rows = stmt.query(params![request_id]).unwrap();
+      if let Some(row) = rows.next().unwrap() {
+        let mut m = std::collections::HashMap::new();
+        for (i, name) in col_names.iter().enumerate() {
+          let v: Value = row.get(i).unwrap();
+          m.insert(name.clone(), v);
+        }
+        out = Some(m);
+        break;
+      }
+    }
+    out.unwrap_or_else(|| panic!("no row found for request_id={request_id}"))
+  }
+
+  fn as_text(v: &rusqlite::types::Value) -> Option<String> {
+    use rusqlite::types::Value;
+    match v {
+      Value::Text(s) => Some(s.clone()),
+      Value::Blob(b) => Some(String::from_utf8_lossy(b).to_string()),
+      _ => None,
+    }
+  }
+  fn as_int(v: &rusqlite::types::Value) -> Option<i64> {
+    use rusqlite::types::Value;
+    match v {
+      Value::Integer(i) => Some(*i),
+      _ => None,
+    }
+  }
+  fn is_null(v: &rusqlite::types::Value) -> bool {
+    matches!(v, rusqlite::types::Value::Null)
+  }
+
+  #[test]
+  fn every_event_persists_its_fields() {
+    let (mut h, dir) = make_handler();
+    let req = "req-full";
+    let ts: i64 = 1_700_000_000;
+
+    // --- 1. RequestStarted ---------------------------------------------------
+    let started = Event::RequestStarted {
+      request_id: req.into(),
+      ts,
+      endpoint: "chat_completions".into(),
+      session_id: Some("sess-full".into()),
+      ip: Some("10.0.0.1".into()),
+      port: Some(9999),
+      method: "POST".into(),
+      url: Some("https://upstream.test/v1/responses".into()),
+    };
+    h.handle(&started);
+    {
+      let row = fetch_row_map(&dir, req);
+      assert_eq!(as_int(&row["ts"]), Some(ts), "ts after RequestStarted");
+      assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-full"));
+      assert_eq!(as_text(&row["source"]).as_deref(), Some("10.0.0.1:9999"));
+      assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+      assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("chat_completions"));
+      assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
+      assert_eq!(
+        as_text(&row["inbound_req_url"]).as_deref(),
+        Some("https://upstream.test/v1/responses")
+      );
+      // Fields not yet populated.
+      assert!(is_null(&row["status"]), "status null after Started");
+      assert!(is_null(&row["latency_ms"]), "latency_ms null after Started");
+      assert!(is_null(&row["latency_header_ms"]), "latency_header_ms null after Started");
+      assert!(is_null(&row["input_tok"]));
+      assert!(is_null(&row["output_tok"]));
+      assert!(is_null(&row["outbound_resp_status"]));
+      assert!(is_null(&row["inbound_resp_status"]));
+      // account_id/provider_id/model/initiator are inserted as empty strings.
+      assert_eq!(as_text(&row["account_id"]).as_deref(), Some(""));
+      assert_eq!(as_text(&row["provider_id"]).as_deref(), Some(""));
+      assert_eq!(as_text(&row["model"]).as_deref(), Some(""));
+      assert_eq!(as_text(&row["initiator"]).as_deref(), Some(""));
+    }
+
+    // --- 2. RequestHeaders ---------------------------------------------------
+    let mut inbound_headers = HeaderMap::new();
+    inbound_headers.insert("x-request-id", "abc-123".parse().unwrap());
+    let headers_event = Event::RequestHeaders {
+      request_id: req.into(),
+      ts,
+      endpoint_hint: Some("responses".into()),
+      path: Some("/v1/responses".into()),
+      session_id: Some("sess-full".into()),
+      project_id: Some("proj-full".into()),
+      header_initiator: Some("system".into()),
+      route_mode_hint: Some("route".into()),
+      inbound_headers: inbound_headers.clone(),
+    };
+    h.handle(&headers_event);
+    {
+      let row = fetch_row_map(&dir, req);
+      // Endpoint overwritten by hint.
+      assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("responses"));
+      // inbound_req_headers now contains the JSON-encoded header.
+      let hdr_json = as_text(&row["inbound_req_headers"]).unwrap_or_default();
+      assert!(
+        hdr_json.contains("\"x-request-id\":\"abc-123\""),
+        "expected header in JSON, got: {hdr_json}"
+      );
+      // COALESCE keeps prior values.
+      assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-full"));
+      assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+      assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
+      assert_eq!(
+        as_text(&row["inbound_req_url"]).as_deref(),
+        Some("https://upstream.test/v1/responses")
+      );
+      // header_initiator and project_id are NOT written to the requests row by
+      // RequestHeaders (they live only in the in-memory pending state until
+      // RequestParsed/RequestResult).
+      assert_eq!(as_text(&row["initiator"]).as_deref(), Some(""));
+    }
+
+    // --- 3. RequestParsed ----------------------------------------------------
+    let parsed_event = Event::RequestParsed {
+      request_id: req.into(),
+      attempt: 0,
+      account_id: "acct-full".into(),
+      provider_id: "prov-full".into(),
+      model: "gpt-test".into(),
+      stream: true,
+      initiator: "user".into(),
+      inbound_body: bytes::Bytes::from_static(b"{\"hello\":\"world\"}"),
+    };
+    h.handle(&parsed_event);
+    {
+      let row = fetch_row_map(&dir, req);
+      assert_eq!(as_text(&row["account_id"]).as_deref(), Some("acct-full"));
+      assert_eq!(as_text(&row["provider_id"]).as_deref(), Some("prov-full"));
+      assert_eq!(as_text(&row["model"]).as_deref(), Some("gpt-test"));
+      assert_eq!(as_text(&row["initiator"]).as_deref(), Some("user"));
+      assert_eq!(as_int(&row["stream"]), Some(1));
+      assert_eq!(
+        as_text(&row["inbound_req_body"]).as_deref(),
+        Some("{\"hello\":\"world\"}")
+      );
+      // Endpoint is rewritten by RequestParsed using pending.endpoint, which
+      // RequestHeaders updated to "responses".
+      assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("responses"));
+      // Still not set.
+      assert!(is_null(&row["status"]));
+      assert!(is_null(&row["latency_ms"]));
+    }
+
+    // --- 4. RequestResponded -------------------------------------------------
+    let mut outbound_resp_headers = HeaderMap::new();
+    outbound_resp_headers.insert("x-upstream", "yes".parse().unwrap());
+    let mut outbound_req_headers = HeaderMap::new();
+    outbound_req_headers.insert("x-custom", "yes".parse().unwrap());
+    let responded_event = Event::RequestResponded {
+      request_id: req.into(),
+      attempt: 0,
+      outbound_status: 201,
+      latency_ms: 42,
+      outbound_resp_headers: outbound_resp_headers.clone(),
+      outbound_req_method: Some("POST".into()),
+      outbound_req_url: Some("https://upstream.test/v1/chat".into()),
+      outbound_req_headers: Some(outbound_req_headers.clone()),
+      outbound_req_body: Some(bytes::Bytes::from_static(b"{\"out\":true}")),
+    };
+    h.handle(&responded_event);
+    {
+      let row = fetch_row_map(&dir, req);
+      // status mirrors outbound_status here.
+      assert_eq!(as_int(&row["status"]), Some(201));
+      assert_eq!(as_int(&row["outbound_resp_status"]), Some(201));
+      assert_eq!(as_int(&row["latency_header_ms"]), Some(42));
+      let resp_hdr = as_text(&row["outbound_resp_headers"]).unwrap_or_default();
+      assert!(resp_hdr.contains("\"x-upstream\":\"yes\""), "got: {resp_hdr}");
+      assert_eq!(as_text(&row["outbound_req_method"]).as_deref(), Some("POST"));
+      assert_eq!(
+        as_text(&row["outbound_req_url"]).as_deref(),
+        Some("https://upstream.test/v1/chat")
+      );
+      let req_hdr = as_text(&row["outbound_req_headers"]).unwrap_or_default();
+      assert!(req_hdr.contains("\"x-custom\":\"yes\""), "got: {req_hdr}");
+      assert_eq!(
+        as_text(&row["outbound_req_body"]).as_deref(),
+        Some("{\"out\":true}")
+      );
+    }
+
+    // --- 5. RequestResult ----------------------------------------------------
+    let mut inbound_resp_headers_map = HeaderMap::new();
+    inbound_resp_headers_map.insert("content-type", "application/json".parse().unwrap());
+    let usage = Usage {
+      input_tokens: Some(11),
+      output_tokens: Some(22),
+      details: UsageDetails {
+        cache_read: Some(3),
+        reasoning: Some(4),
+      },
+    };
+    let result_event = Event::RequestResult {
+      request_id: req.into(),
+      attempt: 0,
+      session_source: SessionSource::Header,
+      latency_ms: 123,
+      inbound_status: 200,
+      usage,
+      request_error: None,
+      inbound_resp_headers: inbound_resp_headers_map.clone(),
+      inbound_resp_body: bytes::Bytes::from_static(b"{\"ok\":true}"),
+      outbound_resp_body: Some(bytes::Bytes::from_static(b"{\"upstream\":\"body\"}")),
+      messages: vec![],
+    };
+    h.handle(&result_event);
+    {
+      let row = fetch_row_map(&dir, req);
+      // status now overwritten to inbound_status (200).
+      assert_eq!(as_int(&row["status"]), Some(200));
+      assert_eq!(as_int(&row["inbound_resp_status"]), Some(200));
+      assert_eq!(as_int(&row["latency_ms"]), Some(123));
+      // latency_header_ms preserved by COALESCE.
+      assert_eq!(as_int(&row["latency_header_ms"]), Some(42));
+      assert_eq!(as_int(&row["input_tok"]), Some(11));
+      assert_eq!(as_int(&row["output_tok"]), Some(22));
+      assert_eq!(as_int(&row["cached_tok"]), Some(3));
+      assert_eq!(as_int(&row["reasoning_tok"]), Some(4));
+      let inbound_hdr = as_text(&row["inbound_resp_headers"]).unwrap_or_default();
+      assert!(
+        inbound_hdr.contains("\"content-type\":\"application/json\""),
+        "got: {inbound_hdr}"
+      );
+      assert_eq!(as_text(&row["inbound_resp_body"]).as_deref(), Some("{\"ok\":true}"));
+      assert_eq!(
+        as_text(&row["outbound_resp_body"]).as_deref(),
+        Some("{\"upstream\":\"body\"}")
+      );
+      assert!(is_null(&row["request_error"]));
+      assert_eq!(as_int(&row["stream"]), Some(1));
+      assert_eq!(as_text(&row["account_id"]).as_deref(), Some("acct-full"));
+      assert_eq!(as_text(&row["provider_id"]).as_deref(), Some("prov-full"));
+      assert_eq!(as_text(&row["model"]).as_deref(), Some("gpt-test"));
+      assert_eq!(as_text(&row["initiator"]).as_deref(), Some("user"));
+    }
+
+    // --- 6. RequestCompleted (success) --------------------------------------
+    let completed_event = Event::RequestCompleted {
+      request_id: req.into(),
+      success: true,
+      total_attempts: 1,
+      final_status: Some(200),
+      total_latency_ms: 200,
+      error: None,
+    };
+    h.handle(&completed_event);
+    {
+      // Row should remain intact; RequestCompleted only cleans up pending state
+      // (and on failures may write a row, but here success=true and a Result
+      // already wrote the row).
+      let row = fetch_row_map(&dir, req);
+      assert_eq!(as_int(&row["status"]), Some(200));
+      assert_eq!(as_int(&row["latency_ms"]), Some(123));
+      assert_eq!(as_int(&row["input_tok"]), Some(11));
+      assert!(is_null(&row["request_error"]));
     }
   }
 }

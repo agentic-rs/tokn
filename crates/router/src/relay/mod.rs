@@ -91,14 +91,12 @@ mod tests {
               latency_ms: None,
               latency_header_ms: None,
               usage: Usage::default(),
-              inbound_req: crate::db::HttpSnapshot {
+              inbound: crate::db::HttpSnapshot {
                 method: Some(method.clone()),
                 url: url.clone(),
                 ..Default::default()
               },
-              outbound_req: None,
-              outbound_resp: None,
-              inbound_resp: Default::default(),
+              outbound: None,
               messages: Vec::new(),
             },
           );
@@ -128,7 +126,7 @@ mod tests {
             r.model = model.clone();
             r.stream = *stream;
             r.initiator = initiator.clone();
-            r.inbound_req.body = inbound_body.clone();
+            r.inbound.req_body = inbound_body.clone();
             // Stamp composite request_id on the row for retries
             if *attempt > 0 {
               r.request_id = format!("{request_id}:{attempt}");
@@ -140,7 +138,7 @@ mod tests {
           attempt,
           session_source,
           latency_ms,
-          status,
+          inbound_status,
           usage,
           request_error,
           inbound_resp_headers,
@@ -173,31 +171,28 @@ mod tests {
             latency_ms: None,
             latency_header_ms: None,
             usage: Usage::default(),
-            inbound_req: Default::default(),
-            outbound_req: None,
-            outbound_resp: None,
-            inbound_resp: Default::default(),
+            inbound: Default::default(),
+            outbound: None,
             messages: Vec::new(),
           });
           r.session_source = *session_source;
           r.latency_ms = Some(*latency_ms);
-          r.status = *status;
+          r.status = *inbound_status;
           r.usage = usage.clone();
           r.request_error = request_error.clone();
-          r.inbound_resp = crate::db::HttpSnapshot {
-            method: None,
-            url: None,
-            status: Some(*status),
-            headers: inbound_resp_headers.clone(),
-            body: inbound_resp_body.clone(),
-          };
-          r.outbound_resp = outbound_resp_body.as_ref().map(|b| crate::db::HttpSnapshot {
-            method: None,
-            url: None,
-            status: Some(*status),
-            headers: Default::default(),
-            body: b.clone(),
-          });
+          r.inbound.status = Some(*inbound_status);
+          r.inbound.resp_headers = inbound_resp_headers.clone();
+          r.inbound.resp_body = inbound_resp_body.clone();
+          if let Some(b) = outbound_resp_body.as_ref() {
+            if let Some(o) = r.outbound.as_mut() {
+              o.resp_body = b.clone();
+            } else {
+              r.outbound = Some(crate::db::HttpSnapshot {
+                resp_body: b.clone(),
+                ..Default::default()
+              });
+            }
+          }
           r.messages = messages.clone();
           self.records.lock().unwrap().push(r);
         }
@@ -205,24 +200,30 @@ mod tests {
           request_id,
           attempt,
           latency_ms,
-          status,
+          outbound_status,
+          outbound_resp_headers,
           outbound_req_method,
           outbound_req_url,
           outbound_req_headers,
           outbound_req_body,
-          ..
         } => {
           let key = (request_id.clone(), *attempt);
           if let Some(r) = self.pending.get_mut(&key) {
             r.latency_header_ms = Some(*latency_ms);
-            if outbound_req_method.is_some() || outbound_req_url.is_some() || outbound_req_body.is_some() {
-              r.outbound_req = Some(crate::db::HttpSnapshot {
-                method: outbound_req_method.clone(),
-                url: outbound_req_url.clone(),
-                status: Some(*status),
-                headers: outbound_req_headers.clone().unwrap_or_default(),
-                body: outbound_req_body.clone().unwrap_or_default(),
-              });
+            let outbound = r.outbound.get_or_insert_with(crate::db::HttpSnapshot::default);
+            outbound.status = Some(*outbound_status);
+            outbound.resp_headers = outbound_resp_headers.clone();
+            if outbound_req_method.is_some() {
+              outbound.method = outbound_req_method.clone();
+            }
+            if outbound_req_url.is_some() {
+              outbound.url = outbound_req_url.clone();
+            }
+            if let Some(h) = outbound_req_headers.as_ref() {
+              outbound.req_headers = h.clone();
+            }
+            if let Some(b) = outbound_req_body.as_ref() {
+              outbound.req_body = b.clone();
             }
           }
         }
@@ -547,7 +548,7 @@ mod tests {
     state.events.emit(llm_core::event::Event::RequestResponded {
       request_id: ctx.request_id.clone(),
       attempt: 0,
-      status: 200,
+      outbound_status: 200,
       latency_ms: 1,
       outbound_resp_headers: HeaderMap::new(),
       outbound_req_method: Some("POST".to_string()),
@@ -594,13 +595,13 @@ mod tests {
     assert_eq!(records[0].stream, true);
     assert_eq!(records[0].usage.input_tokens, Some(1));
     assert_eq!(records[0].usage.output_tokens, Some(2));
-    assert_eq!(records[0].inbound_req.method.as_deref(), Some("POST"));
+    assert_eq!(records[0].inbound.method.as_deref(), Some("POST"));
     assert_eq!(
-      records[0].inbound_req.url.as_deref(),
+      records[0].inbound.url.as_deref(),
       Some("https://api.openai.com/v1/chat/completions")
     );
     assert_eq!(
-      records[0].outbound_req.as_ref().and_then(|s| s.url.as_deref()),
+      records[0].outbound.as_ref().and_then(|s| s.url.as_deref()),
       Some("https://api.openai.com/v1/chat/completions")
     );
   }
@@ -751,7 +752,7 @@ mod tests {
     assert_eq!(records[0].usage.input_tokens, Some(2));
     assert_eq!(records[0].usage.output_tokens, Some(3));
     assert_eq!(records[0].request_error, None);
-    assert!(std::str::from_utf8(records[0].inbound_resp.body.as_ref())
+    assert!(std::str::from_utf8(records[0].inbound.resp_body.as_ref())
       .unwrap()
       .contains("[DONE]"));
   }

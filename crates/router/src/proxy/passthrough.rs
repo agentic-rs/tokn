@@ -116,7 +116,7 @@ pub(super) async fn proxy_passthrough(
   state.events.emit(llm_core::event::Event::RequestResponded {
     request_id: request_id.clone(),
     attempt: ctx.attempt,
-    status: status.as_u16(),
+    outbound_status: status.as_u16(),
     latency_ms: started.elapsed().as_millis() as u64,
     outbound_resp_headers: response.headers().clone(),
     outbound_req_method: Some(parts.method.to_string()),

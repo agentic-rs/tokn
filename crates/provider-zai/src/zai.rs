@@ -406,7 +406,7 @@ mod tests {
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
     server.await.unwrap();
     let captured = capture.get().expect("captured outbound");
-    let captured_body: Value = serde_json::from_slice(captured.body.as_ref()).unwrap();
+    let captured_body: Value = serde_json::from_slice(captured.req_body.as_ref()).unwrap();
     assert_eq!(captured.method.as_deref(), Some("POST"));
     assert!(
       captured_body.get("thinking").is_some(),

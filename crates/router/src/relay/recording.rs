@@ -114,7 +114,7 @@ impl CompletedEventBuilder {
       attempt: self.attempt,
       session_source,
       latency_ms,
-      status: self.status,
+      inbound_status: self.status,
       usage: self.usage,
       request_error: self.request_error,
       inbound_resp_headers: self.inbound_resp_headers,

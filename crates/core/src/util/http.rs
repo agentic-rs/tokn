@@ -54,8 +54,10 @@ pub async fn send(
       method: Some(method.as_str().to_string()),
       url: Some(url.to_string()),
       status: None,
-      headers: headers.clone(),
-      body: body.clone(),
+      req_headers: headers.clone(),
+      req_body: body.clone(),
+      resp_headers: HeaderMap::new(),
+      resp_body: Bytes::new(),
     });
   }
   let mut request = client.request(method, url).headers(headers);

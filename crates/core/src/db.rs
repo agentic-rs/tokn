@@ -58,10 +58,8 @@ pub struct CallRecord {
   pub latency_ms: Option<u64>,
   pub latency_header_ms: Option<u64>,
   pub usage: Usage,
-  pub inbound_req: HttpSnapshot,
-  pub outbound_req: Option<HttpSnapshot>,
-  pub outbound_resp: Option<HttpSnapshot>,
-  pub inbound_resp: HttpSnapshot,
+  pub inbound: HttpSnapshot,
+  pub outbound: Option<HttpSnapshot>,
   pub messages: Vec<MessageRecord>,
 }
 
@@ -80,11 +78,14 @@ pub struct PartRecord {
 
 #[derive(Debug, Clone, Default)]
 pub struct HttpSnapshot {
-  pub method: Option<String>,
   pub url: Option<String>,
+  pub method: Option<String>,
+  /// Response status (req side has no status).
   pub status: Option<u16>,
-  pub headers: reqwest::header::HeaderMap,
-  pub body: Bytes,
+  pub req_headers: reqwest::header::HeaderMap,
+  pub req_body: Bytes,
+  pub resp_headers: reqwest::header::HeaderMap,
+  pub resp_body: Bytes,
 }
 
 pub type OutboundSnapshot = HttpSnapshot;

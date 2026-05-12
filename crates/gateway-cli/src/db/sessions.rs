@@ -173,10 +173,8 @@ mod tests {
       latency_ms: Some(1),
       latency_header_ms: None,
       usage: Usage::default(),
-      inbound_req: HttpSnapshot::default(),
-      outbound_req: None,
-      outbound_resp: None,
-      inbound_resp: HttpSnapshot::default(),
+      inbound: HttpSnapshot::default(),
+      outbound: None,
       messages: vec![MessageRecord {
         role: "user".into(),
         status: None,

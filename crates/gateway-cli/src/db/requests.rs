@@ -81,10 +81,10 @@ impl RequestsDb {
   #[cfg(test)]
   pub fn record(&mut self, r: &CallRecord) -> Result<()> {
     let conn = self.conn_for_ts(r.ts)?;
-    let inbound_req_headers = headers_json(&r.inbound_req.headers);
-    let outbound_req_headers = r.outbound_req.as_ref().map(|s| headers_json(&s.headers));
-    let outbound_resp_headers = r.outbound_resp.as_ref().map(|s| headers_json(&s.headers));
-    let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
+    let inbound_req_headers = headers_json(&r.inbound.req_headers);
+    let outbound_req_headers = r.outbound.as_ref().map(|s| headers_json(&s.req_headers));
+    let outbound_resp_headers = r.outbound.as_ref().map(|s| headers_json(&s.resp_headers));
+    let inbound_resp_headers = headers_json(&r.inbound.resp_headers);
 
     conn.execute(
       "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
@@ -115,20 +115,20 @@ impl RequestsDb {
         r.usage.output_tokens.map(|v| v as i64),
         r.usage.details.cache_read.map(|v| v as i64),
         r.usage.details.reasoning.map(|v| v as i64),
-        r.inbound_req.method.as_deref(),
-        r.inbound_req.url.as_deref(),
+        r.inbound.method.as_deref(),
+        r.inbound.url.as_deref(),
         inbound_req_headers.as_ref(),
-        r.inbound_req.body.as_ref(),
-        opt_str(r.outbound_req.as_ref(), |s| s.method.as_deref()),
-        opt_str(r.outbound_req.as_ref(), |s| s.url.as_deref()),
+        r.inbound.req_body.as_ref(),
+        opt_str(r.outbound.as_ref(), |s| s.method.as_deref()),
+        opt_str(r.outbound.as_ref(), |s| s.url.as_deref()),
         outbound_req_headers.as_ref().map(|b| b.as_ref()),
-        r.outbound_req.as_ref().map(|s| s.body.as_ref()),
-        r.outbound_resp.as_ref().and_then(|s| s.status).map(|v| v as i64),
+        r.outbound.as_ref().map(|s| s.req_body.as_ref()),
+        r.outbound.as_ref().and_then(|s| s.status).map(|v| v as i64),
         outbound_resp_headers.as_ref().map(|b| b.as_ref()),
-        r.outbound_resp.as_ref().map(|s| s.body.as_ref()),
-        r.inbound_resp.status.map(|v| v as i64),
+        r.outbound.as_ref().map(|s| s.resp_body.as_ref()),
+        r.inbound.status.map(|v| v as i64),
         inbound_resp_headers.as_ref(),
-        r.inbound_resp.body.as_ref(),
+        r.inbound.resp_body.as_ref(),
       ],
     )?;
     Ok(())
@@ -145,7 +145,7 @@ impl RequestsDb {
     inbound_req: &HttpSnapshot,
   ) -> Result<()> {
     let conn = self.conn_for_ts(ts)?;
-    let inbound_req_headers = headers_json(&inbound_req.headers);
+    let inbound_req_headers = headers_json(&inbound_req.req_headers);
     conn.execute(
       "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
@@ -170,7 +170,7 @@ impl RequestsDb {
         inbound_req.method.as_deref(),
         inbound_req.url.as_deref(),
         inbound_req_headers.as_ref(),
-        inbound_req.body.as_ref(),
+        inbound_req.req_body.as_ref(),
       ],
     )?;
     Ok(())
@@ -178,7 +178,7 @@ impl RequestsDb {
 
   pub fn headers(&mut self, request_id: &str, h: HeadersUpdate<'_>) -> Result<()> {
     let conn = self.conn_for_ts(h.ts)?;
-    let inbound_req_headers = headers_json(&h.inbound_req.headers);
+    let inbound_req_headers = headers_json(&h.inbound_req.req_headers);
     let updated = conn.execute(
       "UPDATE requests SET
          session_id=COALESCE(?2, session_id),
@@ -293,8 +293,8 @@ impl RequestsDb {
 
   pub fn result(&mut self, r: &CallRecord) -> Result<()> {
     let conn = self.conn_for_ts(r.ts)?;
-    let outbound_resp_headers = r.outbound_resp.as_ref().map(|s| headers_json(&s.headers));
-    let inbound_resp_headers = headers_json(&r.inbound_resp.headers);
+    let outbound_resp_headers = r.outbound.as_ref().map(|s| headers_json(&s.resp_headers));
+    let inbound_resp_headers = headers_json(&r.inbound.resp_headers);
     conn.execute(
       "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id,
                              model, initiator, status, stream, latency_ms, latency_header_ms,
@@ -356,20 +356,20 @@ impl RequestsDb {
         r.usage.output_tokens.map(|v| v as i64),
         r.usage.details.cache_read.map(|v| v as i64),
         r.usage.details.reasoning.map(|v| v as i64),
-        r.inbound_req.method.as_deref(),
-        r.inbound_req.url.as_deref(),
-        headers_json(&r.inbound_req.headers).as_ref(),
-        r.inbound_req.body.as_ref(),
-        opt_str(r.outbound_req.as_ref(), |s| s.method.as_deref()),
-        opt_str(r.outbound_req.as_ref(), |s| s.url.as_deref()),
-        r.outbound_req.as_ref().map(|s| headers_json(&s.headers)).as_ref().map(|b| b.as_ref()),
-        r.outbound_req.as_ref().map(|s| s.body.as_ref()),
-        r.outbound_resp.as_ref().and_then(|s| s.status).map(|v| v as i64),
+        r.inbound.method.as_deref(),
+        r.inbound.url.as_deref(),
+        headers_json(&r.inbound.req_headers).as_ref(),
+        r.inbound.req_body.as_ref(),
+        opt_str(r.outbound.as_ref(), |s| s.method.as_deref()),
+        opt_str(r.outbound.as_ref(), |s| s.url.as_deref()),
+        r.outbound.as_ref().map(|s| headers_json(&s.req_headers)).as_ref().map(|b| b.as_ref()),
+        r.outbound.as_ref().map(|s| s.req_body.as_ref()),
+        r.outbound.as_ref().and_then(|s| s.status).map(|v| v as i64),
         outbound_resp_headers.as_ref().map(|b| b.as_ref()),
-        r.outbound_resp.as_ref().map(|s| s.body.as_ref()),
-        r.inbound_resp.status.map(|v| v as i64),
+        r.outbound.as_ref().map(|s| s.resp_body.as_ref()),
+        r.inbound.status.map(|v| v as i64),
         inbound_resp_headers.as_ref(),
-        r.inbound_resp.body.as_ref(),
+        r.inbound.resp_body.as_ref(),
       ],
     )?;
     Ok(())
@@ -530,10 +530,8 @@ mod tests {
       latency_ms: Some(1),
       latency_header_ms: Some(1),
       usage: Usage::default(),
-      inbound_req: HttpSnapshot::default(),
-      outbound_req: None,
-      outbound_resp: None,
-      inbound_resp: HttpSnapshot::default(),
+      inbound: HttpSnapshot::default(),
+      outbound: None,
       messages: Vec::new(),
     })
     .unwrap();
@@ -575,7 +573,7 @@ mod tests {
     let with_headers = HttpSnapshot {
       method: Some("POST".into()),
       url: Some("https://example.test/original".into()),
-      headers,
+      req_headers: headers,
       ..Default::default()
     };
     db.headers(
@@ -631,10 +629,8 @@ mod tests {
       latency_ms: Some(10),
       latency_header_ms: Some(4),
       usage: Usage::default(),
-      inbound_req: HttpSnapshot::default(),
-      outbound_req: None,
-      outbound_resp: None,
-      inbound_resp: HttpSnapshot::default(),
+      inbound: HttpSnapshot::default(),
+      outbound: None,
       messages: Vec::new(),
     })
     .unwrap();

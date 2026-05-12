@@ -57,7 +57,8 @@ pub enum Event {
     request_id: String,
     /// Retry attempt number (0 = first attempt).
     attempt: u32,
-    status: u16,
+    /// Upstream HTTP status code (us ← upstream).
+    outbound_status: u16,
     /// Time from inbound request start until upstream response headers arrived.
     latency_ms: u64,
     /// Upstream response headers (the response we received from upstream).
@@ -81,7 +82,8 @@ pub enum Event {
     attempt: u32,
     session_source: SessionSource,
     latency_ms: u64,
-    status: u16,
+    /// Inbound HTTP status code (us → client).
+    inbound_status: u16,
     usage: Usage,
     request_error: Option<String>,
     /// Inbound response headers (us → client).

@@ -159,8 +159,10 @@ impl RequestCtx<'_> {
         method: Some(method.to_string()),
         url: Some(url.to_string()),
         status: None,
-        headers: headers.clone(),
-        body,
+        req_headers: headers.clone(),
+        req_body: body,
+        resp_headers: HeaderMap::new(),
+        resp_body: Bytes::new(),
       });
     }
   }
