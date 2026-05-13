@@ -1,5 +1,6 @@
+ALTER TABLE requests RENAME COLUMN source TO peer_addr;
 ALTER TABLE requests ADD COLUMN user TEXT;
-ALTER TABLE requests ADD COLUMN hosts TEXT;
+ALTER TABLE requests ADD COLUMN local_addr TEXT;
 ALTER TABLE requests ADD COLUMN mode TEXT;
 ALTER TABLE requests ADD COLUMN behave_as TEXT;
 
@@ -8,10 +9,10 @@ CREATE TABLE IF NOT EXISTS metrics (
   ts INTEGER NOT NULL,
   request_id TEXT,
   user TEXT,
-  hosts TEXT,
+  peer_addr TEXT,
+  local_addr TEXT,
   mode TEXT,
   behave_as TEXT,
-  source TEXT,
   method TEXT,
   path TEXT,
   url TEXT,
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS metrics (
 );
 
 CREATE INDEX IF NOT EXISTS idx_metrics_ts       ON metrics(ts);
-CREATE INDEX IF NOT EXISTS idx_metrics_hosts    ON metrics(hosts);
+CREATE INDEX IF NOT EXISTS idx_metrics_local_addr ON metrics(local_addr);
 CREATE INDEX IF NOT EXISTS idx_metrics_provider ON metrics(provider_id);
 CREATE INDEX IF NOT EXISTS idx_metrics_account  ON metrics(account_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_request_id ON metrics(request_id) WHERE request_id IS NOT NULL;

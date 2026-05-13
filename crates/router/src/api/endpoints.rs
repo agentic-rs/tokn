@@ -21,10 +21,16 @@ async fn handle(
   let ts = unix_ts();
   let hx = request_header_extract(&inbound);
   let endpoint_hint = parser.endpoint().as_str().to_string();
-  let host = inbound
-    .get(axum::http::header::HOST)
+  let local_addr = inbound
+    .get("x-llm-router-local-addr")
     .and_then(|v| v.to_str().ok())
-    .map(str::to_string);
+    .map(str::to_string)
+    .or_else(|| {
+      inbound
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+    });
   let mode = state
     .route
     .resolve_mode(hx.route_mode_hint.as_deref())
@@ -37,8 +43,8 @@ async fn handle(
     ts,
     endpoint: endpoint_hint.clone(),
     session_id: hx.session_id.clone(),
-    ip: None,
-    port: None,
+    peer_addr: None,
+    local_addr: local_addr.clone(),
     method: "POST".to_string(),
     url: None,
   });
@@ -50,7 +56,7 @@ async fn handle(
     session_id: hx.session_id.clone(),
     project_id: hx.project_id.clone(),
     header_initiator: hx.header_initiator.clone(),
-    host,
+    local_addr,
     mode,
     route_mode_hint: hx.route_mode_hint.clone(),
     inbound_headers: inbound.clone(),

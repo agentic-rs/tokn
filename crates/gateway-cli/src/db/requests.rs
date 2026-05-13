@@ -53,7 +53,7 @@ pub struct HeadersUpdate<'a> {
   pub ts: i64,
   pub endpoint: &'a str,
   pub session_id: Option<&'a str>,
-  pub hosts: Option<&'a str>,
+  pub local_addr: Option<&'a str>,
   pub mode: Option<&'a str>,
   pub method: Option<&'a str>,
   pub inbound_req: &'a HttpSnapshot,
@@ -62,7 +62,7 @@ pub struct HeadersUpdate<'a> {
 #[derive(Default)]
 pub struct RequestContext<'a> {
   pub user: Option<&'a str>,
-  pub hosts: Option<&'a str>,
+  pub local_addr: Option<&'a str>,
   pub mode: Option<&'a str>,
   pub behave_as: Option<&'a str>,
 }
@@ -102,7 +102,7 @@ impl RequestsDb {
     let inbound_resp_headers = headers_json(&r.inbound.resp_headers);
 
     conn.execute(
-      "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
+      "INSERT INTO requests (ts, session_id, peer_addr, method, request_id, request_error, endpoint, account_id, provider_id, model, initiator, status, stream, latency_ms, latency_header_ms,
                              input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
                              outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
@@ -113,7 +113,7 @@ impl RequestsDb {
       params![
         r.ts,
         r.session_id,
-        r.source.as_deref(),
+        r.peer_addr.as_deref(),
         r.method.as_deref(),
         r.request_id,
         r.request_error,
@@ -156,24 +156,24 @@ impl RequestsDb {
     endpoint: &str,
     session_id: Option<&str>,
     ctx: RequestContext<'_>,
-    source: Option<&str>,
+    peer_addr: Option<&str>,
     method: Option<&str>,
     inbound_req: &HttpSnapshot,
   ) -> Result<()> {
     let conn = self.conn_for_ts(ts)?;
     let inbound_req_headers = headers_json(&inbound_req.req_headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
+      "INSERT INTO requests (ts, session_id, user, local_addr, mode, behave_as, peer_addr, method, request_id, endpoint, account_id, provider_id, model, initiator,
                               inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '', '', '', '', ?11, ?12, ?13, ?14)
        ON CONFLICT(request_id) DO UPDATE SET
          ts=excluded.ts,
          session_id=COALESCE(session_id, excluded.session_id),
          user=COALESCE(user, excluded.user),
-         hosts=COALESCE(hosts, excluded.hosts),
+         local_addr=COALESCE(local_addr, excluded.local_addr),
          mode=COALESCE(mode, excluded.mode),
          behave_as=COALESCE(behave_as, excluded.behave_as),
-         source=COALESCE(source, excluded.source),
+         peer_addr=COALESCE(peer_addr, excluded.peer_addr),
          method=COALESCE(method, excluded.method),
          endpoint=excluded.endpoint,
          inbound_req_method=excluded.inbound_req_method,
@@ -184,10 +184,10 @@ impl RequestsDb {
         ts,
         session_id,
         ctx.user,
-        ctx.hosts,
+        ctx.local_addr,
         ctx.mode,
         ctx.behave_as,
-        source,
+        peer_addr,
         method,
         request_id,
         endpoint,
@@ -206,7 +206,7 @@ impl RequestsDb {
     let updated = conn.execute(
        "UPDATE requests SET
          session_id=COALESCE(?2, session_id),
-         hosts=COALESCE(?3, hosts),
+         local_addr=COALESCE(?3, local_addr),
          mode=COALESCE(?4, mode),
          method=COALESCE(?5, method),
          endpoint=?6,
@@ -217,7 +217,7 @@ impl RequestsDb {
       params![
         request_id,
         h.session_id,
-        h.hosts,
+        h.local_addr,
         h.mode,
         h.method,
         h.endpoint,
@@ -237,9 +237,9 @@ impl RequestsDb {
     let conn = self.conn_for_ts(p.ts)?;
     if attempt > 0 {
       conn.execute(
-      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
+      "INSERT INTO requests (ts, session_id, user, local_addr, mode, behave_as, peer_addr, method, request_id, endpoint, account_id, provider_id, model, initiator,
                                 inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
-         SELECT ts, session_id, user, hosts, mode, behave_as, source, method, ?2, endpoint, '', '', '', '',
+         SELECT ts, session_id, user, local_addr, mode, behave_as, peer_addr, method, ?2, endpoint, '', '', '', '',
                  inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body
          FROM requests WHERE request_id = ?1
          ON CONFLICT(request_id) DO NOTHING",
@@ -326,7 +326,7 @@ impl RequestsDb {
     let outbound_resp_headers = r.outbound.as_ref().map(|s| headers_json(&s.resp_headers));
     let inbound_resp_headers = headers_json(&r.inbound.resp_headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, request_error, endpoint, account_id, provider_id,
+      "INSERT INTO requests (ts, session_id, user, local_addr, mode, behave_as, peer_addr, method, request_id, request_error, endpoint, account_id, provider_id,
                               model, initiator, status, stream, latency_ms, latency_header_ms,
                               input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
@@ -337,10 +337,10 @@ impl RequestsDb {
                ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)
        ON CONFLICT(request_id) DO UPDATE SET
          user=COALESCE(user, excluded.user),
-         hosts=COALESCE(hosts, excluded.hosts),
+         local_addr=COALESCE(local_addr, excluded.local_addr),
          mode=COALESCE(mode, excluded.mode),
          behave_as=COALESCE(behave_as, excluded.behave_as),
-         source=COALESCE(source, excluded.source),
+         peer_addr=COALESCE(peer_addr, excluded.peer_addr),
          method=COALESCE(method, excluded.method),
          request_error=excluded.request_error,
          endpoint=excluded.endpoint,
@@ -374,10 +374,10 @@ impl RequestsDb {
         r.ts,
         r.session_id,
         r.user.as_deref(),
-        r.hosts.as_deref(),
+        r.local_addr.as_deref(),
         r.mode.as_deref(),
         r.behave_as.as_deref(),
-        r.source.as_deref(),
+        r.peer_addr.as_deref(),
         r.method.as_deref(),
         r.request_id,
         r.request_error,
@@ -494,7 +494,7 @@ mod tests {
       "request_id",
       "request_error",
       "user",
-      "hosts",
+      "local_addr",
       "mode",
       "behave_as",
       "input_tok",
@@ -502,7 +502,7 @@ mod tests {
       "cached_tok",
       "reasoning_tok",
       "latency_header_ms",
-      "source",
+      "peer_addr",
       "method",
       "inbound_req_headers",
       "inbound_req_body",
@@ -529,10 +529,10 @@ mod tests {
     for col in [
       "request_id",
       "user",
-      "hosts",
+      "local_addr",
       "mode",
       "behave_as",
-      "source",
+      "peer_addr",
       "method",
       "path",
       "url",
@@ -591,10 +591,10 @@ mod tests {
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
       user: None,
-      hosts: None,
+      local_addr: None,
       mode: None,
       behave_as: None,
-      source: Some("127.0.0.1:4142".into()),
+      peer_addr: Some("127.0.0.1:4142".into()),
       method: Some("POST".into()),
       request_id: "request-1".into(),
       request_error: Some("stream terminated before completion".into()),
@@ -662,7 +662,7 @@ mod tests {
         ts,
         endpoint: "responses",
         session_id: Some("sess-1"),
-        hosts: Some("localhost:4141"),
+        local_addr: Some("localhost:4141"),
         mode: Some("route"),
         method: Some("POST"),
         inbound_req: &with_headers,
@@ -673,7 +673,7 @@ mod tests {
     let conn = open_day_db(&dir.join(format!("{}.db", day_key(ts)))).unwrap();
     let row: (i64, String, Option<String>, Option<String>, Vec<u8>) = conn
       .query_row(
-        "SELECT COUNT(*), endpoint, source, method, inbound_req_headers FROM requests WHERE request_id = ?1",
+        "SELECT COUNT(*), endpoint, peer_addr, method, inbound_req_headers FROM requests WHERE request_id = ?1",
         params![request_id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
       )
@@ -697,10 +697,10 @@ mod tests {
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
       user: None,
-      hosts: None,
+      local_addr: None,
       mode: None,
       behave_as: None,
-      source: Some("127.0.0.1:4142".into()),
+      peer_addr: Some("127.0.0.1:4142".into()),
       method: Some("POST".into()),
       request_id: "request-result".into(),
       request_error: None,
@@ -724,7 +724,7 @@ mod tests {
     let conn = open_day_db(&dir.join(format!("{}.db", day_key(ts)))).unwrap();
     let row: (Option<String>, Option<String>) = conn
       .query_row(
-        "SELECT source, method FROM requests WHERE request_id = 'request-result'",
+        "SELECT peer_addr, method FROM requests WHERE request_id = 'request-result'",
         [],
         |r| Ok((r.get(0)?, r.get(1)?)),
       )

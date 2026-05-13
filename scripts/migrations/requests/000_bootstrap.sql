@@ -8,10 +8,10 @@ CREATE TABLE requests (
   ts INTEGER NOT NULL,
   session_id TEXT,
   user TEXT,
-  hosts TEXT,
+  peer_addr TEXT,
+  local_addr TEXT,
   mode TEXT,
   behave_as TEXT,
-  source TEXT,
   method TEXT,
   request_id TEXT,
   request_error TEXT,
@@ -57,10 +57,10 @@ CREATE TABLE metrics (
   ts INTEGER NOT NULL,
   request_id TEXT,
   user TEXT,
-  hosts TEXT,
+  peer_addr TEXT,
+  local_addr TEXT,
   mode TEXT,
   behave_as TEXT,
-  source TEXT,
   method TEXT,
   path TEXT,
   url TEXT,
@@ -79,7 +79,7 @@ CREATE TABLE metrics (
   inbound_resp_body    BLOB
 );
 CREATE INDEX idx_metrics_ts       ON metrics(ts);
-CREATE INDEX idx_metrics_hosts    ON metrics(hosts);
+CREATE INDEX idx_metrics_local_addr ON metrics(local_addr);
 CREATE INDEX idx_metrics_provider ON metrics(provider_id);
 CREATE INDEX idx_metrics_account  ON metrics(account_id);
 CREATE UNIQUE INDEX idx_metrics_request_id ON metrics(request_id) WHERE request_id IS NOT NULL;

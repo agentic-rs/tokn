@@ -13,7 +13,8 @@ pub(super) async fn proxy_passthrough(
   state: &AppState,
   http: &reqwest::Client,
   host: &str,
-  source: std::net::SocketAddr,
+  peer_addr: std::net::SocketAddr,
+  local_addr: std::net::SocketAddr,
   req: Request<hyper::body::Incoming>,
 ) -> Result<Response<Body>> {
   let started = std::time::Instant::now();
@@ -31,11 +32,6 @@ pub(super) async fn proxy_passthrough(
   let hx = request_header_extract(&parts.headers);
   let request_id = hx.request_id.clone();
   let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
-  let inbound_host = parts
-    .headers
-    .get(HOST)
-    .and_then(|v| v.to_str().ok())
-    .map(str::to_string);
   let mode = state
     .route
     .resolve_mode(hx.route_mode_hint.as_deref())
@@ -47,8 +43,8 @@ pub(super) async fn proxy_passthrough(
     ts,
     endpoint: path.to_string(),
     session_id: hx.session_id.clone(),
-    ip: Some(source.ip().to_string()),
-    port: Some(source.port()),
+    peer_addr: Some(peer_addr.to_string()),
+    local_addr: Some(local_addr.to_string()),
     method: parts.method.to_string(),
     url: Some(url.clone()),
   });
@@ -60,7 +56,7 @@ pub(super) async fn proxy_passthrough(
     session_id: hx.session_id.clone(),
     project_id: hx.project_id.clone(),
     header_initiator: hx.header_initiator.clone(),
-    host: inbound_host,
+    local_addr: Some(local_addr.to_string()),
     mode,
     route_mode_hint: hx.route_mode_hint.clone(),
     inbound_headers: parts.headers.clone(),

@@ -75,6 +75,7 @@ pub(super) async fn handle_client(
   }
 
   let mut stream = reader.into_inner();
+  let local = stream.local_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
   if websocket_upgrade {
     tracing::debug!("rejecting websocket upgrade request from {}", peer);
     stream.write_all(UPGRADE_REQUIRED_WEBSOCKET).await?;
@@ -96,6 +97,7 @@ pub(super) async fn handle_client(
     intercept_tls(
       stream,
       peer,
+      local,
       &host,
       state,
       router,
@@ -123,6 +125,7 @@ async fn tunnel(mut client: TcpStream, host: &str, port: u16) -> Result<()> {
 async fn intercept_tls(
   stream: TcpStream,
   peer: SocketAddr,
+  local: SocketAddr,
   host: &str,
   state: Arc<AppState>,
   router: Router,
@@ -151,6 +154,7 @@ async fn intercept_tls(
       route_resolver.clone(),
       http.clone(),
       peer,
+      local,
       req,
       proxy_route_mode.clone(),
     )
@@ -167,7 +171,8 @@ async fn route_intercepted_request(
   router: Router,
   route_resolver: Arc<RouteResolver>,
   http: reqwest::Client,
-  source: SocketAddr,
+  peer: SocketAddr,
+  local: SocketAddr,
   mut req: Request<hyper::body::Incoming>,
   proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
@@ -204,7 +209,7 @@ async fn route_intercepted_request(
   tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
   if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
     return Ok(
-      proxy_passthrough(state.as_ref(), &http, &host, source, req)
+      proxy_passthrough(state.as_ref(), &http, &host, peer, local, req)
         .await
         .inspect(|b| {
           if !b.status().is_success() {
@@ -243,6 +248,7 @@ async fn route_intercepted_request(
     HOST,
     HeaderValue::from_str(&host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
   );
+  builder = builder.header("x-llm-router-local-addr", local.to_string());
   let body = Body::new(body);
   let request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
 

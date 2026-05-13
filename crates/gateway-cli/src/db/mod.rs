@@ -159,10 +159,10 @@ struct PendingRequest {
   ts: i64,
   session_id: Option<String>,
   project_id: Option<String>,
-  hosts: Option<String>,
+  local_addr: Option<String>,
   mode: Option<String>,
   behave_as: Option<String>,
-  source: Option<String>,
+  peer_addr: Option<String>,
   method: Option<String>,
   endpoint: String,
   model: String,
@@ -196,6 +196,7 @@ pub struct DbEventHandler {
 }
 
 impl DbEventHandler {
+  #[cfg(test)]
   pub fn new(paths: DbPaths) -> Result<Self> {
     Self::with_credential_index(paths, CredentialAccountIndex::default())
   }
@@ -219,13 +220,6 @@ impl DbEventHandler {
     })
   }
 
-  fn source_from_start(ip: &Option<String>, port: &Option<u16>) -> Option<String> {
-    match (ip.as_deref(), *port) {
-      (Some(ip), Some(port)) => Some(format!("{ip}:{port}")),
-      _ => None,
-    }
-  }
-
   fn fallback_ts() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
   }
@@ -239,12 +233,11 @@ impl EventHandler for DbEventHandler {
         ts,
         endpoint,
         session_id,
-        ip,
-        port,
+        peer_addr,
+        local_addr,
         method,
         url,
       } => {
-        let source = Self::source_from_start(ip, port);
         let inbound_req = HttpSnapshot {
           method: Some(method.clone()),
           url: url.clone(),
@@ -259,8 +252,11 @@ impl EventHandler for DbEventHandler {
           *ts,
           endpoint,
           session_id.as_deref(),
-          requests::RequestContext::default(),
-          source.as_deref(),
+          requests::RequestContext {
+            local_addr: local_addr.as_deref(),
+            ..Default::default()
+          },
+          peer_addr.as_deref(),
           Some(method.as_str()),
           &inbound_req,
         ) {
@@ -272,10 +268,10 @@ impl EventHandler for DbEventHandler {
             ts: *ts,
             session_id: session_id.clone(),
             project_id: None,
-            hosts: None,
+            local_addr: local_addr.clone(),
             mode: None,
             behave_as: None,
-            source,
+            peer_addr: peer_addr.clone(),
             method: Some(method.clone()),
             endpoint: endpoint.clone(),
             model: String::new(),
@@ -307,7 +303,7 @@ impl EventHandler for DbEventHandler {
         session_id,
         project_id,
         header_initiator,
-        host,
+        local_addr,
         mode,
         route_mode_hint: _,
         inbound_headers,
@@ -331,7 +327,7 @@ impl EventHandler for DbEventHandler {
             ts: *ts,
             endpoint: &endpoint,
             session_id: session_id.as_deref(),
-            hosts: host.as_deref(),
+            local_addr: local_addr.as_deref(),
             mode: mode.as_deref(),
             method: method.as_deref(),
             inbound_req: &inbound_req,
@@ -344,10 +340,10 @@ impl EventHandler for DbEventHandler {
           ts: *ts,
           session_id: session_id.clone(),
           project_id: project_id.clone(),
-          hosts: host.clone(),
+          local_addr: local_addr.clone(),
           mode: mode.clone(),
           behave_as: None,
-          source: None,
+          peer_addr: None,
           method: method.map(str::to_string),
           endpoint: endpoint.clone(),
           model: String::new(),
@@ -376,7 +372,7 @@ impl EventHandler for DbEventHandler {
           pending.guessed_account_id = Some(credential.account_id.clone());
           pending.guessed_provider_id = Some(credential.provider_id.clone());
         }
-        pending.hosts = host.clone().or_else(|| pending.hosts.clone());
+        pending.local_addr = local_addr.clone().or_else(|| pending.local_addr.clone());
         pending.mode = mode.clone().or_else(|| pending.mode.clone());
         pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
         if !endpoint.is_empty() {
@@ -537,10 +533,10 @@ impl EventHandler for DbEventHandler {
             session_id: p.session_id.unwrap_or_default(),
             session_source: *session_source,
             user: None,
-            hosts: p.hosts,
+            local_addr: p.local_addr,
             mode: p.mode,
             behave_as: p.behave_as,
-            source: p.source,
+            peer_addr: p.peer_addr,
             method: p.method,
             request_id: composite_id,
             request_error: request_error.clone(),
@@ -580,10 +576,10 @@ impl EventHandler for DbEventHandler {
             session_id: String::new(),
             session_source: *session_source,
             user: None,
-            hosts: None,
+            local_addr: None,
             mode: None,
             behave_as: None,
-            source: None,
+            peer_addr: None,
             method: None,
             request_id: composite_id,
             request_error: request_error.clone(),
@@ -654,10 +650,10 @@ impl EventHandler for DbEventHandler {
               session_id: p.session_id.unwrap_or_default(),
               session_source: SessionSource::Header,
               user: None,
-              hosts: p.hosts,
+              local_addr: p.local_addr,
               mode: p.mode,
               behave_as: p.behave_as,
-              source: p.source,
+              peer_addr: p.peer_addr,
               method: p.method,
               request_id: request_id.clone(),
               request_error: error.clone(),
@@ -755,8 +751,8 @@ mod tests {
       ts,
       endpoint: "chat_completions".into(),
       session_id: Some("sess-1".into()),
-      ip: Some("127.0.0.1".into()),
-      port: Some(4142),
+      peer_addr: Some("127.0.0.1:4142".into()),
+      local_addr: Some("127.0.0.1:4141".into()),
       method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
     }
@@ -768,8 +764,8 @@ mod tests {
       ts,
       endpoint: "chat_completions".into(),
       session_id: Some("sess-1".into()),
-      ip: None,
-      port: None,
+      peer_addr: None,
+      local_addr: None,
       method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
     }
@@ -798,7 +794,7 @@ mod tests {
       session_id: Some("sess-1".into()),
       project_id: Some("proj-1".into()),
       header_initiator: Some("user".into()),
-      host: Some("localhost:4141".into()),
+      local_addr: Some("localhost:4141".into()),
       mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: HeaderMap::new(),
@@ -926,7 +922,7 @@ mod tests {
     rows
   }
 
-  fn fetch_source_and_method(dir: &std::path::Path) -> Vec<(String, Option<String>, Option<String>)> {
+  fn fetch_peer_addr_and_method(dir: &std::path::Path) -> Vec<(String, Option<String>, Option<String>)> {
     let mut rows = Vec::new();
     for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
       let p = entry.unwrap().path();
@@ -935,7 +931,7 @@ mod tests {
       }
       let conn = Connection::open(&p).unwrap();
       let mut stmt = conn
-        .prepare("SELECT request_id, source, method FROM requests ORDER BY request_id")
+        .prepare("SELECT request_id, peer_addr, method FROM requests ORDER BY request_id")
         .unwrap();
       let iter = stmt
         .query_map([], |r| {
@@ -991,7 +987,7 @@ mod tests {
       }
       let conn = Connection::open(&p).unwrap();
       let mut stmt = conn
-        .prepare("SELECT request_id, hosts, mode, behave_as FROM requests ORDER BY request_id")
+        .prepare("SELECT request_id, local_addr, mode, behave_as FROM requests ORDER BY request_id")
         .unwrap();
       let iter = stmt
         .query_map([], |r| {
@@ -1060,13 +1056,13 @@ mod tests {
   }
 
   #[test]
-  fn request_started_with_peer_persists_source_and_method() {
+  fn request_started_with_peer_persists_peer_addr_and_method() {
     let (mut h, dir) = make_handler();
     let req = "req-peer";
     let ts = 1_700_000_000;
     h.handle(&started(req, ts));
 
-    let rows = fetch_source_and_method(&dir);
+    let rows = fetch_peer_addr_and_method(&dir);
     assert_eq!(
       rows,
       vec![("req-peer".into(), Some("127.0.0.1:4142".into()), Some("POST".into()))]
@@ -1074,13 +1070,13 @@ mod tests {
   }
 
   #[test]
-  fn request_started_without_peer_leaves_source_null() {
+  fn request_started_without_peer_leaves_peer_addr_null() {
     let (mut h, dir) = make_handler();
     let req = "req-no-peer";
     let ts = 1_700_000_000;
     h.handle(&started_without_peer(req, ts));
 
-    let rows = fetch_source_and_method(&dir);
+    let rows = fetch_peer_addr_and_method(&dir);
     assert_eq!(rows, vec![("req-no-peer".into(), None, Some("POST".into()))]);
   }
 
@@ -1215,9 +1211,9 @@ mod tests {
     assert_eq!(rows[0].0, "req-parse-fail");
     assert_eq!(rows[0].1, Some(400));
     assert_eq!(rows[0].2.as_deref(), Some("invalid JSON request body"));
-    let source_rows = fetch_source_and_method(&dir);
+    let peer_rows = fetch_peer_addr_and_method(&dir);
     assert_eq!(
-      source_rows,
+      peer_rows,
       vec![(
         "req-parse-fail".into(),
         Some("127.0.0.1:4142".into()),
@@ -1287,9 +1283,9 @@ mod tests {
     assert_eq!(rows[1].0, "req-2:1");
     assert_eq!(rows[1].1, Some(200));
     assert_eq!(rows[1].2, None);
-    let source_rows = fetch_source_and_method(&dir);
+    let peer_rows = fetch_peer_addr_and_method(&dir);
     assert_eq!(
-      source_rows,
+      peer_rows,
       vec![
         ("req-2".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
         ("req-2:1".into(), Some("127.0.0.1:4142".into()), Some("POST".into())),
@@ -1397,8 +1393,8 @@ mod tests {
       ts,
       endpoint: "chat_completions".into(),
       session_id: Some("sess-full".into()),
-      ip: Some("10.0.0.1".into()),
-      port: Some(9999),
+      peer_addr: Some("10.0.0.1:9999".into()),
+      local_addr: Some("127.0.0.1:4141".into()),
       method: "POST".into(),
       url: Some("https://upstream.test/v1/responses".into()),
     };
@@ -1407,7 +1403,7 @@ mod tests {
       let row = fetch_row_map(&dir, req);
       assert_eq!(as_int(&row["ts"]), Some(ts), "ts after RequestStarted");
       assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-full"));
-      assert_eq!(as_text(&row["source"]).as_deref(), Some("10.0.0.1:9999"));
+      assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("10.0.0.1:9999"));
       assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
       assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("chat_completions"));
       assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
@@ -1441,7 +1437,7 @@ mod tests {
       session_id: Some("sess-full".into()),
       project_id: Some("proj-full".into()),
       header_initiator: Some("system".into()),
-      host: Some("127.0.0.1:4141".into()),
+      local_addr: Some("127.0.0.1:4141".into()),
       mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: inbound_headers.clone(),
