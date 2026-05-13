@@ -130,7 +130,11 @@ async fn oauth_account_from_token(
     RefreshOutcome::NotApplicable => None,
   };
   if username.is_none() {
-    username = auth.verify_credential(client, &account).await.ok().and_then(|v| v.username);
+    username = auth
+      .verify_credential(client, &account)
+      .await
+      .ok()
+      .and_then(|v| v.username);
   }
   if id_override.is_none() {
     if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
@@ -154,7 +158,12 @@ async fn static_key_account(
     .verify_credential(client, &account)
     .await
     .map_err(|e| anyhow!("key verification failed: {e}"))?;
-  if id_override.as_deref().map(str::trim).filter(|id| !id.is_empty() && *id != "imported").is_none() {
+  if id_override
+    .as_deref()
+    .map(str::trim)
+    .filter(|id| !id.is_empty() && *id != "imported")
+    .is_none()
+  {
     if let Some(name) = outcome.username.as_ref().filter(|name| !name.trim().is_empty()) {
       account.id = name.trim().to_string();
     }
@@ -291,7 +300,12 @@ async fn static_key_login(
   println!("Key OK.");
 
   let mut account = static_key_account_unverified(auth, id_override.clone(), key)?;
-  if id_override.as_deref().map(str::trim).filter(|id| !id.is_empty() && *id != "imported").is_none() {
+  if id_override
+    .as_deref()
+    .map(str::trim)
+    .filter(|id| !id.is_empty() && *id != "imported")
+    .is_none()
+  {
     if let Some(name) = outcome.username.as_ref().filter(|name| !name.trim().is_empty()) {
       account.id = name.trim().to_string();
     }

@@ -98,10 +98,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   let mut accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
 
   // --route defaults to the configured serve mode.
-  let route_mode = args
-    .route
-    .map(RouteMode::from)
-    .unwrap_or(cfg.server.route_mode);
+  let route_mode = args.route.map(RouteMode::from).unwrap_or(cfg.server.route_mode);
   cfg.server.route_mode = route_mode;
 
   if route_mode == RouteMode::Passthrough {
@@ -190,9 +187,11 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   // pipeline used for real HTTP requests, so all events fire (DB rows are
   // written, progress bar is driven, observers record).
   let resp_result: Result<Response> = match endpoint {
-    Endpoint::ChatCompletions => llm_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
-      .await
-      .map_err(|e| anyhow!("{e}")),
+    Endpoint::ChatCompletions => {
+      llm_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
+        .await
+        .map_err(|e| anyhow!("{e}"))
+    }
     Endpoint::Responses => llm_router::api::endpoints::responses(State(state.clone()), headers, body_bytes)
       .await
       .map_err(|e| anyhow!("{e}")),

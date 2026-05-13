@@ -26,6 +26,7 @@ const DEFAULT_INTERCEPT_HOSTS: &[&str] = &[
   "chatgpt.com",
   // "ab.chatgpt.com",
   "opencode.ai",
+  "api.deepseek.com",
 ];
 
 #[derive(Clone, Debug)]

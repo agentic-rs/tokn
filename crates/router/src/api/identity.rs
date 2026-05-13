@@ -20,9 +20,13 @@ impl AccountIdentityResolver {
   pub fn from_accounts(accounts: &[AccountConfig]) -> Self {
     let mut resolver = Self::default();
     for account in accounts {
-      for secret in [account.api_key.as_ref(), account.access_token.as_ref(), account.id_token.as_ref()]
-        .into_iter()
-        .flatten()
+      for secret in [
+        account.api_key.as_ref(),
+        account.access_token.as_ref(),
+        account.id_token.as_ref(),
+      ]
+      .into_iter()
+      .flatten()
       {
         resolver.insert_fingerprint(secret.fingerprint(), account);
       }
@@ -96,11 +100,13 @@ fn fallback_account_id_for_secret(secret: &str) -> Option<String> {
     return None;
   }
   let fingerprint = llm_core::util::redact::token_fingerprint(secret);
-  let suffix = fingerprint.strip_prefix("fp:")?.chars().rev().take(4).collect::<Vec<_>>();
-  Some(format!(
-    "account_fp_{}",
-    suffix.into_iter().rev().collect::<String>()
-  ))
+  let suffix = fingerprint
+    .strip_prefix("fp:")?
+    .chars()
+    .rev()
+    .take(4)
+    .collect::<Vec<_>>();
+  Some(format!("account_fp_{}", suffix.into_iter().rev().collect::<String>()))
 }
 
 #[cfg(test)]
@@ -171,13 +177,8 @@ mod tests {
 
   #[test]
   fn does_not_resolve_non_copilot_refresh_token() {
-    let resolver = AccountIdentityResolver::from_accounts(&[account(
-      "zai-acct",
-      "zai",
-      None,
-      None,
-      Some("zai-refresh"),
-    )]);
+    let resolver =
+      AccountIdentityResolver::from_accounts(&[account("zai-acct", "zai", None, None, Some("zai-refresh"))]);
     let registry = Registry::builtin();
     let mut headers = HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, "Bearer zai-refresh".parse().unwrap());
@@ -193,12 +194,18 @@ mod tests {
     let registry = Registry::builtin();
     let secret = "abcdefghijklmnopqrstuvwxyz012345";
     let mut headers = HeaderMap::new();
-    headers.insert(reqwest::header::AUTHORIZATION, format!("Bearer {secret}").parse().unwrap());
+    headers.insert(
+      reqwest::header::AUTHORIZATION,
+      format!("Bearer {secret}").parse().unwrap(),
+    );
 
     let identity = resolver.resolve(&headers, "https://api.z.ai/api/paas/v4", &registry);
     let fp = llm_core::util::redact::token_fingerprint(secret);
     let want_suffix = &fp[fp.len() - 4..];
-    assert_eq!(identity.account_id.as_deref(), Some(format!("account_fp_{want_suffix}").as_str()));
+    assert_eq!(
+      identity.account_id.as_deref(),
+      Some(format!("account_fp_{want_suffix}").as_str())
+    );
     assert_eq!(identity.provider_id.as_deref(), Some("zai"));
   }
 

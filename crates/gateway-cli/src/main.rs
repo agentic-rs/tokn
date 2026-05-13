@@ -3,8 +3,8 @@ use std::error::Error as StdError;
 use std::process::ExitCode;
 
 use llm_config as config;
-mod cli;
 mod auth_registry;
+mod cli;
 mod db;
 mod error;
 mod logging;

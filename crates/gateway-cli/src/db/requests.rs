@@ -204,7 +204,7 @@ impl RequestsDb {
     let conn = self.conn_for_ts(h.ts)?;
     let inbound_req_headers = headers_json(&h.inbound_req.req_headers);
     let updated = conn.execute(
-       "UPDATE requests SET
+      "UPDATE requests SET
          session_id=COALESCE(?2, session_id),
          local_addr=COALESCE(?3, local_addr),
          mode=COALESCE(?4, mode),

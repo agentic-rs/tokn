@@ -141,11 +141,12 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
-      refreshed: Some(llm_auth::RefreshOutcome::Refreshed {
-        access_token,
-        expires_at,
-        username,
-      }),
+      refreshed:
+        Some(llm_auth::RefreshOutcome::Refreshed {
+          access_token,
+          expires_at,
+          username,
+        }),
       ..
     } = q
     {
@@ -288,10 +289,7 @@ fn render_snapshot(snap: &llm_auth::QuotaSnapshot) {
       Some(0) => println!("  quota       : 0 / 0 {} (0.0%){reset}", m.label),
       Some(e) => {
         let pct = 100.0 * (m.remaining as f64) / (e as f64);
-        println!(
-          "  quota       : {} / {e} {} ({pct:.1}%){reset}",
-          m.remaining, m.label
-        );
+        println!("  quota       : {} / {e} {} ({pct:.1}%){reset}", m.remaining, m.label);
       }
       None => println!("  quota       : unlimited {}{reset}", m.label),
     }
@@ -349,9 +347,7 @@ fn fmt_int(mut n: u64) -> String {
 // ---------------------------------------------------------------------------
 
 fn show(store: &AuthStore, id: &str) -> Result<()> {
-  let a = store
-    .get(id)
-    .ok_or_else(|| anyhow!("no account with id '{id}'"))?;
+  let a = store.get(id).ok_or_else(|| anyhow!("no account with id '{id}'"))?;
   println!("id: {}", a.id);
   println!("provider: {}", a.provider);
   println!("enabled: {}", a.enabled);
@@ -517,11 +513,12 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
   let mut dirty = false;
   for (a, q) in store.accounts.iter_mut().zip(quotas.iter()) {
     if let QuotaResult::Ok {
-      refreshed: Some(llm_auth::RefreshOutcome::Refreshed {
-        access_token,
-        expires_at,
-        username,
-      }),
+      refreshed:
+        Some(llm_auth::RefreshOutcome::Refreshed {
+          access_token,
+          expires_at,
+          username,
+        }),
       ..
     } = q
     {
@@ -751,7 +748,13 @@ mod tests {
     }
   }
 
-  fn switch_args(only: Option<&str>, all: bool, provider: Option<&str>, accts: &[&str], include_disabled: bool) -> SwitchArgs {
+  fn switch_args(
+    only: Option<&str>,
+    all: bool,
+    provider: Option<&str>,
+    accts: &[&str],
+    include_disabled: bool,
+  ) -> SwitchArgs {
     SwitchArgs {
       only: only.map(String::from),
       all,

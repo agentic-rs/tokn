@@ -129,7 +129,10 @@ mod tests {
   fn registry_matches_provider_hosts() {
     let registry = Registry::builtin();
     assert_eq!(registry.provider_id_for_url("api.github.com"), Some(ID_GITHUB_COPILOT));
-    assert_eq!(registry.provider_id_for_url("api.githubcopilot.com"), Some(ID_GITHUB_COPILOT));
+    assert_eq!(
+      registry.provider_id_for_url("api.githubcopilot.com"),
+      Some(ID_GITHUB_COPILOT)
+    );
     assert_eq!(registry.provider_id_for_url("api.z.ai"), Some(ID_ZAI));
     assert_eq!(registry.provider_id_for_url("open.bigmodel.cn"), Some(ID_ZHIPUAI));
   }

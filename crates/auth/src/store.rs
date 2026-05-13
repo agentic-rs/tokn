@@ -113,17 +113,14 @@ impl AuthStore {
   /// eyes.
   pub fn save(&self) -> Result<()> {
     if let Some(parent) = self.path.parent() {
-      std::fs::create_dir_all(parent)
-        .with_context(|| format!("creating {}", parent.display()))?;
+      std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let file = AuthFile {
       version: CURRENT_VERSION,
       accounts: self.accounts.clone(),
     };
-    let yaml =
-      serde_yaml::to_string(&file).with_context(|| "serialising auth.yaml")?;
-    write_secured(&self.path, yaml.as_bytes())
-      .with_context(|| format!("writing {}", self.path.display()))
+    let yaml = serde_yaml::to_string(&file).with_context(|| "serialising auth.yaml")?;
+    write_secured(&self.path, yaml.as_bytes()).with_context(|| format!("writing {}", self.path.display()))
   }
 
   /// Insert or replace an account by id.
@@ -159,10 +156,9 @@ impl AuthStore {
 }
 
 fn load_from_yaml(path: &Path) -> Result<AuthStore> {
-  let raw = std::fs::read_to_string(path)
-    .with_context(|| format!("reading {}", path.display()))?;
-  let parsed: AuthFile = serde_yaml::from_str(&raw)
-    .with_context(|| format!("parsing {} (expected `version: 1` schema)", path.display()))?;
+  let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+  let parsed: AuthFile =
+    serde_yaml::from_str(&raw).with_context(|| format!("parsing {} (expected `version: 1` schema)", path.display()))?;
   if parsed.version != CURRENT_VERSION {
     anyhow::bail!(
       "{}: unsupported version {} (this build understands {})",
@@ -184,8 +180,7 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
   if !config_path.exists() {
     return Ok(None);
   }
-  let raw = std::fs::read_to_string(config_path)
-    .with_context(|| format!("reading {}", config_path.display()))?;
+  let raw = std::fs::read_to_string(config_path).with_context(|| format!("reading {}", config_path.display()))?;
   // Minimal local schema: accounts have moved to auth.yaml, so we can no
   // longer go through `llm_config::Config`. We only care about the legacy
   // `[[accounts]]` table here; everything else in config.toml is ignored.
@@ -194,8 +189,8 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
     #[serde(default)]
     accounts: Vec<AccountConfig>,
   }
-  let parsed: LegacyAccounts = toml::from_str(&raw)
-    .with_context(|| format!("parsing legacy {}", config_path.display()))?;
+  let parsed: LegacyAccounts =
+    toml::from_str(&raw).with_context(|| format!("parsing legacy {}", config_path.display()))?;
   if parsed.accounts.is_empty() {
     Ok(None)
   } else {

@@ -5,8 +5,8 @@
 //! and [`Self::probe_quota`] (the existing monitor endpoint).
 
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
 use llm_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
+use llm_core::account::AccountConfig;
 
 /// Singleton ZSt impl. Same instance handles every Z.ai alias because the
 /// auth flow is identical; the provider id stored on the account is what
@@ -77,13 +77,10 @@ impl ProviderAuth for ZaiAuth {
   }
 
   async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome> {
-    let key = account
-      .api_key
-      .as_ref()
-      .ok_or(AuthError::MissingCredential {
-        account: account.id.clone(),
-        field: "api_key",
-      })?;
+    let key = account.api_key.as_ref().ok_or(AuthError::MissingCredential {
+      account: account.id.clone(),
+      field: "api_key",
+    })?;
     let base = account
       .base_url
       .clone()
@@ -109,13 +106,10 @@ impl ProviderAuth for ZaiAuth {
   }
 
   async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {
-    let key = account
-      .api_key
-      .as_ref()
-      .ok_or(AuthError::MissingCredential {
-        account: account.id.clone(),
-        field: "api_key",
-      })?;
+    let key = account.api_key.as_ref().ok_or(AuthError::MissingCredential {
+      account: account.id.clone(),
+      field: "api_key",
+    })?;
     let raw = crate::quota::fetch(client, &account.provider, key.expose())
       .await
       .map_err(|e| AuthError::Upstream(e.to_string()))?;
@@ -127,10 +121,7 @@ impl ProviderAuth for ZaiAuth {
     } else if let Some(h) = &raw.five_hour {
       Some(format!("5h: {:.1}% used", h.percent_used))
     } else {
-      raw
-        .mcp_monthly
-        .as_ref()
-        .map(|m| format!("mcp: {}/{}", m.used, m.total))
+      raw.mcp_monthly.as_ref().map(|m| format!("mcp: {}/{}", m.used, m.total))
     };
 
     // Map every advertised bucket into UsageBucket for richer display.

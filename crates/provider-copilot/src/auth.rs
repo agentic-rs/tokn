@@ -6,11 +6,11 @@
 
 use crate::config::CopilotHeaders;
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
 use llm_auth::{
-  default_import_from, AuthError, CredentialResult, CredentialSource, DeviceCodeHandle,
-  DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
+  default_import_from, AuthError, CredentialResult, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome,
+  ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
 };
+use llm_core::account::AccountConfig;
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
 pub struct CopilotAuth;
@@ -49,7 +49,9 @@ impl ProviderAuth for CopilotAuth {
       CredentialSource::Custom { key: "gh", .. } => crate::import::from_gh()
         .map(CredentialResult::Refresh)
         .map_err(AuthError::Other),
-      CredentialSource::Custom { key: "copilot-plugin", .. } => crate::import::from_copilot_plugin()
+      CredentialSource::Custom {
+        key: "copilot-plugin", ..
+      } => crate::import::from_copilot_plugin()
         .map(CredentialResult::Refresh)
         .map_err(AuthError::Other),
       CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
@@ -81,11 +83,7 @@ impl ProviderAuth for CopilotAuth {
     })
   }
 
-  async fn poll_device_code(
-    &self,
-    client: &reqwest::Client,
-    handle: DeviceCodeHandle,
-  ) -> Result<DeviceFlowOutcome> {
+  async fn poll_device_code(&self, client: &reqwest::Client, handle: DeviceCodeHandle) -> Result<DeviceFlowOutcome> {
     // Reconstruct the upstream DeviceCode from our public handle. Both
     // structs are field-for-field identical; we keep them separate so the
     // trait surface stays free of provider types.
@@ -117,18 +115,11 @@ impl ProviderAuth for CopilotAuth {
     })
   }
 
-  async fn refresh_credential(
-    &self,
-    client: &reqwest::Client,
-    account: &AccountConfig,
-  ) -> Result<RefreshOutcome> {
-    let gh_token = account
-      .refresh_token
-      .as_ref()
-      .ok_or(AuthError::MissingCredential {
-        account: account.id.clone(),
-        field: "refresh_token",
-      })?;
+  async fn refresh_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<RefreshOutcome> {
+    let gh_token = account.refresh_token.as_ref().ok_or(AuthError::MissingCredential {
+      account: account.id.clone(),
+      field: "refresh_token",
+    })?;
     let headers = headers_from_settings(account)?;
     let resp = crate::token::exchange(client, gh_token.expose(), &headers)
       .await
@@ -157,13 +148,10 @@ impl ProviderAuth for CopilotAuth {
   }
 
   async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {
-    let gh_token = account
-      .refresh_token
-      .as_ref()
-      .ok_or(AuthError::MissingCredential {
-        account: account.id.clone(),
-        field: "refresh_token",
-      })?;
+    let gh_token = account.refresh_token.as_ref().ok_or(AuthError::MissingCredential {
+      account: account.id.clone(),
+      field: "refresh_token",
+    })?;
     let headers = headers_from_settings(account)?;
     let info = crate::user::fetch(client, gh_token.expose(), &headers)
       .await
@@ -240,8 +228,7 @@ impl ProviderAuth for CopilotAuth {
 /// Decode the `[settings]` table from an account into a `CopilotHeaders`
 /// struct. Falls back to defaults when missing.
 fn headers_from_settings(account: &AccountConfig) -> Result<CopilotHeaders> {
-  let value = serde_json::to_value(toml::Value::Table(account.settings.clone()))
-    .unwrap_or(serde_json::Value::Null);
+  let value = serde_json::to_value(toml::Value::Table(account.settings.clone())).unwrap_or(serde_json::Value::Null);
   CopilotHeaders::from_value(&value).map_err(|e| AuthError::Decode(e.to_string()))
 }
 

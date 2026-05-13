@@ -78,11 +78,7 @@ impl AccountPool {
     })
   }
 
-  pub fn from_accounts_with<F>(
-    accounts_in: &[AccountConfig],
-    cfg: &Config,
-    build_provider: F,
-  ) -> Result<Arc<Self>>
+  pub fn from_accounts_with<F>(accounts_in: &[AccountConfig], cfg: &Config, build_provider: F) -> Result<Arc<Self>>
   where
     F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,
   {

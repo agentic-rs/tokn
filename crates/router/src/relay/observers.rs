@@ -29,13 +29,7 @@ pub(super) fn spawn_stream_recorder(
   meta: StreamMeta,
 ) -> ObserverSender {
   let (tx, rx) = observer_channel();
-  tokio::spawn(background_stream_recorder(
-    rx,
-    builder,
-    events,
-    max_body,
-    meta,
-  ));
+  tokio::spawn(background_stream_recorder(rx, builder, events, max_body, meta));
   tx
 }
 

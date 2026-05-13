@@ -75,7 +75,9 @@ pub(super) async fn handle_client(
   }
 
   let mut stream = reader.into_inner();
-  let local = stream.local_addr().unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
+  let local = stream
+    .local_addr()
+    .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
   if websocket_upgrade {
     tracing::debug!("rejecting websocket upgrade request from {}", peer);
     stream.write_all(UPGRADE_REQUIRED_WEBSOCKET).await?;

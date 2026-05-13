@@ -980,14 +980,12 @@ mod tests {
     let rows = fetch_context(&dir);
     assert_eq!(
       rows,
-      vec![
-        (
-          "req-context".into(),
-          Some("localhost:4141".into()),
-          Some("route".into()),
-          Some("architect".into())
-        )
-      ]
+      vec![(
+        "req-context".into(),
+        Some("localhost:4141".into()),
+        Some("route".into()),
+        Some("architect".into())
+      )]
     );
   }
 
@@ -1225,7 +1223,10 @@ mod tests {
       // Fields not yet populated.
       assert!(is_null(&row["status"]), "status null after Started");
       assert!(is_null(&row["latency_ms"]), "latency_ms null after Started");
-      assert!(is_null(&row["latency_header_ms"]), "latency_header_ms null after Started");
+      assert!(
+        is_null(&row["latency_header_ms"]),
+        "latency_header_ms null after Started"
+      );
       assert!(is_null(&row["input_tok"]));
       assert!(is_null(&row["output_tok"]));
       assert!(is_null(&row["outbound_resp_status"]));
@@ -1342,10 +1343,7 @@ mod tests {
       );
       let req_hdr = as_text(&row["outbound_req_headers"]).unwrap_or_default();
       assert!(req_hdr.contains("\"x-custom\":\"yes\""), "got: {req_hdr}");
-      assert_eq!(
-        as_text(&row["outbound_req_body"]).as_deref(),
-        Some("{\"out\":true}")
-      );
+      assert_eq!(as_text(&row["outbound_req_body"]).as_deref(), Some("{\"out\":true}"));
     }
 
     // --- 5. RequestResult ----------------------------------------------------

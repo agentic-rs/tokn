@@ -64,7 +64,11 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     system: (!system.is_empty()).then(|| system.join("\n\n")),
     messages,
     tools: super::tools::normalise_tools(
-      obj.get("tools").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]),
+      obj
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]),
     ),
     tool_choice: obj.get("tool_choice").cloned(),
     sampling: Sampling {

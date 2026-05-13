@@ -5,8 +5,8 @@ pub mod identity;
 pub mod models;
 pub mod routing;
 
-use crate::accounts::AccountPool;
 use crate::accounts::registry::Registry as ProviderRegistry;
+use crate::accounts::AccountPool;
 use crate::api::identity::AccountIdentityResolver;
 use crate::api::routing::RouteResolver;
 use anyhow::Result;
@@ -15,8 +15,8 @@ use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
 use llm_config::Config;
-use llm_core::account::AccountConfig;
 use llm_config::RouteMode;
+use llm_core::account::AccountConfig;
 use llm_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -209,11 +209,7 @@ async fn health() -> &'static str {
   "ok"
 }
 
-pub fn build_state(
-  cfg: &Config,
-  accounts: &[AccountConfig],
-  events: Arc<EventBus>,
-) -> Result<AppState> {
+pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
@@ -334,8 +330,7 @@ mod tests {
     cfg.server.route_mode = RouteMode::Passthrough;
     let (bus, _rx) = EventBus::new(16);
 
-    let state = build_state(&cfg, &[], Arc::new(bus))
-      .expect("passthrough mode should allow empty accounts");
+    let state = build_state(&cfg, &[], Arc::new(bus)).expect("passthrough mode should allow empty accounts");
     assert_eq!(state.pool.len(), 0);
   }
 

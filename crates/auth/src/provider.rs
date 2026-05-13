@@ -9,8 +9,8 @@
 //! dep: provider crates already depend on `llm-core`, and `llm-auth` will
 //! depend on both.
 
-use llm_core::account::AccountConfig;
 use async_trait::async_trait;
+use llm_core::account::AccountConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -90,7 +90,10 @@ pub enum CredentialSource {
   /// prompt, piped via stdin).
   String { value: String, flavor: CredentialFlavor },
   /// Read the credential from a file on disk.
-  File { path: std::path::PathBuf, flavor: CredentialFlavor },
+  File {
+    path: std::path::PathBuf,
+    flavor: CredentialFlavor,
+  },
   /// Provider-defined source. The provider chooses the resulting
   /// flavor itself; `value` is an optional payload the user typed at
   /// the prompt (most custom sources don't need one).
@@ -126,9 +129,7 @@ impl CredentialSource {
   /// return `None` (the provider chooses).
   pub fn flavor(&self) -> Option<CredentialFlavor> {
     match self {
-      Self::Env { flavor, .. } | Self::String { flavor, .. } | Self::File { flavor, .. } => {
-        Some(*flavor)
-      }
+      Self::Env { flavor, .. } | Self::String { flavor, .. } | Self::File { flavor, .. } => Some(*flavor),
       Self::Login | Self::Custom { .. } => None,
     }
   }
@@ -416,11 +417,7 @@ pub trait ProviderAuth: Send + Sync {
   /// (best-effort) look up a username for id suggestion.
   ///
   /// Default impl returns `Unsupported`; OAuth providers override.
-  async fn poll_device_code(
-    &self,
-    _client: &reqwest::Client,
-    _handle: DeviceCodeHandle,
-  ) -> Result<DeviceFlowOutcome> {
+  async fn poll_device_code(&self, _client: &reqwest::Client, _handle: DeviceCodeHandle) -> Result<DeviceFlowOutcome> {
     Err(AuthError::Unsupported(self.id().to_string()))
   }
 
@@ -436,11 +433,7 @@ pub trait ProviderAuth: Send + Sync {
   /// Refresh the account's short-lived credential (e.g. exchange a refresh
   /// token for a new access token). Static-key providers return
   /// [`RefreshOutcome::NotApplicable`].
-  async fn refresh_credential(
-    &self,
-    client: &reqwest::Client,
-    account: &AccountConfig,
-  ) -> Result<RefreshOutcome>;
+  async fn refresh_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<RefreshOutcome>;
 
   /// Verify the account's stored credential is currently usable, without
   /// mutating it. Used by `account status` and the CLI smoke test.
@@ -483,22 +476,16 @@ pub fn wrap_bytes(raw: String, flavor: CredentialFlavor, source_label: &str) -> 
 ///
 /// `provider_id` is used only for the error message when `source` is a
 /// `Custom` variant the provider doesn't recognise (or `Login`).
-pub fn default_import_from(
-  provider_id: &str,
-  source: &CredentialSource,
-) -> Result<CredentialResult> {
+pub fn default_import_from(provider_id: &str, source: &CredentialSource) -> Result<CredentialResult> {
   match source {
     CredentialSource::Env { env_var, flavor } => {
-      let value = std::env::var(env_var)
-        .map_err(|_| AuthError::Other(format!("environment variable `{env_var}` is not set")))?;
+      let value =
+        std::env::var(env_var).map_err(|_| AuthError::Other(format!("environment variable `{env_var}` is not set")))?;
       wrap_bytes(value, *flavor, &format!("environment variable `{env_var}`"))
     }
-    CredentialSource::String { value, flavor } => {
-      wrap_bytes(value.clone(), *flavor, "credential value")
-    }
+    CredentialSource::String { value, flavor } => wrap_bytes(value.clone(), *flavor, "credential value"),
     CredentialSource::File { path, flavor } => {
-      let raw = std::fs::read_to_string(path)
-        .map_err(|e| AuthError::Other(format!("read {}: {e}", path.display())))?;
+      let raw = std::fs::read_to_string(path).map_err(|e| AuthError::Other(format!("read {}: {e}", path.display())))?;
       wrap_bytes(raw, *flavor, &format!("file `{}`", path.display()))
     }
     CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(

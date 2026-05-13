@@ -596,10 +596,7 @@ mod tests {
       .as_str()
       .unwrap()
       .contains("tools.0.function.name"));
-    assert_eq!(
-      outbound_resp_body.unwrap().as_ref(),
-      b"{\"error\":\"upstream body\"}"
-    );
+    assert_eq!(outbound_resp_body.unwrap().as_ref(), b"{\"error\":\"upstream body\"}");
   }
 
   #[test]
