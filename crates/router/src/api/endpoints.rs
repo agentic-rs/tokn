@@ -1,4 +1,5 @@
 use super::error::ApiError;
+use super::routing::route_mode_as_str;
 use super::AppState;
 use crate::pipeline::{
   handle_endpoint, request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,
@@ -20,6 +21,16 @@ async fn handle(
   let ts = unix_ts();
   let hx = request_header_extract(&inbound);
   let endpoint_hint = parser.endpoint().as_str().to_string();
+  let host = inbound
+    .get(axum::http::header::HOST)
+    .and_then(|v| v.to_str().ok())
+    .map(str::to_string);
+  let mode = state
+    .route
+    .resolve_mode(hx.route_mode_hint.as_deref())
+    .ok()
+    .map(route_mode_as_str)
+    .map(str::to_string);
 
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: hx.request_id.clone(),
@@ -39,6 +50,8 @@ async fn handle(
     session_id: hx.session_id.clone(),
     project_id: hx.project_id.clone(),
     header_initiator: hx.header_initiator.clone(),
+    host,
+    mode,
     route_mode_hint: hx.route_mode_hint.clone(),
     inbound_headers: inbound.clone(),
   });

@@ -28,6 +28,8 @@ pub enum Event {
     session_id: Option<String>,
     project_id: Option<String>,
     header_initiator: Option<String>,
+    host: Option<String>,
+    mode: Option<String>,
     route_mode_hint: Option<String>,
     inbound_headers: HeaderMap,
   },
@@ -42,6 +44,7 @@ pub enum Event {
     model: String,
     stream: bool,
     initiator: String,
+    behave_as: Option<String>,
     /// Post-decompression raw bytes of the inbound request body.
     /// Empty for requests without a body. Used to populate
     /// `CallRecord.inbound_req.body` and the `inbound_req_body` DB column.

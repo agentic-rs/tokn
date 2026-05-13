@@ -7,6 +7,10 @@ CREATE TABLE requests (
   id INTEGER PRIMARY KEY,
   ts INTEGER NOT NULL,
   session_id TEXT,
+  user TEXT,
+  hosts TEXT,
+  mode TEXT,
+  behave_as TEXT,
   source TEXT,
   method TEXT,
   request_id TEXT,
@@ -47,3 +51,35 @@ CREATE INDEX idx_requests_ts      ON requests(ts);
 CREATE INDEX idx_requests_session ON requests(session_id);
 CREATE INDEX idx_requests_account ON requests(account_id);
 CREATE UNIQUE INDEX idx_requests_request_id ON requests(request_id);
+
+CREATE TABLE metrics (
+  id INTEGER PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  request_id TEXT,
+  user TEXT,
+  hosts TEXT,
+  mode TEXT,
+  behave_as TEXT,
+  source TEXT,
+  method TEXT,
+  path TEXT,
+  url TEXT,
+  status INTEGER,
+  request_error TEXT,
+  account_id TEXT,
+  provider_id TEXT,
+  latency_ms INTEGER,
+
+  inbound_req_method   TEXT,
+  inbound_req_url      TEXT,
+  inbound_req_headers  BLOB,
+
+  inbound_resp_status  INTEGER,
+  inbound_resp_headers BLOB,
+  inbound_resp_body    BLOB
+);
+CREATE INDEX idx_metrics_ts       ON metrics(ts);
+CREATE INDEX idx_metrics_hosts    ON metrics(hosts);
+CREATE INDEX idx_metrics_provider ON metrics(provider_id);
+CREATE INDEX idx_metrics_account  ON metrics(account_id);
+CREATE UNIQUE INDEX idx_metrics_request_id ON metrics(request_id) WHERE request_id IS NOT NULL;

@@ -31,6 +31,17 @@ pub(super) async fn proxy_passthrough(
   let hx = request_header_extract(&parts.headers);
   let request_id = hx.request_id.clone();
   let path = path_and_query.split('?').next().unwrap_or(&path_and_query);
+  let inbound_host = parts
+    .headers
+    .get(HOST)
+    .and_then(|v| v.to_str().ok())
+    .map(str::to_string);
+  let mode = state
+    .route
+    .resolve_mode(hx.route_mode_hint.as_deref())
+    .ok()
+    .map(crate::api::routing::route_mode_as_str)
+    .map(str::to_string);
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: request_id.clone(),
     ts,
@@ -49,6 +60,8 @@ pub(super) async fn proxy_passthrough(
     session_id: hx.session_id.clone(),
     project_id: hx.project_id.clone(),
     header_initiator: hx.header_initiator.clone(),
+    host: inbound_host,
+    mode,
     route_mode_hint: hx.route_mode_hint.clone(),
     inbound_headers: parts.headers.clone(),
   });
@@ -113,6 +126,7 @@ pub(super) async fn proxy_passthrough(
     model: body_meta.model.clone(),
     stream,
     initiator: body_meta.initiator,
+    behave_as: None,
     inbound_body: inbound_decoded_body.clone(),
   });
 

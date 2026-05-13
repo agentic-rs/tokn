@@ -86,6 +86,9 @@ struct PendingRequest {
   ts: i64,
   session_id: Option<String>,
   project_id: Option<String>,
+  hosts: Option<String>,
+  mode: Option<String>,
+  behave_as: Option<String>,
   source: Option<String>,
   method: Option<String>,
   endpoint: String,
@@ -175,6 +178,7 @@ impl EventHandler for DbEventHandler {
           *ts,
           endpoint,
           session_id.as_deref(),
+          requests::RequestContext::default(),
           source.as_deref(),
           Some(method.as_str()),
           &inbound_req,
@@ -187,6 +191,9 @@ impl EventHandler for DbEventHandler {
             ts: *ts,
             session_id: session_id.clone(),
             project_id: None,
+            hosts: None,
+            mode: None,
+            behave_as: None,
             source,
             method: Some(method.clone()),
             endpoint: endpoint.clone(),
@@ -217,6 +224,8 @@ impl EventHandler for DbEventHandler {
         session_id,
         project_id,
         header_initiator,
+        host,
+        mode,
         route_mode_hint: _,
         inbound_headers,
       } => {
@@ -239,6 +248,8 @@ impl EventHandler for DbEventHandler {
             ts: *ts,
             endpoint: &endpoint,
             session_id: session_id.as_deref(),
+            hosts: host.as_deref(),
+            mode: mode.as_deref(),
             method: method.as_deref(),
             inbound_req: &inbound_req,
           },
@@ -250,6 +261,9 @@ impl EventHandler for DbEventHandler {
           ts: *ts,
           session_id: session_id.clone(),
           project_id: project_id.clone(),
+          hosts: host.clone(),
+          mode: mode.clone(),
+          behave_as: None,
           source: None,
           method: method.map(str::to_string),
           endpoint: endpoint.clone(),
@@ -273,6 +287,8 @@ impl EventHandler for DbEventHandler {
         pending.ts = *ts;
         pending.session_id = session_id.clone().or_else(|| pending.session_id.clone());
         pending.project_id = project_id.clone().or_else(|| pending.project_id.clone());
+        pending.hosts = host.clone().or_else(|| pending.hosts.clone());
+        pending.mode = mode.clone().or_else(|| pending.mode.clone());
         pending.method = pending.method.clone().or_else(|| method.map(str::to_string));
         if !endpoint.is_empty() {
           pending.endpoint = endpoint;
@@ -293,6 +309,7 @@ impl EventHandler for DbEventHandler {
         model,
         stream,
         initiator,
+        behave_as,
         inbound_body,
       } => {
         // For retry attempts, clone from the base (attempt 0) entry
@@ -311,6 +328,7 @@ impl EventHandler for DbEventHandler {
           p.model = model.clone();
           p.stream = *stream;
           p.initiator = initiator.clone();
+          p.behave_as = behave_as.clone().or_else(|| p.behave_as.clone());
           p.inbound_req_body = inbound_body.clone();
           if let Err(e) = self.requests.parsed(
             request_id,
@@ -323,6 +341,7 @@ impl EventHandler for DbEventHandler {
               model,
               initiator,
               stream: *stream,
+              behave_as: behave_as.as_deref(),
               inbound_body: inbound_body.clone(),
             },
           ) {
@@ -428,6 +447,10 @@ impl EventHandler for DbEventHandler {
             ts: p.ts,
             session_id: p.session_id.unwrap_or_default(),
             session_source: *session_source,
+            user: None,
+            hosts: p.hosts,
+            mode: p.mode,
+            behave_as: p.behave_as,
             source: p.source,
             method: p.method,
             request_id: composite_id,
@@ -459,6 +482,10 @@ impl EventHandler for DbEventHandler {
             ts: fallback_ts,
             session_id: String::new(),
             session_source: *session_source,
+            user: None,
+            hosts: None,
+            mode: None,
+            behave_as: None,
             source: None,
             method: None,
             request_id: composite_id,
@@ -529,6 +556,10 @@ impl EventHandler for DbEventHandler {
               ts: p.ts,
               session_id: p.session_id.unwrap_or_default(),
               session_source: SessionSource::Header,
+              user: None,
+              hosts: p.hosts,
+              mode: p.mode,
+              behave_as: p.behave_as,
               source: p.source,
               method: p.method,
               request_id: request_id.clone(),
@@ -622,6 +653,7 @@ mod tests {
       model: "m".into(),
       stream: false,
       initiator: "user".into(),
+      behave_as: Some("architect".into()),
       inbound_body: bytes::Bytes::new(),
     }
   }
@@ -635,6 +667,8 @@ mod tests {
       session_id: Some("sess-1".into()),
       project_id: Some("proj-1".into()),
       header_initiator: Some("user".into()),
+      host: Some("localhost:4141".into()),
+      mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: HeaderMap::new(),
     }
@@ -817,6 +851,35 @@ mod tests {
     rows
   }
 
+  fn fetch_context(dir: &std::path::Path) -> Vec<(String, Option<String>, Option<String>, Option<String>)> {
+    let mut rows = Vec::new();
+    for entry in std::fs::read_dir(dir.join("requests")).unwrap() {
+      let p = entry.unwrap().path();
+      if p.extension().and_then(|e| e.to_str()) != Some("db") {
+        continue;
+      }
+      let conn = Connection::open(&p).unwrap();
+      let mut stmt = conn
+        .prepare("SELECT request_id, hosts, mode, behave_as FROM requests ORDER BY request_id")
+        .unwrap();
+      let iter = stmt
+        .query_map([], |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            r.get::<_, Option<String>>(3)?,
+          ))
+        })
+        .unwrap();
+      for r in iter {
+        rows.push(r.unwrap());
+      }
+    }
+    rows.sort();
+    rows
+  }
+
   #[test]
   fn first_attempt_success_writes_one_row() {
     let (mut h, dir) = make_handler();
@@ -908,6 +971,29 @@ mod tests {
     assert_eq!(rows[0].0, "req-headers");
     assert_eq!(rows[0].1, "responses");
     assert!(rows[0].2.contains("\"x-test\":\"1\""));
+  }
+
+  #[test]
+  fn context_columns_are_populated_from_headers_and_parsed() {
+    let (mut h, dir) = make_handler();
+    let req = "req-context";
+    let ts = 1_700_000_000;
+    h.handle(&started(req, ts));
+    h.handle(&headers(req, ts));
+    h.handle(&parsed(req, 0));
+
+    let rows = fetch_context(&dir);
+    assert_eq!(
+      rows,
+      vec![
+        (
+          "req-context".into(),
+          Some("localhost:4141".into()),
+          Some("route".into()),
+          Some("architect".into())
+        )
+      ]
+    );
   }
 
   /// Lifecycle persistence inserts a partial row before a final result exists,
@@ -1167,6 +1253,8 @@ mod tests {
       session_id: Some("sess-full".into()),
       project_id: Some("proj-full".into()),
       header_initiator: Some("system".into()),
+      host: Some("127.0.0.1:4141".into()),
+      mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: inbound_headers.clone(),
     };
@@ -1204,6 +1292,7 @@ mod tests {
       model: "gpt-test".into(),
       stream: true,
       initiator: "user".into(),
+      behave_as: Some("architect".into()),
       inbound_body: bytes::Bytes::from_static(b"{\"hello\":\"world\"}"),
     };
     h.handle(&parsed_event);

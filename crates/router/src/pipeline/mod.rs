@@ -167,6 +167,7 @@ pub(crate) async fn handle_endpoint(
       model: prepared.meta.model.clone(),
       stream: prepared.meta.stream,
       initiator: prepared.meta.initiator.clone(),
+      behave_as: prepared.meta.behave_as.clone(),
       inbound_body: prepared.inbound_body_bytes.clone(),
     });
 

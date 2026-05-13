@@ -106,6 +106,15 @@ impl RouteResolver {
   }
 }
 
+pub fn route_mode_as_str(mode: RouteMode) -> &'static str {
+  match mode {
+    RouteMode::Passthrough => "passthrough",
+    RouteMode::Exact => "exact",
+    RouteMode::Route => "route",
+    RouteMode::Fuzzy => "fuzzy",
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
   InvalidRouteMode { mode: String },

@@ -32,6 +32,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_source_and_method",
     sql: include_str!("../../../../scripts/migrations/requests/005_add_source_and_method.sql"),
   },
+  migrate::Migration {
+    version: 6,
+    name: "add_context_and_metrics",
+    sql: include_str!("../../../../scripts/migrations/requests/006_add_context_and_metrics.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -48,8 +53,18 @@ pub struct HeadersUpdate<'a> {
   pub ts: i64,
   pub endpoint: &'a str,
   pub session_id: Option<&'a str>,
+  pub hosts: Option<&'a str>,
+  pub mode: Option<&'a str>,
   pub method: Option<&'a str>,
   pub inbound_req: &'a HttpSnapshot,
+}
+
+#[derive(Default)]
+pub struct RequestContext<'a> {
+  pub user: Option<&'a str>,
+  pub hosts: Option<&'a str>,
+  pub mode: Option<&'a str>,
+  pub behave_as: Option<&'a str>,
 }
 
 impl RequestsDb {
@@ -140,6 +155,7 @@ impl RequestsDb {
     ts: i64,
     endpoint: &str,
     session_id: Option<&str>,
+    ctx: RequestContext<'_>,
     source: Option<&str>,
     method: Option<&str>,
     inbound_req: &HttpSnapshot,
@@ -147,12 +163,16 @@ impl RequestsDb {
     let conn = self.conn_for_ts(ts)?;
     let inbound_req_headers = headers_json(&inbound_req.req_headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
-                             inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', '', '', '', ?7, ?8, ?9, ?10)
+      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
+                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, '', '', '', '', ?11, ?12, ?13, ?14)
        ON CONFLICT(request_id) DO UPDATE SET
          ts=excluded.ts,
          session_id=COALESCE(session_id, excluded.session_id),
+         user=COALESCE(user, excluded.user),
+         hosts=COALESCE(hosts, excluded.hosts),
+         mode=COALESCE(mode, excluded.mode),
+         behave_as=COALESCE(behave_as, excluded.behave_as),
          source=COALESCE(source, excluded.source),
          method=COALESCE(method, excluded.method),
          endpoint=excluded.endpoint,
@@ -163,6 +183,10 @@ impl RequestsDb {
       params![
         ts,
         session_id,
+        ctx.user,
+        ctx.hosts,
+        ctx.mode,
+        ctx.behave_as,
         source,
         method,
         request_id,
@@ -180,17 +204,21 @@ impl RequestsDb {
     let conn = self.conn_for_ts(h.ts)?;
     let inbound_req_headers = headers_json(&h.inbound_req.req_headers);
     let updated = conn.execute(
-      "UPDATE requests SET
+       "UPDATE requests SET
          session_id=COALESCE(?2, session_id),
-         method=COALESCE(?3, method),
-         endpoint=?4,
-         inbound_req_method=COALESCE(?5, inbound_req_method),
-         inbound_req_url=COALESCE(?6, inbound_req_url),
-         inbound_req_headers=?7
+         hosts=COALESCE(?3, hosts),
+         mode=COALESCE(?4, mode),
+         method=COALESCE(?5, method),
+         endpoint=?6,
+         inbound_req_method=COALESCE(?7, inbound_req_method),
+         inbound_req_url=COALESCE(?8, inbound_req_url),
+         inbound_req_headers=?9
        WHERE request_id=?1",
       params![
         request_id,
         h.session_id,
+        h.hosts,
+        h.mode,
         h.method,
         h.endpoint,
         h.inbound_req.method.as_deref(),
@@ -209,10 +237,10 @@ impl RequestsDb {
     let conn = self.conn_for_ts(p.ts)?;
     if attempt > 0 {
       conn.execute(
-      "INSERT INTO requests (ts, session_id, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
-                               inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
-         SELECT ts, session_id, source, method, ?2, endpoint, '', '', '', '',
-                inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body
+      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, endpoint, account_id, provider_id, model, initiator,
+                                inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body)
+         SELECT ts, session_id, user, hosts, mode, behave_as, source, method, ?2, endpoint, '', '', '', '',
+                 inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body
          FROM requests WHERE request_id = ?1
          ON CONFLICT(request_id) DO NOTHING",
         params![base_request_id, request_id],
@@ -226,6 +254,7 @@ impl RequestsDb {
          model=?4,
          initiator=?5,
          stream=?6,
+         behave_as=COALESCE(?9, behave_as),
          inbound_req_body=?8
        WHERE request_id=?1",
       params![
@@ -237,6 +266,7 @@ impl RequestsDb {
         p.stream as i64,
         p.endpoint,
         p.inbound_body.as_ref(),
+        p.behave_as,
       ],
     )?;
     if updated == 0 {
@@ -296,16 +326,20 @@ impl RequestsDb {
     let outbound_resp_headers = r.outbound.as_ref().map(|s| headers_json(&s.resp_headers));
     let inbound_resp_headers = headers_json(&r.inbound.resp_headers);
     conn.execute(
-      "INSERT INTO requests (ts, session_id, source, method, request_id, request_error, endpoint, account_id, provider_id,
-                             model, initiator, status, stream, latency_ms, latency_header_ms,
-                             input_tok, output_tok, cached_tok, reasoning_tok,
+      "INSERT INTO requests (ts, session_id, user, hosts, mode, behave_as, source, method, request_id, request_error, endpoint, account_id, provider_id,
+                              model, initiator, status, stream, latency_ms, latency_header_ms,
+                              input_tok, output_tok, cached_tok, reasoning_tok,
                              inbound_req_method, inbound_req_url, inbound_req_headers, inbound_req_body,
                              outbound_req_method, outbound_req_url, outbound_req_headers, outbound_req_body,
                              outbound_resp_status, outbound_resp_headers, outbound_resp_body,
                              inbound_resp_status, inbound_resp_headers, inbound_resp_body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-               ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+               ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)
        ON CONFLICT(request_id) DO UPDATE SET
+         user=COALESCE(user, excluded.user),
+         hosts=COALESCE(hosts, excluded.hosts),
+         mode=COALESCE(mode, excluded.mode),
+         behave_as=COALESCE(behave_as, excluded.behave_as),
          source=COALESCE(source, excluded.source),
          method=COALESCE(method, excluded.method),
          request_error=excluded.request_error,
@@ -339,6 +373,10 @@ impl RequestsDb {
       params![
         r.ts,
         r.session_id,
+        r.user.as_deref(),
+        r.hosts.as_deref(),
+        r.mode.as_deref(),
+        r.behave_as.as_deref(),
         r.source.as_deref(),
         r.method.as_deref(),
         r.request_id,
@@ -400,6 +438,7 @@ pub struct ParsedUpdate<'a> {
   pub model: &'a str,
   pub initiator: &'a str,
   pub stream: bool,
+  pub behave_as: Option<&'a str>,
   pub inbound_body: bytes::Bytes,
 }
 
@@ -454,6 +493,10 @@ mod tests {
     for col in [
       "request_id",
       "request_error",
+      "user",
+      "hosts",
+      "mode",
+      "behave_as",
       "input_tok",
       "output_tok",
       "cached_tok",
@@ -477,12 +520,44 @@ mod tests {
         .unwrap();
       assert!(exists, "missing column {col}");
     }
+    let metrics_exists: bool = conn
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metrics'")
+      .unwrap()
+      .exists([])
+      .unwrap();
+    assert!(metrics_exists, "missing metrics table");
+    for col in [
+      "request_id",
+      "user",
+      "hosts",
+      "mode",
+      "behave_as",
+      "source",
+      "method",
+      "path",
+      "url",
+      "status",
+      "request_error",
+      "account_id",
+      "provider_id",
+      "latency_ms",
+      "inbound_req_headers",
+      "inbound_resp_headers",
+      "inbound_resp_body",
+    ] {
+      let exists: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('metrics') WHERE name = ?1")
+        .unwrap()
+        .exists(params![col])
+        .unwrap();
+      assert!(exists, "missing metrics column {col}");
+    }
     let v: i64 = conn
       .prepare("SELECT MAX(version) FROM schema_migrations")
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 5);
+    assert_eq!(v, 6);
   }
 
   #[test]
@@ -515,6 +590,10 @@ mod tests {
       ts,
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
+      user: None,
+      hosts: None,
+      mode: None,
+      behave_as: None,
       source: Some("127.0.0.1:4142".into()),
       method: Some("POST".into()),
       request_id: "request-1".into(),
@@ -562,6 +641,7 @@ mod tests {
       ts,
       "chat_completions",
       Some("sess-1"),
+      RequestContext::default(),
       Some("127.0.0.1:4142"),
       Some("POST"),
       &started,
@@ -582,6 +662,8 @@ mod tests {
         ts,
         endpoint: "responses",
         session_id: Some("sess-1"),
+        hosts: Some("localhost:4141"),
+        mode: Some("route"),
         method: Some("POST"),
         inbound_req: &with_headers,
       },
@@ -614,6 +696,10 @@ mod tests {
       ts,
       session_id: "session-1".into(),
       session_source: SessionSource::Header,
+      user: None,
+      hosts: None,
+      mode: None,
+      behave_as: None,
       source: Some("127.0.0.1:4142".into()),
       method: Some("POST".into()),
       request_id: "request-result".into(),

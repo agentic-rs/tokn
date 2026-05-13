@@ -76,6 +76,10 @@ mod tests {
               ts: *ts,
               session_id: session_id.clone().unwrap_or_default(),
               session_source: SessionSource::Auto,
+              user: None,
+              hosts: None,
+              mode: None,
+              behave_as: None,
               source: None,
               method: Some(method.clone()),
               request_id: request_id.clone(),
@@ -109,6 +113,7 @@ mod tests {
           model,
           stream,
           initiator,
+          behave_as,
           inbound_body,
         } => {
           // Retry attempts: clone from base entry (attempt 0)
@@ -126,6 +131,7 @@ mod tests {
             r.model = model.clone();
             r.stream = *stream;
             r.initiator = initiator.clone();
+            r.behave_as = behave_as.clone();
             r.inbound.req_body = inbound_body.clone();
             // Stamp composite request_id on the row for retries
             if *attempt > 0 {
@@ -156,6 +162,10 @@ mod tests {
             ts: 0,
             session_id: String::new(),
             session_source: SessionSource::Auto,
+            user: None,
+            hosts: None,
+            mode: None,
+            behave_as: None,
             source: None,
             method: None,
             request_id: composite_id.clone(),
@@ -500,6 +510,7 @@ mod tests {
       model: ctx.model.clone(),
       stream: true,
       initiator: "user".to_string(),
+      behave_as: None,
       inbound_body: req_body.clone(),
     });
     state.events.emit(llm_core::event::Event::RequestResponded {
