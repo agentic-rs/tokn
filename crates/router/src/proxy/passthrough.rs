@@ -97,10 +97,11 @@ pub(super) async fn proxy_passthrough(
   };
 
   let mut upstream = http.request(parts.method.clone(), &url).body(request_body.clone());
-  let mut outbound_req_headers = parts.headers.clone();
+  let mut outbound_req_headers = reqwest::header::HeaderMap::new();
   for (name, value) in &parts.headers {
-    if name != HOST {
+    if name != HOST && !crate::api::is_router_owned_header(name) {
       upstream = upstream.header(name, value);
+      outbound_req_headers.insert(name.clone(), value.clone());
     }
   }
   upstream = upstream.header(HOST, host);

@@ -31,6 +31,7 @@ pub(super) struct PreparedRequest {
   pub(super) upstream_wire_body: Bytes,
   pub(super) debug_outbound_body: Bytes,
   pub(super) content_encoding: Option<crate::api::codec::ContentEncodingKind>,
+  pub(super) provider_headers: reqwest::header::HeaderMap,
   pub(super) account: Arc<AccountHandle>,
   pub(super) capture: crate::provider::OutboundCapture,
 }
@@ -130,6 +131,7 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
     crate::api::codec::encode_body_bytes(debug_outbound_body.as_ref(), req.content_encoding)
       .map_err(|message| crate::provider::error::Error::Profiles { message })?
   };
+  let provider_headers = provider_headers(&req.meta.inbound_headers);
   Ok(PreparedRequest {
     meta: req.meta,
     inbound_body: req.body,
@@ -138,6 +140,7 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
     upstream_wire_body,
     debug_outbound_body,
     content_encoding: req.content_encoding,
+    provider_headers,
     account: req.account,
     capture: new_outbound_capture(),
   })
@@ -152,7 +155,7 @@ async fn send_request(state: &AppState, req: &PreparedRequest) -> crate::provide
     content_encoding: req.content_encoding.map(|encoding| encoding.as_str()),
     stream: req.meta.stream,
     initiator: req.meta.initiator.as_str(),
-    inbound_headers: &req.meta.inbound_headers,
+    inbound_headers: &req.provider_headers,
     behave_as: req.meta.behave_as.as_deref(),
     outbound: Some(req.capture.clone()),
   };
@@ -169,4 +172,12 @@ fn rewrite_model(body: &Value, model: &str) -> Value {
     obj.insert("model".into(), Value::String(model.to_string()));
   }
   body
+}
+
+fn provider_headers(headers: &reqwest::header::HeaderMap) -> reqwest::header::HeaderMap {
+  headers
+    .iter()
+    .filter(|(name, _)| !crate::api::is_router_owned_header(name))
+    .map(|(name, value)| (name.clone(), value.clone()))
+    .collect()
 }

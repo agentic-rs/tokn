@@ -46,6 +46,16 @@ pub const SESSION_ID_HEADERS: &[&str] = &[
 pub const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
 pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
+pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
+  let name = name.as_str();
+  name.starts_with("x-llm-router-")
+    || name == "x-route-mode"
+    || name == "x-behave-as"
+    || REQUEST_ID_HEADERS.contains(&name)
+    || SESSION_ID_HEADERS.contains(&name)
+    || PROJECT_ID_HEADERS.contains(&name)
+}
+
 pub(crate) fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
   names.iter().find_map(|name| {
     headers
