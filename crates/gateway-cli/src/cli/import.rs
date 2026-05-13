@@ -48,8 +48,14 @@ pub struct ImportArgs {
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ImportArgs) -> Result<()> {
   let source = match args.from {
-    Source::Gh => CredentialSource::Gh,
-    Source::CopilotPlugin => CredentialSource::CopilotPlugin,
+    Source::Gh => CredentialSource::Custom {
+      key: "gh",
+      value: None,
+    },
+    Source::CopilotPlugin => CredentialSource::Custom {
+      key: "copilot-plugin",
+      value: None,
+    },
     Source::RefreshToken => CredentialSource::RefreshToken {
       token: resolve_refresh_token(&args)?,
     },

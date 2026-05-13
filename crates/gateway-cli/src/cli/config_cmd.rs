@@ -510,12 +510,10 @@ fn account_source_from_spec(spec: &AccountSpec, allow_login: bool) -> Result<cra
   let source = match spec.from.as_str() {
     "login" => {
       if !allow_login {
-        bail!("from=login is interactive-only; use env/gh/copilot-plugin/refresh-token in --yes mode");
+        bail!("from=login is interactive-only; use env/refresh-token (or a provider-specific source like gh / copilot-plugin) in --yes mode");
       }
       crate::cli::onboarding::CredentialSource::Login
     }
-    "gh" => crate::cli::onboarding::CredentialSource::Gh,
-    "copilot-plugin" => crate::cli::onboarding::CredentialSource::CopilotPlugin,
     "refresh-token" => {
       let token = if let Some(t) = spec.refresh_token.clone() {
         let trimmed = t.trim().to_string();
@@ -541,7 +539,31 @@ fn account_source_from_spec(spec: &AccountSpec, allow_login: bool) -> Result<cra
     "env" => crate::cli::onboarding::CredentialSource::Env {
       env_var: spec.env_var.clone().unwrap_or_else(|| "ZAI_API_KEY".to_string()),
     },
-    other => bail!("unsupported from='{other}'; expected login|gh|copilot-plugin|refresh-token|env"),
+    // Anything else is treated as a provider-defined Custom key
+    // (e.g. `gh`, `copilot-plugin`). Resolve against the provider's
+    // advertised list so the resulting Custom value carries a real
+    // `&'static str` rather than a freshly-allocated string.
+    other => {
+      let auth = crate::auth_registry::provider_auth_for(&spec.provider)
+        .ok_or_else(|| anyhow!("unknown provider '{}'", spec.provider))?;
+      let key = auth
+        .custom_credential_sources()
+        .iter()
+        .copied()
+        .find(|k| *k == other)
+        .ok_or_else(|| {
+          anyhow!(
+            "unsupported from='{other}'; expected one of: {}",
+            auth
+              .credential_sources()
+              .iter()
+              .map(|k| k.as_str())
+              .collect::<Vec<_>>()
+              .join("|")
+          )
+        })?;
+      crate::cli::onboarding::CredentialSource::Custom { key, value: None }
+    }
   };
   crate::cli::onboarding::validate_provider_source(&spec.provider, &source)?;
   Ok(source)
@@ -826,7 +848,8 @@ mod tests {
       refresh_token_env_var: None,
     };
     let err = account_source_from_spec(&spec, false).unwrap_err().to_string();
-    assert!(err.contains("static API key"));
+    assert!(err.contains("unsupported"), "got: {err}");
+    assert!(err.contains("gh"), "got: {err}");
   }
 
   #[test]

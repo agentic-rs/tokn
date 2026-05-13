@@ -12,7 +12,7 @@ use crate::auth_registry::{known_providers, provider_auth_for};
 use crate::config::{Account, AuthType};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
-use llm_auth::ProviderAuth;
+use llm_auth::{CredentialResult, ProviderAuth};
 
 // Re-export so existing call sites continue to use
 // `crate::cli::onboarding::CredentialSource`. New code should import it
@@ -34,20 +34,16 @@ pub fn validate_provider_source(provider: &str, source: &CredentialSource) -> Re
   if auth.supports_credential_source(source) {
     return Ok(());
   }
-  // Provider-specific hint for the most common mistake.
-  let hint = match source {
-    CredentialSource::Env { .. } if auth.supports_device_flow() => {
-      " — this provider needs a long-lived OAuth token; try `from=login|gh|copilot-plugin`."
-    }
-    CredentialSource::Gh | CredentialSource::CopilotPlugin | CredentialSource::RefreshToken { .. }
-      if auth.supports_static_key() =>
-    {
-      " — this provider uses a static API key; try `from=login` or `from=env`."
-    }
-    _ => "",
-  };
+  // Provider-specific hint for the most common mistake. We can't enumerate
+  // every custom source here, so just list the supported `--from` values.
+  let supported: Vec<String> = auth
+    .credential_sources()
+    .iter()
+    .map(|k| k.as_str().to_string())
+    .collect();
   Err(anyhow!(
-    "credential source not supported by provider '{provider}'{hint}"
+    "credential source not supported by provider '{provider}' — try one of: {}",
+    supported.join("|")
   ))
 }
 
@@ -70,18 +66,16 @@ pub async fn resolve_account(
         static_key_login(client, auth, id_override).await
       }
     }
-    // All non-Login sources delegate to the trait. The provider knows
-    // whether it wants an OAuth refresh-token-shaped account or a
-    // static-key account, so we ask via supports_static_key.
+    // Every non-Login source goes through the trait. The provider tells
+    // us — via `CredentialResult` — which account shape to build.
     other => {
-      let token = auth
+      let result = auth
         .import_from(&other)
         .await
         .map_err(|e| anyhow!("import failed: {e}"))?;
-      if auth.supports_static_key() {
-        static_key_account(auth, id_override, token)
-      } else {
-        oauth_account_from_token(auth, id_override, token)
+      match result {
+        CredentialResult::Refresh(token) => oauth_account_from_token(auth, id_override, token),
+        CredentialResult::ApiKey(key) => static_key_account(auth, id_override, key),
       }
     }
   }
@@ -271,31 +265,19 @@ pub(crate) fn pick_provider() -> Result<String> {
 }
 
 pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource> {
-  // Build the menu from the trait capabilities so the list automatically
-  // tracks any new provider.
+  // Build the menu from the trait's advertised credential sources, so
+  // any new provider's options surface automatically.
   let auth = provider_auth_for(provider).ok_or_else(|| anyhow!("unknown provider '{provider}'"))?;
-  let mut options: Vec<&str> = vec!["login"];
-  if auth.supports_credential_source(&CredentialSource::Gh) {
-    options.push("gh");
-  }
-  if auth.supports_credential_source(&CredentialSource::CopilotPlugin) {
-    options.push("copilot-plugin");
-  }
-  if auth.supports_credential_source(&CredentialSource::RefreshToken { token: String::new() }) {
-    options.push("refresh-token");
-  }
-  if auth.supports_credential_source(&CredentialSource::Env { env_var: String::new() }) {
-    options.push("env");
-  }
+  let kinds = auth.credential_sources();
+  let options: Vec<String> = kinds.iter().map(|k| k.as_str().to_string()).collect();
 
   let picked = inquire::Select::new("Credential source:", options)
     .with_starting_cursor(0)
     .prompt()
     .context("credential source selection cancelled")?;
-  match picked {
+
+  match picked.as_str() {
     "login" => Ok(CredentialSource::Login),
-    "gh" => Ok(CredentialSource::Gh),
-    "copilot-plugin" => Ok(CredentialSource::CopilotPlugin),
     "refresh-token" => {
       let token = inquire::Text::new("Refresh token (leave empty to use env var):")
         .prompt()
@@ -324,7 +306,18 @@ pub(crate) fn pick_source_interactive(provider: &str) -> Result<CredentialSource
         .context("env var prompt cancelled")?;
       Ok(CredentialSource::Env { env_var })
     }
-    _ => Err(anyhow!("unsupported credential source")),
+    // Anything else is a provider-defined Custom source. Look up the
+    // matching `&'static str` from the provider's advertised list so
+    // CredentialSource::Custom can hold a true static key.
+    other => {
+      let key = auth
+        .custom_credential_sources()
+        .iter()
+        .copied()
+        .find(|k| *k == other)
+        .ok_or_else(|| anyhow!("unsupported credential source `{other}`"))?;
+      Ok(CredentialSource::Custom { key, value: None })
+    }
   }
 }
 

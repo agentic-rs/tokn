@@ -8,8 +8,8 @@ use crate::config::CopilotHeaders;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_auth::{
-  AuthError, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot,
-  RefreshOutcome, Result,
+  AuthError, CredentialResult, CredentialSource, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth,
+  QuotaSnapshot, RefreshOutcome, Result,
 };
 
 /// Singleton impl. Zero-sized; safe to hand out as `&'static`.
@@ -40,12 +40,23 @@ impl ProviderAuth for CopilotAuth {
     Some(crate::github_copilot::TOKEN_EXCHANGE_URL)
   }
 
-  async fn import_from(&self, source: &CredentialSource) -> Result<String> {
+  fn custom_credential_sources(&self) -> &'static [&'static str] {
+    &["gh", "copilot-plugin"]
+  }
+
+  async fn import_from(&self, source: &CredentialSource) -> Result<CredentialResult> {
     match source {
-      CredentialSource::Gh => crate::import::from_gh().map_err(AuthError::Other),
-      CredentialSource::CopilotPlugin => crate::import::from_copilot_plugin().map_err(AuthError::Other),
-      CredentialSource::RefreshToken { token } => Ok(token.clone()),
-      _ => Err(AuthError::Unsupported(format!(
+      CredentialSource::Custom { key: "gh", .. } => crate::import::from_gh()
+        .map(CredentialResult::Refresh)
+        .map_err(AuthError::Other),
+      CredentialSource::Custom { key: "copilot-plugin", .. } => crate::import::from_copilot_plugin()
+        .map(CredentialResult::Refresh)
+        .map_err(AuthError::Other),
+      CredentialSource::RefreshToken { token } => Ok(CredentialResult::Refresh(token.clone())),
+      CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
+        "github-copilot does not support custom credential source `{key}`"
+      ))),
+      CredentialSource::Env { .. } | CredentialSource::Login => Err(AuthError::Unsupported(format!(
         "github-copilot does not support credential source {:?}",
         source.kind()
       ))),

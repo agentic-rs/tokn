@@ -52,65 +52,82 @@ pub struct DeviceCodeHandle {
   pub interval: u64,
 }
 
-/// Credential acquisition strategies offered by `account add` and
-/// `account login`. Providers advertise which sources they accept via
-/// [`ProviderAuth::credential_sources`].
+/// Where the CLI is being told to fetch a credential from. This is the
+/// *location* (or method) only — the actual credential bytes (and
+/// whether they form an API key or a refresh token) come back as a
+/// [`CredentialResult`].
 ///
-/// Variants intentionally carry their inputs (refresh token, env var
-/// name) so the trait surface stays narrow: the CLI gathers the user
-/// input, packs it here, and the provider does the rest.
+/// `Custom { key, value }` is the escape hatch for provider-specific
+/// sources that don't fit the generic shape (e.g. Copilot's `gh` and
+/// `copilot-plugin` scrapers). The `key` is `&'static str` — providers
+/// advertise the legal set via [`ProviderAuth::custom_credential_sources`],
+/// and runtime-supplied source strings (e.g. from `--from <name>`) must
+/// be resolved against that list before constructing a `Custom` value.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialSource {
   /// Run the provider's interactive flow (device-flow OAuth or static-key
-  /// prompt).
+  /// prompt). Not dispatched through `import_from` — the CLI handles
+  /// it via [`ProviderAuth::request_device_code`] /
+  /// [`ProviderAuth::poll_device_code`] or the static-key prompt.
   Login,
-  /// Shell out to `gh auth token` (Copilot-only).
-  Gh,
-  /// Scrape `~/.config/github-copilot/{apps,hosts}.json` (Copilot-only).
-  CopilotPlugin,
-  /// Provide a long-lived refresh token directly (Copilot-only).
+  /// Caller already has a long-lived OAuth refresh token.
   RefreshToken { token: String },
-  /// Read a static API key from an environment variable (static-key
-  /// providers only).
+  /// Read a static API key from a named environment variable.
   Env { env_var: String },
+  /// Provider-defined source. `key` is the well-known identifier
+  /// (e.g. `"gh"`, `"copilot-plugin"`); `value` is an optional payload
+  /// the user typed at the prompt (most custom sources don't need one).
+  Custom { key: &'static str, value: Option<String> },
 }
 
 /// The "kind" of a [`CredentialSource`] without its payload. Used by
-/// providers to advertise capabilities up-front (e.g. when building the
-/// interactive picker), and by [`CredentialSource::kind`] for
-/// match-friendly comparisons.
+/// providers to advertise capabilities up-front.
+///
+/// `Custom` carries the well-known key string so the CLI can build the
+/// interactive picker and validate `--from <key>`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CredentialSourceKind {
   Login,
-  Gh,
-  CopilotPlugin,
   RefreshToken,
   Env,
+  Custom(&'static str),
 }
 
 impl CredentialSource {
   pub fn kind(&self) -> CredentialSourceKind {
     match self {
       Self::Login => CredentialSourceKind::Login,
-      Self::Gh => CredentialSourceKind::Gh,
-      Self::CopilotPlugin => CredentialSourceKind::CopilotPlugin,
       Self::RefreshToken { .. } => CredentialSourceKind::RefreshToken,
       Self::Env { .. } => CredentialSourceKind::Env,
+      Self::Custom { key, .. } => CredentialSourceKind::Custom(key),
     }
   }
 }
 
 impl CredentialSourceKind {
   /// Stable string identifier, matches the CLI's `--from` value.
+  /// `Custom("gh")` → `"gh"`.
   pub fn as_str(&self) -> &'static str {
     match self {
       Self::Login => "login",
-      Self::Gh => "gh",
-      Self::CopilotPlugin => "copilot-plugin",
       Self::RefreshToken => "refresh-token",
       Self::Env => "env",
+      Self::Custom(key) => key,
     }
   }
+}
+
+/// What the provider produced from a [`CredentialSource`]. The provider
+/// chooses the variant — the CLI dispatches on it to decide whether to
+/// build a refresh-token-shaped account (OAuth) or an api-key-shaped
+/// account (static).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CredentialResult {
+  /// Long-lived OAuth refresh token. The next refresh exchanges it for
+  /// a short-lived access token.
+  Refresh(String),
+  /// Static API key — used as-is on every request.
+  ApiKey(String),
 }
 
 /// Outcome of a refresh-credential call. For OAuth providers this is a
@@ -250,25 +267,39 @@ pub trait ProviderAuth: Send + Sync {
   /// uses this both to build its interactive picker and to validate
   /// `account import --from`.
   ///
-  /// Default impl derives the list from [`Self::supports_device_flow`]
-  /// and [`Self::supports_static_key`]:
+  /// Default impl derives the list from [`Self::supports_device_flow`],
+  /// [`Self::supports_static_key`], and [`Self::custom_credential_sources`]:
   ///   * always `Login`
-  ///   * OAuth providers also accept `Gh`, `CopilotPlugin`,
-  ///     `RefreshToken` (the "I already have a long-lived token" paths)
+  ///   * OAuth providers also accept `RefreshToken`
   ///   * static-key providers also accept `Env`
+  ///   * each entry from `custom_credential_sources()` becomes a
+  ///     `Custom(key)` variant
   ///
-  /// Providers can override for finer control.
+  /// Providers should override [`Self::custom_credential_sources`] for
+  /// the common case; only override this method if the standard
+  /// `Login`/`RefreshToken`/`Env` shape doesn't apply.
   fn credential_sources(&self) -> Vec<CredentialSourceKind> {
     let mut out = vec![CredentialSourceKind::Login];
     if self.supports_device_flow() {
-      out.push(CredentialSourceKind::Gh);
-      out.push(CredentialSourceKind::CopilotPlugin);
       out.push(CredentialSourceKind::RefreshToken);
     }
     if self.supports_static_key() {
       out.push(CredentialSourceKind::Env);
     }
+    for key in self.custom_credential_sources() {
+      out.push(CredentialSourceKind::Custom(key));
+    }
     out
+  }
+
+  /// Provider-specific [`CredentialSource::Custom`] keys this provider
+  /// recognises. The CLI uses this list both for the interactive picker
+  /// and for `--from <key>` validation.
+  ///
+  /// Example: github-copilot returns `&["gh", "copilot-plugin"]`.
+  /// Default: empty.
+  fn custom_credential_sources(&self) -> &'static [&'static str] {
+    &[]
   }
 
   /// True if a [`CredentialSource`] is supported by this provider.
@@ -278,22 +309,42 @@ pub trait ProviderAuth: Send + Sync {
     self.credential_sources().contains(&src.kind())
   }
 
-  /// Acquire a long-lived credential from the named source. The CLI
-  /// has already gathered any user input (env-var name, raw refresh
-  /// token, …) and packed it into [`CredentialSource`]; this method
-  /// turns that into the actual token bytes.
+  /// Acquire a credential from the named source. The CLI has already
+  /// gathered any user input (env-var name, raw refresh token, …) and
+  /// packed it into [`CredentialSource`]; this method turns that into
+  /// the actual credential bytes plus its shape (refresh token vs API
+  /// key) via [`CredentialResult`].
   ///
-  /// Default impl handles `RefreshToken` (passthrough) and returns
-  /// [`AuthError::Unsupported`] for everything else. Providers override
-  /// to add `Gh` / `CopilotPlugin` / `Env` support.
-  ///
-  /// `Login` is *not* dispatched here — it goes through
-  /// [`Self::request_device_code`]/[`Self::poll_device_code`] (OAuth) or
-  /// the CLI's static-key prompt (static-key).
-  async fn import_from(&self, source: &CredentialSource) -> Result<String> {
+  /// Default impl handles the generic variants:
+  ///   * `RefreshToken { token }` → `CredentialResult::Refresh(token)`
+  ///   * `Env { env_var }` → reads the env var, returns
+  ///     `CredentialResult::ApiKey(value)`
+  ///   * `Custom { .. }` → [`AuthError::Unsupported`] (override to handle)
+  ///   * `Login` → unreachable (the CLI dispatches it via
+  ///     `request_device_code` / `poll_device_code` or the static-key
+  ///     prompt, never through `import_from`)
+  async fn import_from(&self, source: &CredentialSource) -> Result<CredentialResult> {
     match source {
-      CredentialSource::RefreshToken { token } => Ok(token.clone()),
-      _ => Err(AuthError::Unsupported(self.id().to_string())),
+      CredentialSource::RefreshToken { token } => Ok(CredentialResult::Refresh(token.clone())),
+      CredentialSource::Env { env_var } => {
+        let value = std::env::var(env_var).map_err(|_| {
+          AuthError::Other(format!("environment variable `{env_var}` is not set"))
+        })?;
+        let trimmed = value.trim().to_string();
+        if trimmed.is_empty() {
+          return Err(AuthError::Other(format!(
+            "environment variable `{env_var}` is empty"
+          )));
+        }
+        Ok(CredentialResult::ApiKey(trimmed))
+      }
+      CredentialSource::Custom { key, .. } => Err(AuthError::Unsupported(format!(
+        "{} does not support custom credential source `{key}`",
+        self.id()
+      ))),
+      CredentialSource::Login => Err(AuthError::Unsupported(
+        "Login is dispatched via request_device_code / poll_device_code".into(),
+      )),
     }
   }
 
