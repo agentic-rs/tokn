@@ -112,14 +112,15 @@ pub(super) async fn proxy_passthrough(
 
   let body_meta = request_body_extract(&parts.headers, &req_body_json);
   let ctx = ForwardContext::from_passthrough(&parts.method, path, &hx, &body_meta, parts.headers.clone(), started);
+  let identity = state.identity.resolve(&parts.headers, &url, &state.provider_registry);
   let mut completion =
     crate::pipeline::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
   let stream = body_meta.stream;
   state.events.emit(llm_core::event::Event::RequestParsed {
     request_id: request_id.clone(),
     attempt: ctx.attempt,
-    account_id: "passthrough".to_string(),
-    provider_id: state.provider_registry.provider_id_for_url(&url).unwrap_or(host).to_string(),
+    account_id: identity.account_id.unwrap_or_else(|| "<unknown>".to_string()),
+    provider_id: identity.provider_id.unwrap_or_else(|| host.to_string()),
     model: body_meta.model.clone(),
     stream,
     initiator: body_meta.initiator,

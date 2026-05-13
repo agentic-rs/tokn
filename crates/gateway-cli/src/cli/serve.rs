@@ -38,8 +38,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let addr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
-  let credential_index = crate::db::CredentialAccountIndex::from_accounts(&accounts);
-  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg, credential_index)?;
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let server_mode = cfg.server.route_mode;
   let proxy_mode = args

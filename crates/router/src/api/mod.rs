@@ -1,11 +1,13 @@
 pub mod codec;
 pub mod endpoints;
 pub mod error;
+pub mod identity;
 pub mod models;
 pub mod routing;
 
 use crate::accounts::AccountPool;
 use crate::accounts::registry::Registry as ProviderRegistry;
+use crate::api::identity::AccountIdentityResolver;
 use crate::api::routing::RouteResolver;
 use anyhow::Result;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
@@ -27,6 +29,7 @@ use tracing::{Level, Span};
 pub struct AppState {
   pub pool: Arc<AccountPool>,
   pub provider_registry: Arc<ProviderRegistry>,
+  pub identity: Arc<AccountIdentityResolver>,
   pub route: Arc<RouteResolver>,
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
@@ -213,6 +216,7 @@ pub fn build_state(
 ) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
+  let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
   } else {
@@ -225,6 +229,7 @@ pub fn build_state(
   Ok(AppState {
     pool,
     provider_registry,
+    identity,
     route,
     http,
     events,
