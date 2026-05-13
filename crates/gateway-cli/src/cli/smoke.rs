@@ -60,6 +60,10 @@ pub struct SmokeArgs {
   #[arg(long)]
   pub stream: bool,
 
+  /// Build and print outbound headers/body without sending the request.
+  #[arg(long)]
+  pub dry_run: bool,
+
   /// Output format.
   #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
   pub format: OutputFormat,
@@ -182,6 +186,30 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   };
   let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
   let headers = build_headers(&args.headers)?;
+
+  if args.dry_run {
+    let dry_endpoint = match endpoint {
+      Endpoint::ChatCompletions => llm_router::pipeline::DryRunEndpoint::ChatCompletions,
+      Endpoint::Responses => llm_router::pipeline::DryRunEndpoint::Responses,
+      Endpoint::Messages => llm_router::pipeline::DryRunEndpoint::Messages,
+    };
+    let dry = llm_router::pipeline::dry_run_request(
+      &state,
+      dry_endpoint,
+      headers.clone(),
+      body_value.clone(),
+      body_bytes.clone(),
+      body_bytes.clone(),
+      None,
+    )
+    .map_err(|e| anyhow!("dry-run failed: {e}"))?;
+    print_dry_run(&dry, args.format)?;
+    events.shutdown().await;
+    if let Some(archive_runtime) = archive_runtime {
+      archive_runtime.shutdown().await;
+    }
+    return Ok(());
+  }
 
   // Invoke the public axum handler directly. This goes through the same
   // pipeline used for real HTTP requests, so all events fire (DB rows are
@@ -414,4 +442,59 @@ fn print_json_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -
   let output = serde_json::to_string_pretty(&json)?;
   println!("{output}");
   Ok(())
+}
+
+fn print_dry_run(dry: &llm_router::pipeline::DryRunOutput, format: OutputFormat) -> Result<()> {
+  let headers = headers_json(&dry.headers);
+  let body_json: serde_json::Value = serde_json::from_slice(dry.body.as_ref())
+    .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(dry.body.as_ref()).into_owned()));
+  match format {
+    OutputFormat::Json => {
+      println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+          "dry_run": true,
+          "account": dry.account_id,
+          "provider": dry.provider_id,
+          "model": dry.model,
+          "endpoint": dry.endpoint.to_string(),
+          "headers": headers,
+          "body": body_json,
+        }))?
+      );
+    }
+    OutputFormat::Text => {
+      println!("dry-run: true");
+      println!("account: {}", dry.account_id);
+      println!("provider: {}", dry.provider_id);
+      println!("model: {}", dry.model);
+      println!("endpoint: {}", dry.endpoint);
+      println!("headers:");
+      for (name, value) in headers.as_object().into_iter().flat_map(|m| m.iter()) {
+        println!("  {name}: {}", value.as_str().unwrap_or(""));
+      }
+      println!("body:");
+      println!("{}", serde_json::to_string_pretty(&body_json)?);
+    }
+  }
+  Ok(())
+}
+
+fn headers_json(headers: &HeaderMap) -> serde_json::Value {
+  let mut map = serde_json::Map::new();
+  for (name, value) in headers {
+    let value = value.to_str().unwrap_or("<non-utf8>");
+    map.insert(
+      name.as_str().to_string(),
+      serde_json::Value::String(redact_header(name.as_str(), value)),
+    );
+  }
+  serde_json::Value::Object(map)
+}
+
+fn redact_header(name: &str, value: &str) -> String {
+  match name.to_ascii_lowercase().as_str() {
+    "authorization" | "proxy-authorization" | "cookie" | "set-cookie" | "x-api-key" => "<redacted>".into(),
+    _ => value.to_string(),
+  }
 }

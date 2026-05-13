@@ -142,6 +142,7 @@ pub struct RequestCtx<'a> {
   pub initiator: &'a str,
   pub inbound_headers: &'a HeaderMap,
   pub behave_as: Option<&'a str>,
+  pub profile_headers: Option<HeaderMap>,
   pub outbound: Option<OutboundCapture>,
 }
 
@@ -177,6 +178,7 @@ pub fn new_outbound_capture() -> OutboundCapture {
 pub struct HeaderPatchCtx<'a> {
   pub endpoint: Endpoint,
   pub body: &'a Value,
+  pub bearer_token: Option<&'a str>,
   pub content_encoding: Option<&'a str>,
   pub stream: bool,
   pub initiator: &'a str,

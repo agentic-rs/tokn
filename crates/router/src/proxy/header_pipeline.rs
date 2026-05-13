@@ -1,4 +1,4 @@
-use llm_config::profiles::{is_router_controlled, normalize_header_name, Profiles, TemplateVars};
+use llm_config::profiles::{is_router_controlled, normalize_header_name, warn_if_unverified, Profiles, TemplateVars};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 #[derive(Debug, Clone)]
@@ -19,6 +19,7 @@ pub struct HeaderPipelineOutput {
 
 pub fn build_headers(input: HeaderPipelineInput<'_>) -> Option<HeaderPipelineOutput> {
   let resolved = input.profiles.resolve(input.persona, input.provider_id)?;
+  warn_if_unverified(input.persona, input.provider_id, &resolved);
   let vars = parse_inbound_vars(input.inbound);
   let mut headers = HeaderMap::new();
 

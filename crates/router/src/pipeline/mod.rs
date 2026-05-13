@@ -1,6 +1,6 @@
 pub(crate) mod completion;
 pub(crate) mod parse;
-mod request;
+pub(crate) mod request;
 mod transformer;
 
 pub(crate) use parse::{
@@ -20,6 +20,8 @@ use llm_core::event::Event;
 use llm_core::pipeline::ParsedRequest;
 use llm_core::pipeline::{OutputTransformer, RequestResolver, RequestSender};
 use request::{prepare_request, PoolResolver, PreparedRequest, ProviderSender};
+
+pub use request::{dry_run_request, DryRunEndpoint, DryRunOutput};
 use std::time::Instant;
 use tracing::{debug, info_span, warn, Instrument};
 use transformer::{EndpointOutputTransformer, UpstreamResponse};
@@ -560,6 +562,59 @@ mod tests {
         .and_then(|v| v.as_str()),
       Some("enabled")
     );
+  }
+
+  #[test]
+  fn prepare_request_builds_profile_headers_from_inbound_templates() {
+    let cfg = Config::default();
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let account = state.pool.all()[0].clone();
+    let route = state.route.resolve("glm-4.6", None).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-session-affinity", HeaderValue::from_static("ses_test"));
+    headers.insert("x-initiator", HeaderValue::from_static("agent"));
+    headers.insert("authorization", HeaderValue::from_static("Bearer inbound"));
+    let req = ResolvedRequest {
+      meta: RequestMeta {
+        endpoint: Endpoint::ChatCompletions,
+        upstream_endpoint: Endpoint::ChatCompletions,
+        model: "glm-4.6".into(),
+        upstream_model: "glm-4.6".into(),
+        stream: false,
+        session_id: Some("ses_test".into()),
+        request_id: Some("request-1".into()),
+        attempt: 0,
+        project_id: None,
+        initiator: "agent".into(),
+        header_initiator: Some("agent".into()),
+        behave_as: Some("opencode".into()),
+        inbound_headers: headers,
+      },
+      body: json!({
+        "model": "glm-4.6",
+        "messages": [{"role": "user", "content": "hi"}]
+      }),
+      raw_body: Bytes::new(),
+      decoded_body: Bytes::new(),
+      content_encoding: None,
+      route,
+      account,
+    };
+
+    let prepared = prepare_request(req).unwrap();
+    let h = prepared.profile_headers.expect("profile headers");
+
+    assert_eq!(
+      h.get("x-session-affinity").and_then(|v| v.to_str().ok()),
+      Some("ses_test")
+    );
+    assert_eq!(h.get("x-initiator").and_then(|v| v.to_str().ok()), Some("agent"));
+    assert_eq!(
+      h.get("user-agent").and_then(|v| v.to_str().ok()),
+      Some("opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
+    );
+    assert!(h.get("authorization").is_none());
   }
 
   #[test]

@@ -9,14 +9,14 @@ use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::{InputTransformer, RequestMeta};
 use parking_lot::RwLock;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, instrument};
 
-use crate::{error, AuthKind, Endpoint, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
+use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -131,24 +131,6 @@ impl CopilotProvider {
     g.expires_at = None;
   }
 
-  /// Apply an inbound `X-Behave-As` persona override on top of the
-  /// account-resolved headers. The user-explicit fields stored on
-  /// `self.headers` continue to win — the inbound override only fills the
-  /// fields that the user did not pin in config.
-  fn headers_for_request(&self, inbound_persona: Option<&str>) -> CopilotHeaders {
-    let Some(persona) = inbound_persona else {
-      return self.headers.clone();
-    };
-    if Some(persona) == self.headers.behave_as.as_deref() {
-      return self.headers.clone();
-    }
-    warn!(
-      persona,
-      "inbound X-Behave-As persona override requires router-level profile resolution; using account headers"
-    );
-    self.headers.clone()
-  }
-
   /// Resolve the X-Initiator value to send.
   /// Precedence: inbound `X-Initiator` header > config mode > auto-classify.
   fn resolve_initiator(&self, body: &Value, inbound: &HeaderMap, fallback: &str) -> String {
@@ -211,6 +193,45 @@ impl Provider for CopilotProvider {
         m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
       }
     }
+  }
+
+  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    let token = ctx.bearer_token.ok_or_else(|| error::Error::Profiles {
+      message: "missing copilot bearer token for header patch".to_string(),
+    })?;
+    headers.insert(
+      AUTHORIZATION,
+      HeaderValue::from_str(&format!("Bearer {token}")).map_err(|source| error::Error::HeaderValue {
+        name: "authorization".into(),
+        source,
+      })?,
+    );
+    headers.insert(
+      ACCEPT,
+      HeaderValue::from_static(if ctx.stream {
+        "text/event-stream"
+      } else {
+        "application/json"
+      }),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(
+      reqwest::header::HeaderName::from_static("x-initiator"),
+      HeaderValue::from_str(ctx.initiator).map_err(|source| error::Error::HeaderValue {
+        name: "x-initiator".into(),
+        source,
+      })?,
+    );
+    if let Some(encoding) = ctx.content_encoding {
+      headers.insert(
+        CONTENT_ENCODING,
+        HeaderValue::from_str(encoding).map_err(|source| error::Error::HeaderValue {
+          name: "content-encoding".into(),
+          source,
+        })?,
+      );
+    }
+    Ok(())
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
@@ -296,17 +317,21 @@ impl CopilotProvider {
       _ => self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator),
     };
     tracing::Span::current().record("initiator", initiator.as_str());
-    let headers = self.headers_for_request(ctx.behave_as);
-    let mut h = headers::copilot_request_headers(token.expose(), &headers, ctx.stream, &initiator)?;
-    h.insert(
-      reqwest::header::CONTENT_TYPE,
-      reqwest::header::HeaderValue::from_static("application/json"),
-    );
-    if let Some(encoding) = ctx.content_encoding {
-      if let Ok(value) = reqwest::header::HeaderValue::from_str(encoding) {
-        h.insert(reqwest::header::CONTENT_ENCODING, value);
-      }
-    }
+    let mut h = ctx.profile_headers.clone().unwrap_or_else(|| {
+      headers::copilot_request_headers(token.expose(), &self.headers, ctx.stream, &initiator).unwrap_or_default()
+    });
+    self.patch_headers(
+      &mut h,
+      &HeaderPatchCtx {
+        endpoint: ctx.endpoint,
+        body: ctx.body,
+        bearer_token: Some(token.expose()),
+        content_encoding: ctx.content_encoding,
+        stream: ctx.stream,
+        initiator: &initiator,
+        inbound_headers: ctx.inbound_headers,
+      },
+    )?;
     let url = format!("{COPILOT_API}{path}");
     debug!(%url, "POST upstream");
     let body_bytes = ctx.request_body_bytes();

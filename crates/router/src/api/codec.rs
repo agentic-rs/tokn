@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::io::{Read, Write};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ContentEncodingKind {
+pub enum ContentEncodingKind {
   Gzip,
   Zstd,
 }

@@ -26,7 +26,7 @@ use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
+use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -148,6 +148,32 @@ impl Provider for ZaiProvider {
     self.info.default_models.iter().find(|m| m.id == model)
   }
 
+  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    headers.insert(
+      AUTHORIZATION,
+      HeaderValue::from_str(&format!("Bearer {}", self.api_key.expose()))
+        .context(error::HeaderValueSnafu { name: "authorization" })?,
+    );
+    headers.insert(
+      ACCEPT,
+      HeaderValue::from_static(if ctx.stream {
+        "text/event-stream"
+      } else {
+        "application/json"
+      }),
+    );
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if let Some(encoding) = ctx.content_encoding {
+      headers.insert(
+        reqwest::header::CONTENT_ENCODING,
+        HeaderValue::from_str(encoding).context(error::HeaderValueSnafu {
+          name: "content-encoding",
+        })?,
+      );
+    }
+    Ok(())
+  }
+
   #[instrument(
     name = "zai_list_models",
     skip_all,
@@ -204,12 +230,19 @@ impl Provider for ZaiProvider {
 
     let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
     debug!(%url, "POST zai chat");
-    let mut headers = self.auth_headers(ctx.stream)?;
-    if let Some(encoding) = ctx.content_encoding {
-      if let Ok(value) = reqwest::header::HeaderValue::from_str(encoding) {
-        headers.insert(reqwest::header::CONTENT_ENCODING, value);
-      }
-    }
+    let mut headers = ctx.profile_headers.clone().unwrap_or_else(HeaderMap::new);
+    self.patch_headers(
+      &mut headers,
+      &HeaderPatchCtx {
+        endpoint: ctx.endpoint,
+        body: ctx.body,
+        bearer_token: None,
+        content_encoding: ctx.content_encoding,
+        stream: ctx.stream,
+        initiator: ctx.initiator,
+        inbound_headers: ctx.inbound_headers,
+      },
+    )?;
     let body_bytes = ctx.request_body_bytes();
     let resp = crate::util::http::send(
       ctx.http,
@@ -400,6 +433,7 @@ mod tests {
       initiator: "user",
       inbound_headers: &inbound,
       behave_as: None,
+      profile_headers: None,
       outbound: Some(capture.clone()),
     };
     let resp = provider.chat(ctx).await.unwrap();

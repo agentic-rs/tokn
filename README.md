@@ -213,29 +213,45 @@ auth kind, and (when known) static capabilities/cost/limit metadata.
 
 ### Personas (`behave_as`)
 
-Profiles live in an embedded `profiles.toml`; you can extend or override them
-with `~/.config/llm-router/profiles.toml` (`llm-router config edit-profiles`).
-Schema:
+Profiles live in an embedded `profiles.toml`; extend or override them with
+`~/.config/llm-router/profiles.toml` (`llm-router config edit-profiles`). A
+persona describes client identity headers plus which inbound headers may be
+forwarded.
 
 ```toml
-[<persona>.<scope>]
-verified = true|false       # if false, llm-router warns on use
-editor-version         = "..."   # wire-form (kebab-case) header names
-editor-plugin-version  = "..."
-user-agent             = "..."
-copilot-integration-id = "..."
-openai-intent          = "..."
+[opencode]
+verified = true
+forward = ["x-initiator", "x-session-affinity"]
+deny = ["cookie"]
+
+[opencode.default]
+user-agent = "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+x-session-affinity = "<session_id>"
+
+[opencode.github-copilot]
+openai-intent = "conversation-edits"
 ```
 
-`<scope>` is `default` (always merged), an upstream id like `github-copilot`
-(merged when sending to that upstream), or `general` (fallback when no
-upstream-specific scope matches).
+`<scope>` is `default` (always merged), a provider id like `github-copilot`
+(merged when sending to that provider), or `general` (fallback when no
+provider-specific scope matches). `forward` is a case-insensitive allow-list of
+inbound headers; `deny` is applied after `forward`. Router-controlled headers
+(`authorization`, `content-type`, `accept`, `host`, `content-length`, etc.) are
+always ignored in profiles and set by provider code.
 
-Built-in personas: `copilot` (verified), `opencode`, `codex`, `openclaw`
-(placeholders — PRs welcome with verified header values).
+Template values are rendered from static environment values (`<os>`, `<arch>`,
+`<os-pretty>`, `<hostname>`, `<llm-router-version>`) and inbound-only request
+values (`<session_id>`, `<request_id>`, `<project_cwd>`, `<interaction_id>`,
+`<account_id>`). If an inbound-only value is missing, that header is omitted;
+llm-router does not synthesize those ids.
+
+Built-in personas: `copilot`, `opencode`, `codex`, `copilot-cli`, and
+`openclaw`.
 
 Set an account persona with `settings.behave_as` under that account. The
-downstream client may also send `X-Behave-As: <persona>` per request.
+downstream client may also send `X-Behave-As: <persona>` per request, which
+overrides the account setting. Use `llm-router smoke --dry-run` to inspect the
+rendered outbound headers and body without sending the request.
 
 ## License
 
