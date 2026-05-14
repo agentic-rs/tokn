@@ -193,7 +193,7 @@ impl ProviderAuth for CodexAuth {
   }
 
   fn default_base_url(&self) -> Option<&'static str> {
-    Some(crate::openai::CODEX_BASE_URL)
+    Some(crate::codex::CODEX_BASE_URL)
   }
 
   fn default_refresh_url(&self) -> Option<&'static str> {
@@ -298,7 +298,7 @@ impl ProviderAuth for CodexAuth {
     let base = account
       .base_url
       .clone()
-      .unwrap_or_else(|| crate::openai::CODEX_BASE_URL.to_string());
+      .unwrap_or_else(|| crate::codex::CODEX_BASE_URL.to_string());
     let url = format!("{}/responses", base.trim_end_matches('/'));
     let mut req = client
       .post(url)

@@ -1,6 +1,8 @@
 pub mod auth;
 pub mod auth_codex;
 pub mod auth_openai;
+pub mod codex;
+mod common;
 pub mod jwt;
 pub mod openai;
 
@@ -11,11 +13,11 @@ pub use llm_core::provider::{
 };
 pub use llm_core::{account as config, provider, util};
 
-pub use openai::*;
+pub use codex::CodexProvider;
+pub use openai::OpenAiProvider;
 
 use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use llm_auth::provider::CredentialFlavor;
-use std::sync::Arc;
 
 pub const CODEX_DEVICE_USERCODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 pub const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
@@ -50,8 +52,8 @@ pub static DESCRIPTOR_OPENAI: ProviderDescriptor = ProviderDescriptor {
   rewrites: &[],
   auth_urls: &[],
   matches_url,
-  validate,
-  build,
+  validate: openai::validate,
+  build: openai::build,
   build_auth: Some(crate::auth::openai_auth),
 };
 
@@ -59,7 +61,7 @@ pub static DESCRIPTOR_CODEX: ProviderDescriptor = ProviderDescriptor {
   id: ID_CODEX,
   display_name: "ChatGPT (Codex)",
   hosts: &["chatgpt.com"],
-  base_url: openai::CODEX_BASE_URL,
+  base_url: codex::CODEX_BASE_URL,
   credentials: &[CredentialFlavor::RefreshToken, CredentialFlavor::ApiKey],
   endpoints: &[EndpointSpec {
     endpoint: Endpoint::Responses,
@@ -77,8 +79,8 @@ pub static DESCRIPTOR_CODEX: ProviderDescriptor = ProviderDescriptor {
     ("device_redirect", CODEX_DEVICE_REDIRECT_URL),
   ],
   matches_url,
-  validate,
-  build,
+  validate: codex::validate,
+  build: codex::build,
   build_auth: Some(crate::auth::codex_auth),
 };
 
@@ -88,14 +90,4 @@ pub fn matches_url(host: &str, path: &str, id: &'static str) -> bool {
     ("chatgpt.com", ID_CODEX) => path.starts_with("/backend-api/codex"),
     _ => false,
   }
-}
-
-pub fn validate(account: &llm_core::account::AccountConfig) -> llm_core::provider::Result<()> {
-  openai::OpenAiProvider::validate_account(account)
-}
-
-pub fn build(
-  account: Arc<llm_core::account::AccountConfig>,
-) -> llm_core::provider::Result<Arc<dyn llm_core::provider::Provider>> {
-  Ok(Arc::new(openai::OpenAiProvider::from_account(account)?))
 }
