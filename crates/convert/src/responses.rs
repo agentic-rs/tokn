@@ -17,6 +17,7 @@ const REQUEST_KEYS: &[&str] = &[
   "stop",
   "stream",
   "reasoning",
+  "store",
   "metadata",
 ];
 
@@ -95,6 +96,10 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   if let Some(v) = &req.reasoning {
     out.insert("reasoning".into(), v.clone());
   }
+  out.insert(
+    "store".into(),
+    req.extras.get("store").cloned().unwrap_or(Value::Bool(false)),
+  );
   if req.stream {
     out.insert("stream".into(), Value::Bool(true));
   }
@@ -383,5 +388,30 @@ mod tests {
     assert_eq!(req.messages.len(), 2);
     assert_eq!(req.messages[0].role, Role::User);
     assert_eq!(req.messages[1].role, Role::Assistant);
+  }
+
+  #[test]
+  fn request_to_value_defaults_store_to_false() {
+    let req = IrRequest {
+      model: "deepseek-v4-flash".into(),
+      system: Some("sys".into()),
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body.get("store"), Some(&Value::Bool(false)));
   }
 }
