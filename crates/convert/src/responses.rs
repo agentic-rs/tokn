@@ -30,10 +30,17 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     .unwrap_or("unknown")
     .to_string();
   let input = obj.get("input").ok_or(ConvertError::MissingField { field: "input" })?;
-  let messages = input_to_messages(input)?;
+  let (instruction_parts, messages) = input_to_messages(input)?;
+  let mut system_parts = Vec::new();
+  if let Some(instructions) = obj.get("instructions").and_then(Value::as_str) {
+    if !instructions.is_empty() {
+      system_parts.push(instructions.to_string());
+    }
+  }
+  system_parts.extend(instruction_parts);
   Ok(IrRequest {
     model,
-    system: obj.get("instructions").and_then(Value::as_str).map(str::to_string),
+    system: (!system_parts.is_empty()).then(|| system_parts.join("\n\n")),
     messages,
     tools: super::tools::normalise_tools(
       obj
@@ -277,20 +284,37 @@ pub fn events_from_deltas(resp_id: &str, model: &str, deltas: &[IrDelta], finish
   events
 }
 
-fn input_to_messages(input: &Value) -> Result<Vec<IrMessage>> {
+fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
   if let Some(s) = input.as_str() {
-    return Ok(vec![IrMessage {
-      role: Role::User,
-      content: vec![ContentPart::Text { text: s.to_string() }],
-      tool_call_id: None,
-      name: None,
-      raw: None,
-    }]);
+    return Ok((
+      Vec::new(),
+      vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: s.to_string() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+    ));
   }
   let arr = input
     .as_array()
     .ok_or_else(|| ConvertError::bad_shape("input", "expected string or array"))?;
-  arr.iter().map(input_item_to_message).collect()
+  let mut system_parts = Vec::new();
+  let mut messages = Vec::new();
+  for item in arr {
+    let message = input_item_to_message(item)?;
+    let role = item.get("role").and_then(Value::as_str).unwrap_or("user");
+    if matches!(role, "system" | "developer") {
+      let text = text_from_parts(&message.content);
+      if !text.is_empty() {
+        system_parts.push(text);
+      }
+    } else {
+      messages.push(message);
+    }
+  }
+  Ok((system_parts, messages))
 }
 
 fn input_item_to_message(item: &Value) -> Result<IrMessage> {
@@ -330,4 +354,34 @@ fn message_to_responses_input(msg: &IrMessage) -> Value {
     })
     .collect();
   json!({ "role": msg.role.as_str(), "content": parts })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  #[test]
+  fn request_from_value_merges_system_and_developer_items_into_system_prompt() {
+    let body = json!({
+      "model": "deepseek-v4-flash",
+      "instructions": "top instructions",
+      "input": [
+        { "role": "developer", "content": [{ "type": "input_text", "text": "dev first" }] },
+        { "role": "user", "content": [{ "type": "input_text", "text": "hello" }] },
+        { "role": "developer", "content": [{ "type": "input_text", "text": "dev middle" }] },
+        { "role": "assistant", "content": [{ "type": "output_text", "text": "hi" }] }
+      ]
+    });
+
+    let req = request_from_value(&body).expect("request should parse");
+
+    assert_eq!(
+      req.system.as_deref(),
+      Some("top instructions\n\ndev first\n\ndev middle")
+    );
+    assert_eq!(req.messages.len(), 2);
+    assert_eq!(req.messages[0].role, Role::User);
+    assert_eq!(req.messages[1].role, Role::Assistant);
+  }
 }
