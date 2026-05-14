@@ -1,5 +1,5 @@
 use super::super::error::{ConvertError, Result};
-use super::super::ir::{IrDelta, IrResponse};
+use super::super::ir::{IrDelta, IrResponse, Usage};
 use super::event::SseEvent;
 use crate::provider::Endpoint;
 use eventsource_stream::Eventsource;
@@ -9,13 +9,28 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 struct ResponsesState {
+  response_id: Option<String>,
+  model: Option<String>,
   output_items: BTreeMap<usize, ResponseOutputItem>,
 }
 
 #[derive(Default)]
 struct ResponseOutputItem {
+  item_type: Option<String>,
   id: Option<String>,
+  call_id: Option<String>,
   name: Option<String>,
+  status: Option<String>,
+  text: String,
+  reasoning_summary: BTreeMap<usize, String>,
+  reasoning_content: BTreeMap<usize, String>,
+  arguments: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SseMetadata {
+  pub response_id: Option<String>,
+  pub model: Option<String>,
 }
 
 pub struct SseAccumulator {
@@ -49,14 +64,24 @@ impl SseAccumulator {
     self.response
   }
 
+  pub fn metadata(&self) -> SseMetadata {
+    SseMetadata {
+      response_id: self.responses.response_id.clone(),
+      model: self.responses.model.clone(),
+    }
+  }
+
   fn delta_from_responses_event(&mut self, value: &Value) -> Vec<IrDelta> {
+    self.observe_responses_response(value);
     self.observe_responses_output_item(value);
+    self.observe_responses_part(value);
     let mut deltas = crate::responses::delta_from_responses_event(value);
+    self.observe_responses_deltas(value, &deltas);
     for delta in &mut deltas {
       if let IrDelta::ToolCall { index, id, name, .. } = delta {
         if let Some(item) = self.responses.output_items.get(index) {
           if id.is_none() {
-            *id = item.id.clone();
+            *id = item.call_id.clone().or_else(|| item.id.clone());
           }
           if name.is_none() {
             *name = item.name.clone();
@@ -65,6 +90,31 @@ impl SseAccumulator {
       }
     }
     deltas
+  }
+
+  fn observe_responses_response(&mut self, value: &Value) {
+    let Some(response) = value.get("response") else {
+      return;
+    };
+    if self.responses.response_id.is_none() {
+      self.responses.response_id = response.get("id").and_then(Value::as_str).map(str::to_string);
+    }
+    if self.responses.model.is_none() {
+      self.responses.model = response.get("model").and_then(Value::as_str).map(str::to_string);
+    }
+    if let Some(usage) = response.get("usage") {
+      self.response.usage = Some(Usage {
+        input_tokens: usage
+          .get("input_tokens")
+          .or_else(|| usage.get("prompt_tokens"))
+          .and_then(Value::as_u64),
+        output_tokens: usage
+          .get("output_tokens")
+          .or_else(|| usage.get("completion_tokens"))
+          .and_then(Value::as_u64),
+        total_tokens: usage.get("total_tokens").and_then(Value::as_u64),
+      });
+    }
   }
 
   fn observe_responses_output_item(&mut self, value: &Value) {
@@ -78,23 +128,90 @@ impl SseAccumulator {
     let Some(item) = value.get("item") else {
       return;
     };
-    if !matches!(
-      item.get("type").and_then(Value::as_str),
-      Some("function_call" | "custom_tool_call")
-    ) {
-      return;
-    }
     let entry = self.responses.output_items.entry(index).or_default();
+    if entry.item_type.is_none() {
+      entry.item_type = item.get("type").and_then(Value::as_str).map(str::to_string);
+    }
+    if entry.status.is_none() {
+      entry.status = item.get("status").and_then(Value::as_str).map(str::to_string);
+    }
     if entry.id.is_none() {
-      entry.id = item
-        .get("call_id")
-        .or_else(|| item.get("id"))
-        .or_else(|| value.get("item_id"))
-        .and_then(Value::as_str)
-        .map(str::to_string);
+      entry.id = item.get("id").or_else(|| value.get("item_id")).and_then(Value::as_str).map(str::to_string);
+    }
+    if entry.call_id.is_none() {
+      entry.call_id = item.get("call_id").and_then(Value::as_str).map(str::to_string);
     }
     if entry.name.is_none() {
       entry.name = item.get("name").and_then(Value::as_str).map(str::to_string);
+    }
+    if let Some(arguments) = item.get("arguments").or_else(|| item.get("input")).and_then(Value::as_str) {
+      entry.arguments = arguments.to_string();
+    }
+  }
+
+  fn observe_responses_part(&mut self, value: &Value) {
+    let Some(index) = value.get("output_index").and_then(Value::as_u64).map(|v| v as usize) else {
+      return;
+    };
+    let Some(entry) = self.responses.output_items.get_mut(&index) else {
+      return;
+    };
+    match value.get("type").and_then(Value::as_str) {
+      Some("response.output_text.done") => {
+        if let Some(text) = value.get("text").and_then(Value::as_str) {
+          entry.text = text.to_string();
+        }
+      }
+      Some("response.reasoning_summary_text.done") => {
+        if let (Some(summary_index), Some(text)) = (
+          value.get("summary_index").and_then(Value::as_u64).map(|v| v as usize),
+          value.get("text").and_then(Value::as_str),
+        ) {
+          entry.reasoning_summary.insert(summary_index, text.to_string());
+        }
+      }
+      Some("response.function_call_arguments.done") | Some("response.custom_tool_call_input.done") => {
+        if let Some(arguments) = value
+          .get("arguments")
+          .or_else(|| value.get("input"))
+          .and_then(Value::as_str)
+        {
+          entry.arguments = arguments.to_string();
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn observe_responses_deltas(&mut self, value: &Value, deltas: &[IrDelta]) {
+    let Some(index) = value.get("output_index").and_then(Value::as_u64).map(|v| v as usize) else {
+      return;
+    };
+    let entry = self.responses.output_items.entry(index).or_default();
+    for delta in deltas {
+      match delta {
+        IrDelta::Text(text) => entry.text.push_str(text),
+        IrDelta::Reasoning(text) => {
+          let target = match value.get("type").and_then(Value::as_str) {
+            Some("response.reasoning_summary_text.delta") => value
+              .get("summary_index")
+              .and_then(Value::as_u64)
+              .map(|v| v as usize)
+              .map(|i| entry.reasoning_summary.entry(i).or_default()),
+            Some("response.reasoning_text.delta") => value
+              .get("content_index")
+              .and_then(Value::as_u64)
+              .map(|v| v as usize)
+              .map(|i| entry.reasoning_content.entry(i).or_default()),
+            _ => None,
+          };
+          if let Some(buf) = target {
+            buf.push_str(text);
+          }
+        }
+        IrDelta::ToolCall { arguments_delta, .. } => entry.arguments.push_str(arguments_delta),
+        _ => {}
+      }
     }
   }
 }

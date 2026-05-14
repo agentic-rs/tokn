@@ -29,10 +29,12 @@ impl EventTransformer for EndpointTranslator {
       .as_ref()
       .ok_or_else(|| ConvertError::sse("expected JSON SSE payload"))?;
     let deltas = self.acc.push_value(value);
+    self.emit.update_metadata(self.acc.metadata());
     Ok(self.emit.emit(&deltas))
   }
 
   fn finish(&mut self) -> Result<Vec<SseEvent>> {
+    self.emit.update_metadata(self.acc.metadata());
     Ok(self.emit.finish())
   }
 }
@@ -57,6 +59,15 @@ impl EmitState {
       model: String::new(),
       started: false,
       finished: false,
+    }
+  }
+
+  fn update_metadata(&mut self, metadata: super::accumulate::SseMetadata) {
+    if let Some(id) = metadata.response_id {
+      self.id = id;
+    }
+    if let Some(model) = metadata.model {
+      self.model = model;
     }
   }
 
@@ -243,6 +254,14 @@ mod tests {
 
     assert!(t
       .transform(SseEvent::json(
+        Some("response.created"),
+        json!({"type":"response.created","response":{"id":"resp_real","model":"gpt-5.4","status":"in_progress"}}),
+      ))
+      .unwrap()
+      .is_empty());
+
+    assert!(t
+      .transform(SseEvent::json(
         Some("response.output_item.added"),
         json!({"type":"response.output_item.added","output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}),
       ))
@@ -263,6 +282,8 @@ mod tests {
       ))
       .unwrap();
     assert_eq!(text[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"], "Hi");
+    assert_eq!(text[0].json.as_ref().unwrap()["id"], "resp_real");
+    assert_eq!(text[0].json.as_ref().unwrap()["model"], "gpt-5.4");
 
     assert!(t
       .transform(SseEvent::json(
