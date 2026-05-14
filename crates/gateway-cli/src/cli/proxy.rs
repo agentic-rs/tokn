@@ -161,6 +161,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     ca_dir,
     intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
     passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
+    outbound_proxy: cfg.proxy.to_http_options(),
   };
 
   let result = llm_router::proxy::serve(state, options, async {

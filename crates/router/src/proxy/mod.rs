@@ -1,4 +1,5 @@
 mod ca;
+mod connect_proxy;
 pub mod header_pipeline;
 mod passthrough;
 mod transport;
@@ -10,6 +11,7 @@ use axum::http::Method;
 use axum::Router;
 pub use ca::{load_or_generate_ca, ProxyCa};
 use llm_auth::descriptor::RewriteTarget;
+use llm_core::util::http::HttpClientOptions;
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
@@ -43,6 +45,7 @@ pub struct ProxyOptions {
   pub ca_dir: PathBuf,
   pub intercept_hosts: Vec<String>,
   pub passthrough_hosts: Vec<String>,
+  pub outbound_proxy: HttpClientOptions,
 }
 
 pub async fn serve<F>(state: AppState, options: ProxyOptions, shutdown: F) -> Result<()>
@@ -58,6 +61,7 @@ where
   let http = state.http.clone();
   let router = proxy_router((*state).clone());
   let host_policy = HostPolicy::new(&options);
+  let outbound_proxy = Arc::new(connect_proxy::ConnectProxy::from_options(&options.outbound_proxy));
 
   tracing::info!(addr = %options.addr, ca_dir = %options.ca_dir.display(), "llm-router proxy listening");
 
@@ -72,10 +76,11 @@ where
         let ca = ca.clone();
         let state = state.clone();
         let host_policy = host_policy.clone();
+        let outbound_proxy = outbound_proxy.clone();
         let route_resolver = route_resolver.clone();
         let http = http.clone();
         tokio::spawn(async move {
-          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, route_resolver, http).await {
+          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver, http).await {
             tracing::warn!(%peer, error = %err, "proxy connection failed");
           }
         });

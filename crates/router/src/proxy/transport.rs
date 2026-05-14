@@ -1,3 +1,4 @@
+use super::connect_proxy::{connect_upstream, ConnectProxy};
 use super::ca::DynamicResolver;
 use super::passthrough::proxy_passthrough;
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
@@ -33,6 +34,7 @@ pub(super) async fn handle_client(
   router: Router,
   ca: Arc<ProxyCa>,
   host_policy: HostPolicy,
+  outbound_proxy: Arc<ConnectProxy>,
   route_resolver: Arc<RouteResolver>,
   http: reqwest::Client,
 ) -> Result<()> {
@@ -112,14 +114,12 @@ pub(super) async fn handle_client(
     )
     .await
   } else {
-    tunnel(stream, &host, port).await
+    tunnel(stream, &host, port, outbound_proxy.as_ref()).await
   }
 }
 
-async fn tunnel(mut client: TcpStream, host: &str, port: u16) -> Result<()> {
-  let mut upstream = TcpStream::connect((host, port))
-    .await
-    .with_context(|| format!("connect upstream {host}:{port}"))?;
+async fn tunnel(mut client: TcpStream, host: &str, port: u16, outbound_proxy: &ConnectProxy) -> Result<()> {
+  let mut upstream = connect_upstream(host, port, outbound_proxy).await?;
   client.write_all(CONNECT_OK).await?;
   client.flush().await?;
   tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;

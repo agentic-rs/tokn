@@ -71,6 +71,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
       ca_dir,
       intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
       passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
+      outbound_proxy: cfg.proxy.to_http_options(),
     };
     let shutdown = shutdown_channel();
     tokio::try_join!(
