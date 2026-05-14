@@ -11,7 +11,8 @@ pub mod config;
 
 pub use llm_catalogue as catalogue;
 pub use llm_core::provider::{
-  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result,
+  ID_GITHUB_COPILOT,
 };
 pub use llm_core::{provider, util};
 
@@ -26,6 +27,39 @@ pub const COPILOT_DEVICE_CODE_URL: &str = "https://github.com/login/device/code"
 pub const COPILOT_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 pub const COPILOT_TOKEN_EXCHANGE_URL: &str = "https://api.github.com/copilot_internal/v2/token";
 pub const COPILOT_USER_INFO_URL: &str = "https://api.github.com/copilot_internal/user";
+
+/// Endpoints Copilot serves; mirrored on `DESCRIPTOR.endpoints` and used
+/// to populate `ProviderInfo::default_endpoints`.
+pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Responses, Endpoint::Messages];
+
+/// Per-model endpoint rules. Mirrors what the official Copilot CLI / VSCode
+/// plugin route — Copilot ships new ids continuously and `/models` does
+/// not annotate per-endpoint support, so we pattern-match the id.
+///
+/// First match wins: an unmatched model falls back to
+/// `DEFAULT_ENDPOINTS` (every endpoint allowed) — optimistic by design.
+pub static MODEL_ENDPOINT_RULES: &[EndpointRule] = &[
+  EndpointRule {
+    pattern: "claude-*",
+    endpoints: &[Endpoint::Messages, Endpoint::ChatCompletions],
+  },
+  EndpointRule {
+    pattern: "gpt-5*",
+    endpoints: &[Endpoint::Responses, Endpoint::ChatCompletions],
+  },
+  EndpointRule {
+    pattern: "o1*",
+    endpoints: &[Endpoint::Responses, Endpoint::ChatCompletions],
+  },
+  EndpointRule {
+    pattern: "o3*",
+    endpoints: &[Endpoint::Responses, Endpoint::ChatCompletions],
+  },
+  EndpointRule {
+    pattern: "o4*",
+    endpoints: &[Endpoint::Responses, Endpoint::ChatCompletions],
+  },
+];
 
 pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   id: ID_GITHUB_COPILOT,
@@ -53,6 +87,7 @@ pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
       aliases: &[],
     },
   ],
+  model_endpoint_rules: Some(MODEL_ENDPOINT_RULES),
   rewrites: &[],
   auth_urls: &[
     ("device_authorize", COPILOT_DEVICE_CODE_URL),

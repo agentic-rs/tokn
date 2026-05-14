@@ -54,6 +54,8 @@ impl DeepSeekProvider {
         upstream_url: base_url,
         auth_kind: AuthKind::StaticApiKey,
         default_models: crate::catalogue::default_models_for(ID_DEEPSEEK),
+        default_endpoints: crate::DEFAULT_ENDPOINTS,
+        model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
       },
     })
   }

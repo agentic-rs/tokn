@@ -27,6 +27,16 @@ pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiEr
     match provider.list_models(&s.http).await {
       Ok(v) => {
         let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+        // Warm the provider's identity cache so `Provider::has_model` can
+        // answer accurately for ids that are advertised upstream but not
+        // tracked by the catalogue snapshot.
+        let cache_ids: HashSet<String> = arr
+          .iter()
+          .filter_map(|m| m.get("id").and_then(|x| x.as_str()).map(str::to_string))
+          .collect();
+        if !cache_ids.is_empty() {
+          provider.info().model_cache.set(cache_ids);
+        }
         let before = out.len();
         for mut m in arr {
           let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();

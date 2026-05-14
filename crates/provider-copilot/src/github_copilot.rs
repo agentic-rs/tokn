@@ -16,7 +16,7 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument};
 
-use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
+use crate::{error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_GITHUB_COPILOT};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -50,6 +50,8 @@ fn copilot_info() -> &'static ProviderInfo {
     // ids that models.dev tracks. Unknown ids still pass through
     // `/v1/models` — they just lack the `x_llm_router` enrichment block.
     default_models: crate::catalogue::default_models_for(ID_GITHUB_COPILOT),
+    default_endpoints: crate::DEFAULT_ENDPOINTS,
+    model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
   })
 }
 
@@ -172,25 +174,8 @@ impl Provider for CopilotProvider {
     Some(self)
   }
 
-  /// Capability matrix for Copilot's three upstream surfaces.
-  ///
-  /// We do best-effort pattern matching on the model id rather than a hard
-  /// allowlist, because Copilot ships new models continuously and the
-  /// upstream `/models` response does not yet annotate per-endpoint
-  /// support. The patterns here mirror what the official Copilot CLI /
-  /// VSCode plugin route.
-  fn supports(&self, model: &str, endpoint: Endpoint) -> bool {
-    match endpoint {
-      // Every Copilot model speaks the OpenAI Chat Completions surface.
-      Endpoint::ChatCompletions => true,
-      // Anthropic Messages API: Claude family routes here natively.
-      Endpoint::Messages => model.starts_with("claude-"),
-      // OpenAI Responses API: o-series and gpt-5+ families.
-      Endpoint::Responses => {
-        let m = model;
-        m.starts_with("gpt-5") || m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4")
-      }
-    }
+  fn endpoint_rules(&self) -> Option<&'static [EndpointRule]> {
+    crate::DESCRIPTOR.model_endpoint_rules
   }
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {

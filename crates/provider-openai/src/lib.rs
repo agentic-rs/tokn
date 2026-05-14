@@ -6,7 +6,8 @@ pub mod openai;
 
 pub use llm_catalogue as catalogue;
 pub use llm_core::provider::{
-  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX, ID_OPENAI,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX,
+  ID_OPENAI,
 };
 pub use llm_core::{account as config, provider, util};
 
@@ -21,6 +22,9 @@ pub const CODEX_DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/d
 pub const CODEX_OAUTH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 pub const CODEX_DEVICE_VERIFY_URL: &str = "https://auth.openai.com/codex/device";
 pub const CODEX_DEVICE_REDIRECT_URL: &str = "https://auth.openai.com/deviceauth/callback";
+
+pub static DEFAULT_ENDPOINTS_OPENAI: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Responses];
+pub static DEFAULT_ENDPOINTS_CODEX: &[Endpoint] = &[Endpoint::Responses];
 
 pub static DESCRIPTOR_OPENAI: ProviderDescriptor = ProviderDescriptor {
   id: ID_OPENAI,
@@ -42,6 +46,7 @@ pub static DESCRIPTOR_OPENAI: ProviderDescriptor = ProviderDescriptor {
       aliases: &[],
     },
   ],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,
@@ -62,6 +67,7 @@ pub static DESCRIPTOR_CODEX: ProviderDescriptor = ProviderDescriptor {
     path: "/v1/responses",
     aliases: &["/backend-api/codex/responses"],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[
     ("device_usercode", CODEX_DEVICE_USERCODE_URL),

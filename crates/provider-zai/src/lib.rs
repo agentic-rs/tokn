@@ -22,6 +22,8 @@ const ZHIPU_HOSTS: &[&str] = &["open.bigmodel.cn"];
 const CHAT_COMPLETIONS_PATH_PAAS: &str = "/api/paas/v4/chat/completions";
 const CHAT_COMPLETIONS_PATH_CODING: &str = "/api/coding/paas/v4/chat/completions";
 
+pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions];
+
 pub static DESCRIPTOR_ZAI: ProviderDescriptor = ProviderDescriptor {
   id: ID_ZAI,
   display_name: "Z.ai",
@@ -34,6 +36,7 @@ pub static DESCRIPTOR_ZAI: ProviderDescriptor = ProviderDescriptor {
     path: "/v1/chat/completions",
     aliases: &[CHAT_COMPLETIONS_PATH_PAAS],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,
@@ -54,6 +57,7 @@ pub static DESCRIPTOR_ZAI_CODING_PLAN: ProviderDescriptor = ProviderDescriptor {
     path: "/v1/chat/completions",
     aliases: &[CHAT_COMPLETIONS_PATH_CODING],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,
@@ -74,6 +78,7 @@ pub static DESCRIPTOR_ZHIPUAI: ProviderDescriptor = ProviderDescriptor {
     path: "/v1/chat/completions",
     aliases: &[CHAT_COMPLETIONS_PATH_PAAS],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,
@@ -94,6 +99,7 @@ pub static DESCRIPTOR_ZHIPUAI_CODING_PLAN: ProviderDescriptor = ProviderDescript
     path: "/v1/chat/completions",
     aliases: &[CHAT_COMPLETIONS_PATH_CODING],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,

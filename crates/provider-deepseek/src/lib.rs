@@ -13,6 +13,8 @@ use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
+pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions];
+
 pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   id: ID_DEEPSEEK,
   display_name: "DeepSeek",
@@ -25,6 +27,7 @@ pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
     path: "/v1/chat/completions",
     aliases: &["/chat/completions"],
   }],
+  model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],
   matches_url,

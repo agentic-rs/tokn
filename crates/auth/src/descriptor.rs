@@ -18,7 +18,7 @@
 //! without creating a `core ↔ auth` dependency cycle.
 
 use llm_core::account::AccountConfig;
-use llm_core::provider::{Endpoint, Provider, Result};
+use llm_core::provider::{Endpoint, EndpointRule, Provider, Result};
 use std::sync::Arc;
 
 use crate::provider::{CredentialFlavor, ProviderAuth};
@@ -71,6 +71,14 @@ pub struct ProviderDescriptor {
   pub credentials: &'static [CredentialFlavor],
   /// Endpoints this provider serves and their canonical paths.
   pub endpoints: &'static [EndpointSpec],
+  /// Per-model endpoint rules. First-match-wins glob patterns mapping a
+  /// model id (or pattern like `"claude-*"`) to the subset of endpoints
+  /// from [`Self::endpoints`] that the model supports. Empty means
+  /// "every model is allowed on every endpoint in [`Self::endpoints`]".
+  ///
+  /// Consumed by the default [`Provider::supports`] impl via
+  /// [`Provider::endpoint_rules`].
+  pub model_endpoint_rules: Option<&'static [EndpointRule]>,
   /// Non-canonical inbound paths the proxy should rewrite. The proxy
   /// also short-circuits when an inbound path already matches an entry
   /// in [`Self::endpoints`], so canonical paths do not need to appear

@@ -4,7 +4,8 @@ use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::{Arc, OnceLock};
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock, RwLock};
 
 pub mod error;
 
@@ -110,9 +111,53 @@ pub struct ProviderInfo {
   pub upstream_url: String,
   pub auth_kind: AuthKind,
   pub default_models: Vec<ModelInfo>,
+  /// Endpoints this provider serves when no per-model rule narrows the
+  /// answer. Should mirror the `endpoints` slice on the corresponding
+  /// `ProviderDescriptor` (a registry-time test enforces this).
+  pub default_endpoints: &'static [Endpoint],
+  /// Cache of model ids learned from the upstream `/models` call. Empty
+  /// until the first successful `Provider::list_models` warms it. Used
+  /// by the default `has_model` impl as the source of truth, with
+  /// `default_models` as the cold-start fallback.
+  #[serde(skip)]
+  pub model_cache: Arc<ModelCache>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+/// In-memory cache of model ids advertised by a provider's upstream
+/// `/models` endpoint. Warmed lazily by the routing layer the first time
+/// it sees the provider; subsequent reads are lock-free fast paths.
+#[derive(Debug, Default)]
+pub struct ModelCache {
+  inner: RwLock<Option<HashSet<String>>>,
+}
+
+impl ModelCache {
+  pub fn set(&self, ids: HashSet<String>) {
+    if let Ok(mut g) = self.inner.write() {
+      *g = Some(ids);
+    }
+  }
+
+  pub fn contains(&self, id: &str) -> bool {
+    self
+      .inner
+      .read()
+      .ok()
+      .and_then(|g| g.as_ref().map(|s| s.contains(id)))
+      .unwrap_or(false)
+  }
+
+  pub fn is_warm(&self) -> bool {
+    self.inner.read().ok().map(|g| g.is_some()).unwrap_or(false)
+  }
+
+  pub fn snapshot(&self) -> Option<HashSet<String>> {
+    self.inner.read().ok().and_then(|g| g.clone())
+  }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Endpoint {
   ChatCompletions,
   Responses,
@@ -133,6 +178,70 @@ impl std::fmt::Display for Endpoint {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_str(self.as_str())
   }
+}
+
+/// Per-provider declarative rule mapping a model id glob pattern to the
+/// set of endpoints that model is allowed to be served on.
+///
+/// Patterns use a tiny `*`-only glob (no character classes, no `?`).
+/// Examples: `"claude-*"`, `"gpt-5*"`, `"o4-mini"`.
+///
+/// Lives in `llm-core` so both [`ProviderInfo`] and the descriptor type
+/// in `llm-auth` can reference it without a dependency cycle.
+#[derive(Copy, Clone, Debug)]
+pub struct EndpointRule {
+  pub pattern: &'static str,
+  pub endpoints: &'static [Endpoint],
+}
+
+/// Walk `rules` in order; the first pattern that matches `model` wins.
+/// Returns `Some(true)` if that rule allows `endpoint`, `Some(false)` if
+/// it explicitly does not, and `None` if no rule matched.
+pub fn match_endpoint_rule(rules: &[EndpointRule], model: &str, endpoint: Endpoint) -> Option<bool> {
+  for rule in rules {
+    if glob_match(rule.pattern, model) {
+      return Some(rule.endpoints.contains(&endpoint));
+    }
+  }
+  None
+}
+
+/// Tiny `*`-only glob matcher. `*` matches any (possibly empty) run of
+/// characters; everything else matches literally. ASCII case-sensitive.
+pub fn glob_match(pattern: &str, input: &str) -> bool {
+  let p = pattern.as_bytes();
+  let s = input.as_bytes();
+  fn rec(p: &[u8], s: &[u8]) -> bool {
+    let mut pi = 0;
+    let mut si = 0;
+    while pi < p.len() {
+      if p[pi] == b'*' {
+        // Collapse consecutive '*'.
+        while pi < p.len() && p[pi] == b'*' {
+          pi += 1;
+        }
+        if pi == p.len() {
+          return true;
+        }
+        let rest = &p[pi..];
+        while si <= s.len() {
+          if rec(rest, &s[si..]) {
+            return true;
+          }
+          si += 1;
+        }
+        return false;
+      } else {
+        if si >= s.len() || p[pi] != s[si] {
+          return false;
+        }
+        pi += 1;
+        si += 1;
+      }
+    }
+    si == s.len()
+  }
+  rec(p, s)
 }
 
 pub struct RequestCtx<'a> {
@@ -201,8 +310,65 @@ pub trait Provider: Send + Sync {
     self.info().default_models.iter().find(|m| m.id == model)
   }
 
-  fn supports(&self, _model: &str, endpoint: Endpoint) -> bool {
-    matches!(endpoint, Endpoint::ChatCompletions)
+  /// Does this provider serve `model`?
+  ///
+  /// Source-of-truth precedence:
+  /// 1. Warm upstream `/models` cache (`ProviderInfo::model_cache`).
+  /// 2. Catalogue snapshot (`ProviderInfo::default_models`) as cold-start
+  ///    fallback.
+  fn has_model(&self, model: &str) -> bool {
+    if model.is_empty() {
+      return true;
+    }
+    let info = self.info();
+    if info.model_cache.is_warm() {
+      return info.model_cache.contains(model);
+    }
+    info.default_models.iter().any(|m| m.id == model)
+  }
+
+  /// Per-model endpoint rules declared by the provider.
+  ///
+  /// - `Some(&[])` — no rules; every model resolves via
+  ///   [`ProviderInfo::default_endpoints`].
+  /// - `Some(non_empty)` — first matching pattern wins; if no pattern
+  ///   matches, falls back to `default_endpoints`.
+  /// - `None` — provider opts out of the static rule table; it is
+  ///   expected to override [`Provider::has_endpoint`] itself. The
+  ///   default [`Provider::has_endpoint`] in that case still consults
+  ///   `default_endpoints`.
+  fn endpoint_rules(&self) -> Option<&'static [EndpointRule]> {
+    Some(&[])
+  }
+
+  /// Pure endpoint-capability lookup for a given model. No identity
+  /// gating — call [`Provider::has_model`] separately if you need it.
+  ///
+  /// Default impl: consult the static rule table from
+  /// [`Provider::endpoint_rules`] (when present); on miss, defer to
+  /// [`ProviderInfo::default_endpoints`]. Providers with bespoke logic
+  /// can override this directly (typically pairing with
+  /// `endpoint_rules() = None`).
+  fn has_endpoint(&self, model: &str, endpoint: Endpoint) -> bool {
+    if let Some(rules) = self.endpoint_rules() {
+      if let Some(decision) = match_endpoint_rule(rules, model, endpoint) {
+        return decision;
+      }
+    }
+    self.info().default_endpoints.contains(&endpoint)
+  }
+
+  /// Combined "does this provider serve this model on this endpoint?"
+  /// gate. Default impl: identity check via [`Provider::has_model`],
+  /// then capability check via [`Provider::has_endpoint`].
+  ///
+  /// The empty-model case (used by routing's `Any` selector) skips the
+  /// identity check.
+  fn supports(&self, model: &str, endpoint: Endpoint) -> bool {
+    if !model.is_empty() && !self.has_model(model) {
+      return false;
+    }
+    self.has_endpoint(model, endpoint)
   }
 
   fn patch_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
@@ -236,5 +402,165 @@ pub trait Provider: Send + Sync {
 
   async fn refresh(&self, cfg: &AccountConfig, _http: &reqwest::Client) -> Result<AccountConfig> {
     Ok(cfg.clone())
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn glob_literal() {
+    assert!(glob_match("foo", "foo"));
+    assert!(!glob_match("foo", "foobar"));
+    assert!(!glob_match("foo", "fo"));
+  }
+
+  #[test]
+  fn glob_star_suffix() {
+    assert!(glob_match("claude-*", "claude-3"));
+    assert!(glob_match("claude-*", "claude-"));
+    assert!(!glob_match("claude-*", "claude"));
+    assert!(!glob_match("claude-*", "gpt-4"));
+  }
+
+  #[test]
+  fn glob_star_prefix() {
+    assert!(glob_match("*-mini", "o4-mini"));
+    assert!(!glob_match("*-mini", "o4-mini-2"));
+  }
+
+  #[test]
+  fn glob_star_middle_and_multiple() {
+    assert!(glob_match("gpt-*-mini", "gpt-4-mini"));
+    assert!(glob_match("gpt-*-mini", "gpt--mini"));
+    assert!(!glob_match("gpt-*-mini", "gpt-mini"));
+    assert!(glob_match("**", "anything"));
+    assert!(glob_match("*", ""));
+    assert!(!glob_match("a*b", "axc"));
+  }
+
+  #[test]
+  fn rule_matching_first_wins() {
+    static RULES: &[EndpointRule] = &[
+      EndpointRule {
+        pattern: "claude-*",
+        endpoints: &[Endpoint::Messages, Endpoint::ChatCompletions],
+      },
+      EndpointRule {
+        pattern: "*",
+        endpoints: &[Endpoint::ChatCompletions],
+      },
+    ];
+    assert_eq!(
+      match_endpoint_rule(RULES, "claude-3", Endpoint::Messages),
+      Some(true)
+    );
+    assert_eq!(
+      match_endpoint_rule(RULES, "claude-3", Endpoint::Responses),
+      Some(false)
+    );
+    assert_eq!(
+      match_endpoint_rule(RULES, "gpt-4", Endpoint::ChatCompletions),
+      Some(true)
+    );
+    assert_eq!(match_endpoint_rule(RULES, "gpt-4", Endpoint::Messages), Some(false));
+    assert_eq!(match_endpoint_rule(&[], "anything", Endpoint::ChatCompletions), None);
+  }
+
+  #[test]
+  fn model_cache_warm_then_contains() {
+    let c = ModelCache::default();
+    assert!(!c.is_warm());
+    assert!(!c.contains("foo"));
+    let mut s = HashSet::new();
+    s.insert("foo".into());
+    c.set(s);
+    assert!(c.is_warm());
+    assert!(c.contains("foo"));
+    assert!(!c.contains("bar"));
+  }
+
+  // --- has_endpoint / supports layering tests ---
+
+  use async_trait::async_trait;
+  use serde_json::Value;
+
+  struct StubProvider {
+    info: ProviderInfo,
+    rules: Option<&'static [EndpointRule]>,
+  }
+
+  #[async_trait]
+  impl Provider for StubProvider {
+    fn id(&self) -> &str {
+      &self.info.id
+    }
+    fn info(&self) -> &ProviderInfo {
+      &self.info
+    }
+    fn endpoint_rules(&self) -> Option<&'static [EndpointRule]> {
+      self.rules
+    }
+    async fn list_models(&self, _http: &reqwest::Client) -> error::Result<Value> {
+      Ok(Value::Null)
+    }
+    async fn chat(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
+      unimplemented!()
+    }
+  }
+
+  fn stub(rules: Option<&'static [EndpointRule]>, defaults: &'static [Endpoint]) -> StubProvider {
+    StubProvider {
+      info: ProviderInfo {
+        id: "stub".into(),
+        aliases: &[],
+        display_name: "stub",
+        upstream_url: String::new(),
+        auth_kind: AuthKind::StaticApiKey,
+        default_models: vec![],
+        default_endpoints: defaults,
+        model_cache: Arc::new(ModelCache::default()),
+      },
+      rules,
+    }
+  }
+
+  static CLAUDE_RULES: &[EndpointRule] = &[EndpointRule {
+    pattern: "claude-*",
+    endpoints: &[Endpoint::Messages, Endpoint::ChatCompletions],
+  }];
+
+  #[test]
+  fn has_endpoint_matched_rule_wins_over_defaults() {
+    let p = stub(Some(CLAUDE_RULES), &[Endpoint::Responses]);
+    // Rule matches: rule decides, defaults ignored.
+    assert!(p.has_endpoint("claude-3", Endpoint::Messages));
+    assert!(!p.has_endpoint("claude-3", Endpoint::Responses));
+  }
+
+  #[test]
+  fn has_endpoint_unmatched_rule_falls_back_to_defaults() {
+    let p = stub(Some(CLAUDE_RULES), &[Endpoint::Responses]);
+    assert!(p.has_endpoint("gpt-4", Endpoint::Responses));
+    assert!(!p.has_endpoint("gpt-4", Endpoint::Messages));
+  }
+
+  #[test]
+  fn has_endpoint_none_rules_uses_defaults_only() {
+    let p = stub(None, &[Endpoint::ChatCompletions]);
+    assert!(p.has_endpoint("anything", Endpoint::ChatCompletions));
+    assert!(!p.has_endpoint("anything", Endpoint::Responses));
+  }
+
+  #[test]
+  fn supports_empty_model_skips_identity_check() {
+    // No default_models, no cache → has_model("x") = false. Empty model
+    // bypasses identity and goes straight to has_endpoint.
+    let p = stub(Some(&[]), &[Endpoint::ChatCompletions]);
+    assert!(p.supports("", Endpoint::ChatCompletions));
+    assert!(!p.supports("", Endpoint::Messages));
+    // Non-empty unknown model → identity gate denies.
+    assert!(!p.supports("unknown", Endpoint::ChatCompletions));
   }
 }

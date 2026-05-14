@@ -316,8 +316,12 @@ impl AccountPool {
   }
 
   fn account_matches(&self, acct: &AccountHandle, model: Option<&str>, endpoint: Endpoint) -> bool {
+    // `Provider::supports` now layers identity (`has_model`) and endpoint
+    // checks itself, so the pool no longer pre-gates on
+    // `model_info(...).is_some()`. Empty model means "any" — supports()
+    // short-circuits the identity check in that case.
     let model = model.unwrap_or("");
-    (model.is_empty() || acct.provider.model_info(model).is_some()) && acct.provider.supports(model, endpoint)
+    acct.provider.supports(model, endpoint)
   }
 
   fn account_matching_endpoint(
@@ -437,7 +441,7 @@ fn fallback_order(requested: Endpoint) -> Vec<Endpoint> {
 impl ProviderBucket {
   fn matches(&self, model: Option<&str>, endpoint: Endpoint) -> bool {
     let model = model.unwrap_or("");
-    (model.is_empty() || self.provider.model_info(model).is_some()) && self.provider.supports(model, endpoint)
+    self.provider.supports(model, endpoint)
   }
 
   fn pick_healthy(&self) -> Option<Arc<AccountHandle>> {
@@ -487,7 +491,9 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::provider::{AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelInfo, ProviderInfo, RequestCtx};
+  use crate::provider::{
+    AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
+  };
   use async_trait::async_trait;
   use serde_json::Value;
 
@@ -505,6 +511,8 @@ mod tests {
           upstream_url: "https://mock.invalid".into(),
           auth_kind: AuthKind::StaticApiKey,
           default_models: models.iter().map(|m| model(m)).collect(),
+          default_endpoints: &[Endpoint::ChatCompletions],
+          model_cache: Arc::new(ModelCache::default()),
         },
       })
     }

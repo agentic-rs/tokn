@@ -68,13 +68,14 @@ impl OpenAiProvider {
 
   pub fn from_account(a: Arc<AccountConfig>) -> Result<Self> {
     Self::validate_account(&a)?;
-    let (credential, base, display_name, auth_kind, models) = match a.provider.as_str() {
+    let (credential, base, display_name, auth_kind, models, default_endpoints) = match a.provider.as_str() {
       ID_OPENAI => (
         Credential::ApiKey(a.api_key.clone().expect("validated api_key")),
         a.base_url.clone().unwrap_or_else(|| OPENAI_BASE_URL.to_string()),
         "OpenAI",
         AuthKind::StaticApiKey,
         crate::catalogue::default_models_for(ID_OPENAI),
+        crate::DEFAULT_ENDPOINTS_OPENAI,
       ),
       ID_CODEX => (
         Credential::AccessToken(
@@ -87,6 +88,7 @@ impl OpenAiProvider {
         "ChatGPT Codex",
         AuthKind::OAuthDeviceFlow,
         crate::catalogue::default_models_for(ID_OPENAI),
+        crate::DEFAULT_ENDPOINTS_CODEX,
       ),
       _ => unreachable!("validated provider"),
     };
@@ -103,6 +105,8 @@ impl OpenAiProvider {
         upstream_url: base,
         auth_kind,
         default_models: models,
+        default_endpoints,
+        model_cache: Arc::new(llm_core::provider::ModelCache::default()),
       },
     })
   }
@@ -126,14 +130,6 @@ impl Provider for OpenAiProvider {
 
   fn info(&self) -> &ProviderInfo {
     &self.info
-  }
-
-  fn supports(&self, _model: &str, endpoint: Endpoint) -> bool {
-    match self.provider_id.as_str() {
-      ID_OPENAI => matches!(endpoint, Endpoint::ChatCompletions | Endpoint::Responses),
-      ID_CODEX => matches!(endpoint, Endpoint::Responses),
-      _ => false,
-    }
   }
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {

@@ -86,6 +86,8 @@ impl ZaiProvider {
       upstream_url: base_url.clone(),
       auth_kind: AuthKind::StaticApiKey,
       default_models: models::catalogue_for(&a.provider),
+      default_endpoints: crate::DEFAULT_ENDPOINTS,
+      model_cache: std::sync::Arc::new(llm_core::provider::ModelCache::default()),
     };
     Ok(Self {
       id: format!("{}:{}", a.provider, a.id),
