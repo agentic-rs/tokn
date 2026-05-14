@@ -11,6 +11,8 @@ use tracing::{debug, instrument, warn};
 use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX};
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+pub const CODEX_CLIENT_VERSION: &str = "0.130.0";
+const CODEX_MODELS_PATH: &str = "/models?client_version=0.130.0";
 
 pub struct CodexProvider {
   pub id: String,
@@ -130,30 +132,19 @@ impl Provider for CodexProvider {
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
-    let mut headers = HeaderMap::new();
-    self.patch_headers(
-      &mut headers,
-      &HeaderPatchCtx {
-        endpoint: Endpoint::Responses,
-        body: &Value::Null,
-        bearer_token: None,
-        content_encoding: None,
-        stream: false,
-        initiator: "user",
-        inbound_headers: &HeaderMap::new(),
-      },
-    )?;
+    let headers = self.models_headers()?;
     let resp = crate::util::http::send(
       http,
       Method::GET,
-      &self.url("/models"),
+      &self.url(CODEX_MODELS_PATH),
       headers,
       None,
       None,
       "codex /models",
     )
     .await?;
-    crate::util::http::read_json(resp, "codex /models").await
+    let value: Value = crate::util::http::read_json(resp, "codex /models").await?;
+    Ok(normalize_models_response(value))
   }
 
   #[instrument(name = "codex_responses", skip_all, fields(account = %self.id, stream = ctx.stream))]
@@ -172,6 +163,68 @@ impl Provider for CodexProvider {
   fn on_unauthorized(&self) {
     warn!(account = %self.id, "codex upstream returned 401: credential likely revoked or expired");
   }
+}
+
+impl CodexProvider {
+  fn models_headers(&self) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    self.patch_headers(
+      &mut headers,
+      &HeaderPatchCtx {
+        endpoint: Endpoint::Responses,
+        body: &Value::Null,
+        bearer_token: None,
+        content_encoding: None,
+        stream: false,
+        initiator: "user",
+        inbound_headers: &HeaderMap::new(),
+      },
+    )?;
+    Ok(headers)
+  }
+}
+
+fn normalize_models_response(value: Value) -> Value {
+  if value.get("data").and_then(|v| v.as_array()).is_some() {
+    return value;
+  }
+  let models = find_models_array(&value).cloned().unwrap_or_default();
+  let data = models
+    .into_iter()
+    .filter_map(|entry| normalize_model_entry(entry))
+    .collect::<Vec<_>>();
+  serde_json::json!({ "object": "list", "data": data })
+}
+
+fn find_models_array(value: &Value) -> Option<&Vec<Value>> {
+  if let Some(arr) = value.as_array() {
+    return Some(arr);
+  }
+  if let Some(arr) = value.get("models").and_then(|v| v.as_array()) {
+    return Some(arr);
+  }
+  value
+    .as_object()
+    .and_then(|obj| obj.values().find_map(|v| v.get("models").and_then(|m| m.as_array())))
+}
+
+fn normalize_model_entry(entry: Value) -> Option<Value> {
+  if let Some(id) = entry.as_str().filter(|id| !id.trim().is_empty()) {
+    return Some(serde_json::json!({ "id": id, "object": "model" }));
+  }
+  let obj = entry.as_object()?;
+  let id = ["id", "model", "slug", "name"]
+    .iter()
+    .find_map(|key| obj.get(*key).and_then(|v| v.as_str()))?
+    .trim();
+  if id.is_empty() {
+    return None;
+  }
+  Some(serde_json::json!({
+    "id": id,
+    "object": "model",
+    "x_codex": entry,
+  }))
 }
 
 #[cfg(test)]
@@ -259,5 +312,30 @@ mod tests {
   fn codex_models_url_uses_backend_api_path() {
     let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
     assert_eq!(codex.url("/models"), "https://chatgpt.com/backend-api/codex/models");
+    assert_eq!(
+      codex.url(CODEX_MODELS_PATH),
+      "https://chatgpt.com/backend-api/codex/models?client_version=0.130.0"
+    );
+  }
+
+  #[test]
+  fn normalizes_models_array_response() {
+    let out = normalize_models_response(serde_json::json!({ "models": [{ "slug": "gpt-5" }, "o3"] }));
+    let data = out.get("data").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(data[0].get("id").and_then(|v| v.as_str()), Some("gpt-5"));
+    assert_eq!(data[1].get("id").and_then(|v| v.as_str()), Some("o3"));
+  }
+
+  #[test]
+  fn normalizes_nested_models_array_response() {
+    let out = normalize_models_response(serde_json::json!({ "app": { "models": [{ "model": "codex-mini" }] } }));
+    let data = out.get("data").and_then(|v| v.as_array()).unwrap();
+    assert_eq!(data[0].get("id").and_then(|v| v.as_str()), Some("codex-mini"));
+  }
+
+  #[test]
+  fn leaves_openai_data_response_unchanged() {
+    let input = serde_json::json!({ "object": "list", "data": [{ "id": "x" }] });
+    assert_eq!(normalize_models_response(input.clone()), input);
   }
 }

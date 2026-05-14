@@ -44,8 +44,12 @@ pub static MODEL_ENDPOINT_RULES: &[EndpointRule] = &[
     endpoints: &[Endpoint::Messages, Endpoint::ChatCompletions],
   },
   EndpointRule {
+    pattern: "gpt-5-mini",
+    endpoints: &[Endpoint::ChatCompletions, Endpoint::Responses],
+  },
+  EndpointRule {
     pattern: "gpt-5*",
-    endpoints: &[Endpoint::Responses, Endpoint::ChatCompletions],
+    endpoints: &[Endpoint::Responses],
   },
   EndpointRule {
     pattern: "o1*",
