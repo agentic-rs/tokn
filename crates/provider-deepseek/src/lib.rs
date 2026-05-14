@@ -13,7 +13,7 @@ use llm_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use llm_auth::provider::CredentialFlavor;
 use std::sync::Arc;
 
-pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions];
+pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Messages];
 
 pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   id: ID_DEEPSEEK,
@@ -21,12 +21,20 @@ pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
   hosts: &["api.deepseek.com"],
   base_url: deepseek::DEFAULT_BASE_URL,
   credentials: &[CredentialFlavor::ApiKey],
-  endpoints: &[EndpointSpec {
-    endpoint: Endpoint::ChatCompletions,
-    method: "POST",
-    path: "/v1/chat/completions",
-    aliases: &["/chat/completions"],
-  }],
+  endpoints: &[
+    EndpointSpec {
+      endpoint: Endpoint::ChatCompletions,
+      method: "POST",
+      path: "/v1/chat/completions",
+      aliases: &["/chat/completions"],
+    },
+    EndpointSpec {
+      endpoint: Endpoint::Messages,
+      method: "POST",
+      path: "/v1/messages",
+      aliases: &["/anthropic/v1/messages"],
+    },
+  ],
   model_endpoint_rules: Some(&[]),
   rewrites: &[],
   auth_urls: &[],

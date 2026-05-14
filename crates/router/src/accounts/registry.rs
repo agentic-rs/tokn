@@ -257,6 +257,10 @@ mod tests {
       registry.rewrite_target("api.deepseek.com", "POST", "/chat/completions"),
       Some(RewriteTarget::Endpoint(Endpoint::ChatCompletions))
     );
+    assert_eq!(
+      registry.rewrite_target("api.deepseek.com", "POST", "/anthropic/v1/messages"),
+      Some(RewriteTarget::Endpoint(Endpoint::Messages))
+    );
     // Codex non-canonical inbound path.
     assert_eq!(
       registry.rewrite_target("chatgpt.com", "POST", "/backend-api/codex/responses"),

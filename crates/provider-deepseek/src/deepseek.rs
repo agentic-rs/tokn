@@ -1,9 +1,10 @@
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
+use llm_core::pipeline::{InputTransformer, RequestMeta};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::Method;
-use serde_json::Value;
+use serde_json::{json, Value};
 use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
@@ -63,6 +64,50 @@ impl DeepSeekProvider {
   fn url(&self, path: &str) -> String {
     format!("{}{}", self.base_url.trim_end_matches('/'), path)
   }
+
+  fn messages_path(&self) -> &'static str {
+    if self.base_url.trim_end_matches('/').ends_with("/anthropic") {
+      "/v1/messages"
+    } else {
+      "/anthropic/v1/messages"
+    }
+  }
+
+  async fn upstream_post(&self, ctx: RequestCtx<'_>, path: &str, what: &'static str) -> Result<reqwest::Response> {
+    let url = self.url(path);
+    debug!(%url, "POST deepseek upstream");
+    let mut headers = ctx.profile_headers.clone().unwrap_or_default();
+    self.patch_headers(
+      &mut headers,
+      &HeaderPatchCtx {
+        endpoint: ctx.endpoint,
+        body: ctx.body,
+        bearer_token: None,
+        content_encoding: ctx.content_encoding,
+        stream: ctx.stream,
+        initiator: ctx.initiator,
+        inbound_headers: ctx.inbound_headers,
+      },
+    )?;
+    let body_bytes = ctx.request_body_bytes();
+    let resp = crate::util::http::send(
+      ctx.http,
+      Method::POST,
+      &url,
+      headers,
+      Some(body_bytes),
+      ctx.outbound.as_ref(),
+      what,
+    )
+    .await?;
+    Ok(resp)
+  }
+}
+
+impl InputTransformer for DeepSeekProvider {
+  fn transform_input(&self, meta: &RequestMeta, body: Value) -> Result<Value> {
+    Ok(shape_request(meta.upstream_endpoint, body))
+  }
 }
 
 #[async_trait]
@@ -73,6 +118,10 @@ impl Provider for DeepSeekProvider {
 
   fn info(&self) -> &ProviderInfo {
     &self.info
+  }
+
+  fn input_transformer(&self) -> Option<&dyn InputTransformer> {
+    Some(self)
   }
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
@@ -130,33 +179,12 @@ impl Provider for DeepSeekProvider {
 
   #[instrument(name = "deepseek_chat", skip_all, fields(account = %self.id, stream = ctx.stream))]
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
-    let url = self.url("/chat/completions");
-    debug!(%url, "POST deepseek chat");
-    let mut headers = ctx.profile_headers.clone().unwrap_or_default();
-    self.patch_headers(
-      &mut headers,
-      &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
-        body: ctx.body,
-        bearer_token: None,
-        content_encoding: ctx.content_encoding,
-        stream: ctx.stream,
-        initiator: ctx.initiator,
-        inbound_headers: ctx.inbound_headers,
-      },
-    )?;
-    let body_bytes = ctx.request_body_bytes();
-    let resp = crate::util::http::send(
-      ctx.http,
-      Method::POST,
-      &url,
-      headers,
-      Some(body_bytes),
-      ctx.outbound.as_ref(),
-      "deepseek chat",
-    )
-    .await?;
-    Ok(resp)
+    self.upstream_post(ctx, "/chat/completions", "deepseek chat").await
+  }
+
+  #[instrument(name = "deepseek_messages", skip_all, fields(account = %self.id, stream = ctx.stream))]
+  async fn messages(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
+    self.upstream_post(ctx, self.messages_path(), "deepseek messages").await
   }
 
   fn on_unauthorized(&self) {
@@ -168,6 +196,7 @@ impl Provider for DeepSeekProvider {
 mod tests {
   use super::*;
   use llm_core::account::AccountTier;
+  use llm_core::provider::Endpoint;
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {
@@ -206,5 +235,129 @@ mod tests {
     let p = DeepSeekProvider::from_account(Arc::new(acct(Some("sk-test")))).unwrap();
     assert_eq!(p.info().id, ID_DEEPSEEK);
     assert_eq!(p.info().upstream_url, DEFAULT_BASE_URL);
+  }
+
+  #[test]
+  fn supports_messages_endpoint() {
+    let p = DeepSeekProvider::from_account(Arc::new(acct(Some("sk-test")))).unwrap();
+    assert!(p.supports("", crate::Endpoint::ChatCompletions));
+    assert!(p.supports("", crate::Endpoint::Messages));
+  }
+
+  #[test]
+  fn chat_shape_uses_thinking_and_reasoning_effort() {
+    let body = json!({
+      "model": "deepseek-v4-flash",
+      "messages": [{"role": "user", "content": "hi"}],
+      "reasoning": {"effort": "high"}
+    });
+
+    let out = shape_request(Endpoint::ChatCompletions, body);
+
+    assert_eq!(out.get("thinking"), Some(&json!({"type": "enabled"})));
+    assert_eq!(out.get("reasoning_effort"), Some(&json!("high")));
+    assert!(out.get("reasoning").is_none());
+    assert!(out.get("output_config").is_none());
+  }
+
+  #[test]
+  fn messages_shape_uses_thinking_and_output_config_effort() {
+    let body = json!({
+      "model": "deepseek-v4-flash",
+      "messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}],
+      "thinking": {"effort": "max"}
+    });
+
+    let out = shape_request(Endpoint::Messages, body);
+
+    assert_eq!(out.get("thinking"), Some(&json!({"type": "enabled"})));
+    assert_eq!(out.get("output_config"), Some(&json!({"effort": "max"})));
+    assert!(out.get("reasoning").is_none());
+    assert!(out.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn defaults_thinking_to_disabled_without_reasoning() {
+    let body = json!({
+      "model": "deepseek-v4-flash",
+      "messages": [{"role": "user", "content": "hi"}]
+    });
+
+    let out = shape_request(Endpoint::ChatCompletions, body);
+
+    assert_eq!(out.get("thinking"), Some(&json!({"type": "disabled"})));
+    assert!(out.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn anthropic_base_uses_v1_messages_path() {
+    let mut account = acct(Some("sk-test"));
+    account.base_url = Some("https://api.deepseek.com/anthropic".into());
+    let p = DeepSeekProvider::from_account(Arc::new(account)).unwrap();
+    assert_eq!(p.messages_path(), "/v1/messages");
+  }
+}
+
+fn shape_request(endpoint: crate::Endpoint, body: Value) -> Value {
+  let mut out = body;
+  let Some(obj) = out.as_object_mut() else {
+    return out;
+  };
+
+  let effort = extract_effort(obj.get("thinking")).or_else(|| extract_effort(obj.get("reasoning")));
+  let thinking_mode = extract_thinking_mode(obj.get("thinking"), obj.get("reasoning"));
+  obj.insert("thinking".into(), json!({ "type": thinking_mode }));
+  obj.remove("reasoning");
+
+  match endpoint {
+    crate::Endpoint::ChatCompletions => {
+      obj.remove("output_config");
+      if let Some(effort) = effort {
+        obj.insert("reasoning_effort".into(), Value::String(effort));
+      } else {
+        obj.remove("reasoning_effort");
+      }
+    }
+    crate::Endpoint::Messages => {
+      obj.remove("reasoning_effort");
+      if let Some(effort) = effort {
+        obj.insert("output_config".into(), json!({ "effort": effort }));
+      } else {
+        obj.remove("output_config");
+      }
+    }
+    crate::Endpoint::Responses => {}
+  }
+
+  out
+}
+
+fn extract_thinking_mode(thinking: Option<&Value>, reasoning: Option<&Value>) -> &'static str {
+  match thinking.and_then(explicit_thinking_mode).or_else(|| reasoning.and_then(explicit_thinking_mode)) {
+    Some(mode) => mode,
+    None if thinking.is_some() || reasoning.is_some() => "enabled",
+    None => "disabled",
+  }
+}
+
+fn explicit_thinking_mode(value: &Value) -> Option<&'static str> {
+  match value {
+    Value::Bool(true) => Some("enabled"),
+    Value::Bool(false) => Some("disabled"),
+    Value::String(s) if s.eq_ignore_ascii_case("enabled") => Some("enabled"),
+    Value::String(s) if s.eq_ignore_ascii_case("disabled") => Some("disabled"),
+    Value::Object(map) => match map.get("type").and_then(Value::as_str) {
+      Some("enabled") => Some("enabled"),
+      Some("disabled") => Some("disabled"),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn extract_effort(value: Option<&Value>) -> Option<String> {
+  match value {
+    Some(Value::Object(map)) => map.get("effort").and_then(Value::as_str).map(str::to_string),
+    _ => None,
   }
 }
