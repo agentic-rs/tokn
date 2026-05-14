@@ -1,3 +1,4 @@
+use super::OutputFormat;
 use crate::cli::config_cmd::RouteModeArg;
 use crate::config::Config;
 use crate::provider::Endpoint;
@@ -6,7 +7,7 @@ use axum::body::Bytes;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::Response;
-use clap::{Args, ValueEnum};
+use clap::Args;
 use llm_config::RouteMode;
 use llm_router::api::AppState;
 use std::path::PathBuf;
@@ -28,14 +29,8 @@ impl From<EndpointArg> for Endpoint {
   }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub enum OutputFormat {
-  Text,
-  Json,
-}
-
 #[derive(Args, Debug)]
-pub struct SmokeArgs {
+pub struct SendArgs {
   /// Route mode (defaults to the serve route-mode from config).
   #[arg(long, value_enum)]
   pub route: Option<RouteModeArg>,
@@ -97,11 +92,10 @@ fn parse_header_kv(raw: &str) -> std::result::Result<(String, String), String> {
   Ok((k, v))
 }
 
-pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
+pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   let (mut cfg, resolved_cfg_path) = Config::load(cfg_path.as_deref())?;
   let mut accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
 
-  // --route defaults to the configured serve mode.
   let route_mode = args.route.map(RouteMode::from).unwrap_or(cfg.server.route_mode);
   cfg.server.route_mode = route_mode;
 
@@ -109,18 +103,13 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     anyhow::bail!("passthrough mode requires the proxy; use a different --route mode");
   }
 
-  // Filter accounts to honour --provider / --account before building the pool.
   filter_accounts(&mut accounts, args.provider.as_deref(), args.account.as_deref())?;
 
-  // Build the same event bus the server uses: DB writer + progress spinner +
-  // progress log + archive worker, all attached automatically per config + TTY.
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
 
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
 
-  // If --body-file was provided, load it now so we can extract a default
-  // model from it before route resolution.
   let custom_body: Option<serde_json::Value> = match args.body_file.as_deref() {
     Some(path) => Some(load_body_file(path)?),
     None => None,
@@ -142,8 +131,6 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     anyhow::bail!("missing message: pass either a positional message or --body-file");
   }
 
-  // Resolve once just to print a friendly header in text mode; the handler
-  // resolves again internally.
   let route = state.route.resolve(&model, None).map_err(|e| anyhow!("{e}"))?;
 
   if args.format == OutputFormat::Text {
@@ -161,16 +148,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
 
   let body_value = match custom_body {
     Some(mut v) => {
-      // Force the requested model and stream flag onto the supplied body so
-      // the operator's CLI flags actually take effect when replaying a
-      // captured request.
       if let Some(obj) = v.as_object_mut() {
         if args.model.is_some() {
           obj.insert("model".into(), serde_json::Value::String(model.clone()));
         }
-        // Only override `stream` when the operator explicitly set --stream;
-        // otherwise leave whatever the captured body had so we faithfully
-        // replay it.
         if args.stream {
           obj.insert("stream".into(), serde_json::Value::Bool(true));
         }
@@ -211,9 +192,6 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     return Ok(());
   }
 
-  // Invoke the public axum handler directly. This goes through the same
-  // pipeline used for real HTTP requests, so all events fire (DB rows are
-  // written, progress bar is driven, observers record).
   let resp_result: Result<Response> = match endpoint {
     Endpoint::ChatCompletions => {
       llm_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
@@ -234,7 +212,6 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
     .await
     .map_err(|e| anyhow!("read response body: {e}"))?;
 
-  // Flush events so progress bar finalises and DB writes complete before exit.
   if let Some(archive_runtime) = archive_runtime {
     archive_runtime.shutdown().await;
   }
@@ -252,9 +229,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SmokeArgs) -> Result<()> {
   Ok(())
 }
 
-/// Mutate the account list in-place to keep only entries matching the optional
-/// provider/account filters. Errors if the filter excludes everything.
-fn filter_accounts(
+pub(super) fn filter_accounts(
   accounts: &mut Vec<llm_core::account::AccountConfig>,
   provider: Option<&str>,
   account: Option<&str>,
@@ -331,9 +306,6 @@ fn load_body_file(path: &std::path::Path) -> Result<serde_json::Value> {
   } else {
     std::fs::read_to_string(path).map_err(|e| anyhow!("read {}: {e}", path.display()))?
   };
-  // Allow operators to paste a captured request that includes a leading
-  // `Headers: { ... }\n\nBody:\n{ ... }` preamble. Accept either the raw
-  // JSON body or anything that comes after a `Body:` line.
   let body_str = match raw.split_once("\nBody:\n") {
     Some((_, after)) => after.trim_start(),
     None => raw.trim_start(),
@@ -370,7 +342,6 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
 fn print_text_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -> Result<()> {
   println!("status: {}", status.as_u16());
   if stream {
-    // SSE: the body is a sequence of `event:`/`data:` lines; print verbatim.
     let text = String::from_utf8_lossy(body);
     println!("{text}");
     return Ok(());
@@ -424,7 +395,6 @@ fn print_text_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -
 
 fn print_json_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -> Result<()> {
   if stream {
-    // SSE bodies are not JSON; emit a wrapper so JSON consumers stay happy.
     let wrapper = serde_json::json!({
       "status": status.as_u16(),
       "stream": true,

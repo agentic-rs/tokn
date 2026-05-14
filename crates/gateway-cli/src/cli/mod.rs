@@ -50,8 +50,9 @@ pub enum Cmd {
   Update(update::UpdateArgs),
   /// Apply pending DB migrations (or restore from `.bak` with --rollback)
   Migration(migration::MigrationArgs),
-  /// Send a single smoke-test request to verify account/provider connectivity
-  Smoke(smoke::SmokeArgs),
+  /// Smoke-test commands (send a request, inspect a provider, …)
+  #[command(subcommand)]
+  Smoke(smoke::SmokeCmd),
 }
 
 impl Cli {
@@ -80,7 +81,7 @@ impl Cli {
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
       Cmd::Migration(a) => migration::run(cfg_path, a).await,
-      Cmd::Smoke(a) => smoke::run(cfg_path, a).await,
+      Cmd::Smoke(c) => smoke::run_cmd(cfg_path, c).await,
     };
     r.map_err(Error::from)
   }
