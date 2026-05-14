@@ -106,6 +106,7 @@ async fn oauth_account_from_token(
     access_token_expires_at: None,
     id_token: None,
     refresh_token: Some(Secret::new(token)),
+    provider_account_id: None,
     extra: Default::default(),
     refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: None,
@@ -121,10 +122,14 @@ async fn oauth_account_from_token(
       access_token,
       expires_at,
       username,
+      provider_account_id,
     } => {
       account.access_token = Some(Secret::new(access_token));
       account.access_token_expires_at = Some(expires_at);
       account.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+      if provider_account_id.is_some() {
+        account.provider_account_id = provider_account_id;
+      }
       username
     }
     RefreshOutcome::NotApplicable => None,
@@ -191,6 +196,7 @@ fn static_key_account_unverified(auth: &dyn ProviderAuth, id_override: Option<St
     access_token_expires_at: None,
     id_token: None,
     refresh_token: None,
+    provider_account_id: None,
     extra: Default::default(),
     refresh_url: None,
     last_refresh: None,
@@ -264,6 +270,7 @@ async fn device_flow_login(
     access_token_expires_at: Some(outcome.access_token_expires_at),
     id_token: None,
     refresh_token: Some(Secret::new(outcome.refresh_token)),
+    provider_account_id: outcome.provider_account_id,
     extra: Default::default(),
     refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: Some(time::OffsetDateTime::now_utc().unix_timestamp()),

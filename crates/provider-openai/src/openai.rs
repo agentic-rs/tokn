@@ -25,6 +25,9 @@ pub struct OpenAiProvider {
   provider_id: String,
   credential: Credential,
   base_url: String,
+  /// Provider-specific account identifier (codex `chatgpt_account_id`).
+  /// Set on the outbound `ChatGPT-Account-Id` header for codex requests.
+  provider_account_id: Option<String>,
   info: ProviderInfo,
 }
 
@@ -92,6 +95,7 @@ impl OpenAiProvider {
       provider_id: a.provider.clone(),
       credential,
       base_url: base.clone(),
+      provider_account_id: a.provider_account_id.clone(),
       info: ProviderInfo {
         id: a.provider.clone(),
         aliases: &[],
@@ -138,6 +142,16 @@ impl Provider for OpenAiProvider {
       HeaderValue::from_str(&format!("Bearer {}", self.token()))
         .context(error::HeaderValueSnafu { name: "authorization" })?,
     );
+    if self.provider_id == ID_CODEX {
+      if let Some(pid) = self.provider_account_id.as_deref().filter(|s| !s.is_empty()) {
+        headers.insert(
+          reqwest::header::HeaderName::from_static("chatgpt-account-id"),
+          HeaderValue::from_str(pid).context(error::HeaderValueSnafu {
+            name: "chatgpt-account-id",
+          })?,
+        );
+      }
+    }
     headers.insert(
       ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -262,6 +276,7 @@ mod tests {
       access_token_expires_at: None,
       id_token: None,
       refresh_token: None,
+      provider_account_id: None,
       extra: Default::default(),
       refresh_url: None,
       last_refresh: None,
@@ -283,6 +298,51 @@ mod tests {
       .err()
       .unwrap();
     assert!(err.to_string().contains("access_token"));
+  }
+
+  fn patch_ctx() -> HeaderPatchCtx<'static> {
+    HeaderPatchCtx {
+      endpoint: Endpoint::Responses,
+      body: &Value::Null,
+      bearer_token: None,
+      content_encoding: None,
+      stream: false,
+      initiator: "user",
+      inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+    }
+  }
+
+  #[test]
+  fn codex_patch_headers_injects_account_id_when_present() {
+    let mut a = acct(ID_CODEX, None, Some("atk-test"));
+    a.provider_account_id = Some("acc-77".into());
+    let codex = OpenAiProvider::from_account(Arc::new(a)).unwrap();
+    let mut h = HeaderMap::new();
+    codex.patch_headers(&mut h, &patch_ctx()).unwrap();
+    assert_eq!(h.get("authorization").unwrap(), "Bearer atk-test");
+    assert_eq!(h.get("chatgpt-account-id").unwrap(), "acc-77");
+  }
+
+  #[test]
+  fn codex_patch_headers_omits_account_id_when_absent_or_blank() {
+    for blank in [None, Some(String::new())] {
+      let mut a = acct(ID_CODEX, None, Some("atk-test"));
+      a.provider_account_id = blank;
+      let codex = OpenAiProvider::from_account(Arc::new(a)).unwrap();
+      let mut h = HeaderMap::new();
+      codex.patch_headers(&mut h, &patch_ctx()).unwrap();
+      assert!(h.get("chatgpt-account-id").is_none());
+    }
+  }
+
+  #[test]
+  fn openai_patch_headers_never_sets_account_id() {
+    let mut a = acct(ID_OPENAI, Some("sk-test"), None);
+    a.provider_account_id = Some("acc-ignored".into());
+    let openai = OpenAiProvider::from_account(Arc::new(a)).unwrap();
+    let mut h = HeaderMap::new();
+    openai.patch_headers(&mut h, &patch_ctx()).unwrap();
+    assert!(h.get("chatgpt-account-id").is_none());
   }
 
   #[test]

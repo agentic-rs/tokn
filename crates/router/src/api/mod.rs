@@ -262,6 +262,7 @@ mod tests {
       access_token_expires_at: None,
       id_token: None,
       refresh_token: None,
+      provider_account_id: None,
       extra: Default::default(),
       refresh_url: None,
       last_refresh: None,

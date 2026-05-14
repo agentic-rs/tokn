@@ -40,6 +40,11 @@ pub struct AccountConfig {
   pub id_token: Option<Secret<String>>,
   #[serde(default)]
   pub refresh_token: Option<Secret<String>>,
+  /// Provider-specific account identifier (e.g. ChatGPT account id from a
+  /// codex JWT). Stored verbatim and surfaced to providers via
+  /// [`HeaderPatchCtx`] / direct field access for use in outbound headers.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub provider_account_id: Option<String>,
   #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
   pub extra: BTreeMap<String, Secret<String>>,
   #[serde(default, skip_serializing_if = "Option::is_none")]

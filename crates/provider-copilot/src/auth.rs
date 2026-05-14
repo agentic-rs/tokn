@@ -112,6 +112,7 @@ impl ProviderAuth for CopilotAuth {
       access_token: exchange.token,
       access_token_expires_at: exchange.expires_at,
       username,
+      provider_account_id: None,
     })
   }
 
@@ -129,6 +130,7 @@ impl ProviderAuth for CopilotAuth {
       access_token: resp.token,
       expires_at: resp.expires_at,
       username,
+      provider_account_id: None,
     })
   }
 

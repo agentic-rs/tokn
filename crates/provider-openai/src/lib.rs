@@ -1,4 +1,7 @@
 pub mod auth;
+pub mod auth_codex;
+pub mod auth_openai;
+pub mod jwt;
 pub mod openai;
 
 pub use llm_catalogue as catalogue;

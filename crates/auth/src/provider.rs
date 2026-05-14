@@ -27,6 +27,11 @@ pub struct DeviceFlowOutcome {
   pub access_token_expires_at: i64,
   /// Optional upstream username (used to suggest an account id).
   pub username: Option<String>,
+  /// Optional provider-specific account identifier discovered during the
+  /// OAuth dance (e.g. ChatGPT account id parsed from the codex `id_token`
+  /// JWT). Persisted to [`AccountConfig::provider_account_id`] so providers
+  /// can surface it in outbound headers.
+  pub provider_account_id: Option<String>,
 }
 
 /// Opaque handle returned by [`ProviderAuth::request_device_code`] and
@@ -174,6 +179,10 @@ pub enum RefreshOutcome {
     expires_at: i64,
     /// Optional upstream username/account handle discovered during refresh.
     username: Option<String>,
+    /// Optional provider-specific account identifier (e.g. ChatGPT account
+    /// id from a refreshed codex `id_token`). When `Some`, callers should
+    /// overwrite [`AccountConfig::provider_account_id`].
+    provider_account_id: Option<String>,
   },
   /// The provider uses a static credential; nothing to refresh.
   NotApplicable,

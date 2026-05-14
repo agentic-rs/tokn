@@ -146,6 +146,7 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
           access_token,
           expires_at,
           username,
+          provider_account_id,
         }),
       ..
     } = q
@@ -164,6 +165,12 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
       if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
         if a.username.as_deref() != Some(name.as_str()) {
           a.username = Some(name.clone());
+          dirty = true;
+        }
+      }
+      if let Some(pid) = provider_account_id.as_ref().filter(|s| !s.trim().is_empty()) {
+        if a.provider_account_id.as_deref() != Some(pid.as_str()) {
+          a.provider_account_id = Some(pid.clone());
           dirty = true;
         }
       }
@@ -473,12 +480,16 @@ async fn refresh(cfg: &Config, store: &mut AuthStore, id: &str) -> Result<()> {
       access_token,
       expires_at,
       username,
+      provider_account_id,
     } => {
       let acct = store.get_mut(id).expect("checked above");
       acct.access_token = Some(Secret::new(access_token));
       acct.access_token_expires_at = Some(expires_at);
       if let Some(name) = username.filter(|name| !name.trim().is_empty()) {
         acct.username = Some(name);
+      }
+      if let Some(pid) = provider_account_id.filter(|s| !s.trim().is_empty()) {
+        acct.provider_account_id = Some(pid);
       }
       acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
       store.save()?;
@@ -518,6 +529,7 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
           access_token,
           expires_at,
           username,
+          provider_account_id,
         }),
       ..
     } = q
@@ -536,6 +548,12 @@ async fn status(cfg: &Config, store: &mut AuthStore, id: Option<String>) -> Resu
       if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
         if a.username.as_deref() != Some(name.as_str()) {
           a.username = Some(name.clone());
+          dirty = true;
+        }
+      }
+      if let Some(pid) = provider_account_id.as_ref().filter(|s| !s.trim().is_empty()) {
+        if a.provider_account_id.as_deref() != Some(pid.as_str()) {
+          a.provider_account_id = Some(pid.clone());
           dirty = true;
         }
       }
@@ -741,6 +759,7 @@ mod tests {
       access_token_expires_at: None,
       id_token: None,
       refresh_token: None,
+      provider_account_id: None,
       extra: std::collections::BTreeMap::new(),
       refresh_url: None,
       last_refresh: None,
