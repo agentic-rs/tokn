@@ -1,21 +1,8 @@
 //! State machine that emits a faithful Responses-API SSE lifecycle from a
 //! generic stream of `IrDelta`s.
 //!
-//! Lifecycle for a typical text response:
-//!   response.created
-//!   response.in_progress
-//!   response.output_item.added         (item.type=message)
-//!   response.content_part.added        (part.type=output_text)
-//!   response.output_text.delta * N
-//!   response.output_text.done
-//!   response.content_part.done
-//!   response.output_item.done
-//!   response.completed
-//!
-//! Tool calls produce a `function_call` output item with
-//! `function_call_arguments.delta` / `.done` events.
-//! Reasoning produces a `reasoning` output item with `reasoning_summary_part`
-//! and `reasoning_summary_text` events.
+//! Output items are emitted strictly sequentially: each item is fully closed
+//! (its `*.done` events) before the next item's `output_item.added` is sent.
 
 use super::event::SseEvent;
 use crate::ir::IrDelta;
@@ -71,7 +58,7 @@ pub struct ResponsesEmitter {
   sequence: u64,
   next_output_index: usize,
   next_item_counter: usize,
-  open: Vec<OpenItem>,
+  current: Option<OpenItem>,
   closed: Vec<Value>,
   created_emitted: bool,
   in_progress_emitted: bool,
@@ -90,7 +77,7 @@ impl ResponsesEmitter {
       sequence: 0,
       next_output_index: 0,
       next_item_counter: 0,
-      open: Vec::new(),
+      current: None,
       closed: Vec::new(),
       created_emitted: false,
       in_progress_emitted: false,
@@ -191,44 +178,18 @@ impl ResponsesEmitter {
     out
   }
 
-  fn open_message(&mut self) -> usize {
-    let pos = self.open.iter().position(|o| matches!(o, OpenItem::Message { .. }));
-    if let Some(pos) = pos {
-      return pos;
+  fn close_current(&mut self, out: &mut Vec<SseEvent>) {
+    if let Some(item) = self.current.take() {
+      self.close_item(item, out);
     }
-    let output_index = self.next_output_index;
-    self.next_output_index += 1;
-    let item_id = self.synth_item_id("msg");
-    self.open.push(OpenItem::Message {
-      output_index,
-      item_id,
-      text: String::new(),
-      part_open: false,
-    });
-    self.open.len() - 1
   }
 
   fn handle_text(&mut self, text: &str, out: &mut Vec<SseEvent>) {
-    let pos = self.open_message();
-    let (output_index, item_id, just_added) = if let OpenItem::Message {
-      output_index,
-      item_id,
-      part_open,
-      text: buf,
-    } = &mut self.open[pos]
-    {
-      let just_added = !*part_open;
-      buf.push_str(text);
-      let oi = *output_index;
-      let id = item_id.clone();
-      if !*part_open {
-        *part_open = true;
-      }
-      (oi, id, just_added)
-    } else {
-      unreachable!()
-    };
-    if just_added {
+    if !matches!(self.current, Some(OpenItem::Message { .. })) {
+      self.close_current(out);
+      let output_index = self.next_output_index;
+      self.next_output_index += 1;
+      let item_id = self.synth_item_id("msg");
       let seq = self.next_seq();
       out.push(SseEvent::json(
         Some("response.output_item.added"),
@@ -257,7 +218,19 @@ impl ResponsesEmitter {
           "part": {"type": "output_text", "text": "", "annotations": []},
         }),
       ));
+      self.current = Some(OpenItem::Message {
+        output_index,
+        item_id,
+        text: String::new(),
+        part_open: true,
+      });
     }
+    let (output_index, item_id) = if let Some(OpenItem::Message { output_index, item_id, text: buf, .. }) = &mut self.current {
+      buf.push_str(text);
+      (*output_index, item_id.clone())
+    } else {
+      unreachable!()
+    };
     let seq = self.next_seq();
     out.push(SseEvent::json(
       Some("response.output_text.delta"),
@@ -272,44 +245,12 @@ impl ResponsesEmitter {
     ));
   }
 
-  fn open_reasoning(&mut self) -> usize {
-    let pos = self.open.iter().position(|o| matches!(o, OpenItem::Reasoning { .. }));
-    if let Some(pos) = pos {
-      return pos;
-    }
-    let output_index = self.next_output_index;
-    self.next_output_index += 1;
-    let item_id = self.synth_item_id("rs");
-    self.open.push(OpenItem::Reasoning {
-      output_index,
-      item_id,
-      summary: String::new(),
-      part_open: false,
-    });
-    self.open.len() - 1
-  }
-
   fn handle_reasoning(&mut self, text: &str, out: &mut Vec<SseEvent>) {
-    let pos = self.open_reasoning();
-    let (output_index, item_id, just_added) = if let OpenItem::Reasoning {
-      output_index,
-      item_id,
-      part_open,
-      summary,
-    } = &mut self.open[pos]
-    {
-      let just_added = !*part_open;
-      summary.push_str(text);
-      let oi = *output_index;
-      let id = item_id.clone();
-      if !*part_open {
-        *part_open = true;
-      }
-      (oi, id, just_added)
-    } else {
-      unreachable!()
-    };
-    if just_added {
+    if !matches!(self.current, Some(OpenItem::Reasoning { .. })) {
+      self.close_current(out);
+      let output_index = self.next_output_index;
+      self.next_output_index += 1;
+      let item_id = self.synth_item_id("rs");
       let seq = self.next_seq();
       out.push(SseEvent::json(
         Some("response.output_item.added"),
@@ -321,60 +262,36 @@ impl ResponsesEmitter {
             "id": item_id,
             "type": "reasoning",
             "status": "in_progress",
+            "content": [],
             "summary": [],
           }
         }),
       ));
-      let seq = self.next_seq();
-      out.push(SseEvent::json(
-        Some("response.reasoning_summary_part.added"),
-        json!({
-          "type": "response.reasoning_summary_part.added",
-          "sequence_number": seq,
-          "item_id": item_id,
-          "output_index": output_index,
-          "summary_index": 0,
-          "part": {"type": "summary_text", "text": ""},
-        }),
-      ));
+      self.current = Some(OpenItem::Reasoning {
+        output_index,
+        item_id,
+        summary: String::new(),
+        part_open: true,
+      });
     }
+    let (output_index, item_id) = if let Some(OpenItem::Reasoning { output_index, item_id, summary, .. }) = &mut self.current {
+      summary.push_str(text);
+      (*output_index, item_id.clone())
+    } else {
+      unreachable!()
+    };
     let seq = self.next_seq();
     out.push(SseEvent::json(
-      Some("response.reasoning_summary_text.delta"),
+      Some("response.reasoning_text.delta"),
       json!({
-        "type": "response.reasoning_summary_text.delta",
+        "type": "response.reasoning_text.delta",
         "sequence_number": seq,
         "item_id": item_id,
         "output_index": output_index,
-        "summary_index": 0,
+        "content_index": 0,
         "delta": text,
       }),
     ));
-  }
-
-  fn open_function_call(
-    &mut self,
-    chat_index: usize,
-    id_hint: Option<String>,
-    name_hint: Option<String>,
-  ) -> usize {
-    if let Some(pos) = self.open.iter().position(|o| matches!(o, OpenItem::FunctionCall { chat_index: ci, .. } if *ci == chat_index)) {
-      return pos;
-    }
-    let output_index = self.next_output_index;
-    self.next_output_index += 1;
-    let item_id = self.synth_item_id("fc");
-    let call_id = id_hint.unwrap_or_else(|| item_id.clone());
-    let name = name_hint.unwrap_or_default();
-    self.open.push(OpenItem::FunctionCall {
-      output_index,
-      chat_index,
-      item_id,
-      call_id,
-      name,
-      arguments: String::new(),
-    });
-    self.open.len() - 1
   }
 
   fn handle_tool_call(
@@ -385,36 +302,14 @@ impl ResponsesEmitter {
     args_delta: &str,
     out: &mut Vec<SseEvent>,
   ) {
-    let just_added = !self
-      .open
-      .iter()
-      .any(|o| matches!(o, OpenItem::FunctionCall { chat_index: ci, .. } if *ci == chat_index));
-    let pos = self.open_function_call(chat_index, id_hint.clone(), name_hint.clone());
-    let (output_index, item_id, call_id, name) = if let OpenItem::FunctionCall {
-      output_index,
-      item_id,
-      call_id,
-      name,
-      arguments,
-      ..
-    } = &mut self.open[pos]
-    {
-      arguments.push_str(args_delta);
-      if let Some(n) = name_hint {
-        if name.is_empty() {
-          *name = n;
-        }
-      }
-      if let Some(id) = id_hint {
-        if call_id == item_id.as_str() || call_id.is_empty() {
-          *call_id = id;
-        }
-      }
-      (*output_index, item_id.clone(), call_id.clone(), name.clone())
-    } else {
-      unreachable!()
-    };
-    if just_added {
+    let same_call = matches!(&self.current, Some(OpenItem::FunctionCall { chat_index: ci, .. }) if *ci == chat_index);
+    if !same_call {
+      self.close_current(out);
+      let output_index = self.next_output_index;
+      self.next_output_index += 1;
+      let item_id = self.synth_item_id("fc");
+      let call_id = id_hint.clone().unwrap_or_else(|| item_id.clone());
+      let name = name_hint.clone().unwrap_or_default();
       let seq = self.next_seq();
       out.push(SseEvent::json(
         Some("response.output_item.added"),
@@ -432,7 +327,31 @@ impl ResponsesEmitter {
           }
         }),
       ));
+      self.current = Some(OpenItem::FunctionCall {
+        output_index,
+        chat_index,
+        item_id,
+        call_id,
+        name,
+        arguments: String::new(),
+      });
     }
+    let (output_index, item_id) = if let Some(OpenItem::FunctionCall { output_index, item_id, name, call_id, arguments, .. }) = &mut self.current {
+      arguments.push_str(args_delta);
+      if let Some(n) = name_hint {
+        if name.is_empty() {
+          *name = n;
+        }
+      }
+      if let Some(id) = id_hint {
+        if call_id == item_id.as_str() || call_id.is_empty() {
+          *call_id = id;
+        }
+      }
+      (*output_index, item_id.clone())
+    } else {
+      unreachable!()
+    };
     if !args_delta.is_empty() {
       let seq = self.next_seq();
       out.push(SseEvent::json(
@@ -455,10 +374,7 @@ impl ResponsesEmitter {
     self.finished = true;
     let mut out = Vec::new();
     self.ensure_started(&mut out);
-    let open = std::mem::take(&mut self.open);
-    for item in open {
-      self.close_item(item, &mut out);
-    }
+    self.close_current(&mut out);
     let seq = self.next_seq();
     out.push(SseEvent::json(
       Some("response.completed"),
@@ -553,30 +469,18 @@ impl ResponsesEmitter {
         ));
         self.closed.push(final_item);
       }
-      OpenItem::Reasoning { summary, part_open, .. } => {
+      OpenItem::Reasoning { summary: text, part_open, .. } => {
         if part_open {
           let seq = self.next_seq();
           out.push(SseEvent::json(
-            Some("response.reasoning_summary_text.done"),
+            Some("response.reasoning_text.done"),
             json!({
-              "type": "response.reasoning_summary_text.done",
+              "type": "response.reasoning_text.done",
               "sequence_number": seq,
               "item_id": item_id,
               "output_index": output_index,
-              "summary_index": 0,
-              "text": summary,
-            }),
-          ));
-          let seq = self.next_seq();
-          out.push(SseEvent::json(
-            Some("response.reasoning_summary_part.done"),
-            json!({
-              "type": "response.reasoning_summary_part.done",
-              "sequence_number": seq,
-              "item_id": item_id,
-              "output_index": output_index,
-              "summary_index": 0,
-              "part": {"type": "summary_text", "text": summary},
+              "content_index": 0,
+              "text": text,
             }),
           ));
         }
@@ -584,7 +488,8 @@ impl ResponsesEmitter {
           "id": item_id,
           "type": "reasoning",
           "status": "completed",
-          "summary": [{"type": "summary_text", "text": summary}],
+          "content": [{"type": "reasoning_text", "text": text}],
+          "summary": [],
         });
         let seq = self.next_seq();
         out.push(SseEvent::json(

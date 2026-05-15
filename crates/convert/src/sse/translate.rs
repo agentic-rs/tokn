@@ -606,16 +606,14 @@ mod tests {
         "response.created",
         "response.in_progress",
         "response.output_item.added",
-        "response.reasoning_summary_part.added",
-        "response.reasoning_summary_text.delta",
-        "response.reasoning_summary_text.delta",
-        "response.reasoning_summary_text.done",
-        "response.reasoning_summary_part.done",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
         "response.output_item.done",
         "response.completed",
       ]
     );
-    assert_eq!(events[6].json.as_ref().unwrap()["text"], "Thinking");
+    assert_eq!(events[5].json.as_ref().unwrap()["text"], "Thinking");
   }
 
   #[test]
@@ -685,5 +683,148 @@ mod tests {
 
     let text_done = events[6].json.as_ref().unwrap();
     assert_eq!(text_done["text"], "Hi!");
+  }
+
+  #[test]
+  fn chat_to_responses_closes_reasoning_before_text() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({"id":"c1","model":"m","choices":[{"index":0,"delta":{"reasoning_content":"think"},"finish_reason":null}]}),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"Answer"},"finish_reason":null}]}),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",          // reasoning
+        "response.reasoning_text.delta",
+        "response.reasoning_text.done",
+        "response.output_item.done",           // reasoning closed
+        "response.output_item.added",          // message
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+    // assert sequential output_index
+    let reasoning_done = events[5].json.as_ref().unwrap();
+    let message_added = events[6].json.as_ref().unwrap();
+    assert_eq!(reasoning_done["output_index"], 0);
+    assert_eq!(message_added["output_index"], 1);
+  }
+
+  #[test]
+  fn chat_to_responses_closes_message_before_function_call() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"c1","model":"m",
+          "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",          // message
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",           // message closed
+        "response.output_item.added",          // function_call
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+  }
+
+  #[test]
+  fn chat_to_responses_handles_two_sequential_function_calls() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"c1","model":"m",
+          "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"x","arguments":"{}"}}]},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"c1","model":"m",
+          "choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"y","arguments":"{}"}}]},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",          // call a
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",           // a closed
+        "response.output_item.added",          // call b
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+
+    let a_added = &events[2].json.as_ref().unwrap()["item"];
+    assert_eq!(a_added["call_id"], "a");
+    assert_eq!(a_added["name"], "x");
+    let b_added = &events[6].json.as_ref().unwrap()["item"];
+    assert_eq!(b_added["call_id"], "b");
+    assert_eq!(b_added["name"], "y");
+    assert_eq!(b_added["id"].as_str().unwrap(), events[6].json.as_ref().unwrap()["item"]["id"].as_str().unwrap());
   }
 }
