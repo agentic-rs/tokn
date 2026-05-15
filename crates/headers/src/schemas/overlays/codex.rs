@@ -12,9 +12,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexOverlay {
@@ -56,6 +58,48 @@ impl HeaderSchema for CodexOverlay {
   }
 }
 
+impl CodexOverlay {
+  /// Build a [`CodexOverlay`] from inbound transport headers and
+  /// correlation [`TemplateVars`].
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      openai_beta: from_inbound_or(inbound, &keys::OPENAI_BETA, || "responses=v1".into()),
+      openai_intent: opt_from_inbound(inbound, &keys::OPENAI_INTENT),
+      chatgpt_account_id: vars
+        .account_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::CHATGPT_ACCOUNT_ID)),
+      session_id: vars
+        .session_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_SESSION_ID)),
+    }
+  }
+
+  /// Apply this overlay onto an outbound [`HeaderMap`]. `OpenAI-Beta` is
+  /// always overridden (the gateway requires it). Optional fields are filled
+  /// in only when the overlay has a value AND the header is not already
+  /// present on the map.
+  pub fn apply_to(&self, map: &mut HeaderMap, _vars: &TemplateVars) {
+    map.replace(keys::OPENAI_BETA.clone(), self.openai_beta.to_string());
+    if let Some(v) = &self.openai_intent {
+      if !map.contains_key(&keys::OPENAI_INTENT) {
+        map.insert(keys::OPENAI_INTENT.clone(), v.to_string());
+      }
+    }
+    if let Some(v) = &self.chatgpt_account_id {
+      if !map.contains_key(&keys::CHATGPT_ACCOUNT_ID) {
+        map.insert(keys::CHATGPT_ACCOUNT_ID.clone(), v.to_string());
+      }
+    }
+    if let Some(v) = &self.session_id {
+      if !map.contains_key(&keys::X_SESSION_ID) {
+        map.insert(keys::X_SESSION_ID.clone(), v.to_string());
+      }
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -69,5 +113,62 @@ mod tests {
       session_id: Some("ses_codex".into()),
     };
     assert_eq!(CodexOverlay::parse(&h.dump()).unwrap(), h);
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = CodexOverlay::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(h.openai_beta.as_str(), "responses=v1");
+    assert!(h.openai_intent.is_none());
+    assert!(h.chatgpt_account_id.is_none());
+    assert!(h.session_id.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::OPENAI_BETA.clone(), "responses=v2");
+    inbound.insert(keys::OPENAI_INTENT.clone(), "assistants");
+    let h = CodexOverlay::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.openai_beta.as_str(), "responses=v2");
+    assert_eq!(h.openai_intent.as_deref(), Some("assistants"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      account_id: Some("acct_abc".into()),
+      ..Default::default()
+    };
+    let h = CodexOverlay::build(&vars, &HeaderMap::new());
+    assert_eq!(h.session_id.as_deref(), Some("ses_xyz"));
+    assert_eq!(h.chatgpt_account_id.as_deref(), Some("acct_abc"));
+  }
+
+  #[test]
+  fn apply_to_overrides_managed_fields_and_skips_optionals_when_none() {
+    let mut map = HeaderMap::new();
+    map.insert(keys::OPENAI_BETA.clone(), "stale=v0");
+    map.insert(keys::X_SESSION_ID.clone(), "preexisting");
+
+    let overlay = CodexOverlay {
+      openai_beta: "responses=v1".into(),
+      openai_intent: None,
+      chatgpt_account_id: Some("acct_abc".into()),
+      session_id: Some("ses_xyz".into()),
+    };
+    overlay.apply_to(&mut map, &TemplateVars::default());
+
+    assert_eq!(map.get(&keys::OPENAI_BETA).unwrap().as_str(), "responses=v1");
+    // session_id was already present — overlay must not clobber it.
+    assert_eq!(map.get(&keys::X_SESSION_ID).unwrap().as_str(), "preexisting");
+    // chatgpt-account-id absent originally — overlay fills it in.
+    assert_eq!(
+      map.get(&keys::CHATGPT_ACCOUNT_ID).unwrap().as_str(),
+      "acct_abc"
+    );
+    // None-valued optional not inserted.
+    assert!(!map.contains_key(&keys::OPENAI_INTENT));
   }
 }

@@ -19,9 +19,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CopilotCliHeaders {
@@ -184,6 +186,66 @@ impl HeaderSchema for CopilotCliHeaders {
   }
 }
 
+impl CopilotCliHeaders {
+  /// Build a [`CopilotCliHeaders`] from inbound transport headers and
+  /// correlation [`TemplateVars`]. Defaults derived from the captured POST
+  /// `/responses` request documented at the module top.
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      user_agent: from_inbound_or(inbound, &keys::USER_AGENT, || {
+        "copilot/1.0.25 (client/sdk win32 v22.19.0) term/unknown".into()
+      }),
+      authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
+      content_type: from_inbound_or(inbound, &keys::CONTENT_TYPE, || "application/json".into()),
+      accept: from_inbound_or(inbound, &keys::ACCEPT, || "application/json".into()),
+      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || {
+        "br, gzip, deflate".into()
+      }),
+      accept_language: from_inbound_or(inbound, &keys::ACCEPT_LANGUAGE, || "*".into()),
+      sec_fetch_mode: from_inbound_or(inbound, &keys::SEC_FETCH_MODE, || "cors".into()),
+      copilot_integration_id: from_inbound_or(inbound, &keys::COPILOT_INTEGRATION_ID, || {
+        "copilot-developer-cli".into()
+      }),
+      openai_intent: from_inbound_or(inbound, &keys::OPENAI_INTENT, || {
+        "conversation-agent".into()
+      }),
+      initiator: from_inbound_or(inbound, &keys::X_INITIATOR, || "user".into()),
+      github_api_version: from_inbound_or(inbound, &keys::X_GITHUB_API_VERSION, || {
+        "2026-01-09".into()
+      }),
+      interaction_id: vars.interaction_id.clone().unwrap_or_else(|| {
+        from_inbound_or(inbound, &keys::X_INTERACTION_ID, || {
+          "00000000-0000-0000-0000-000000000000".into()
+        })
+      }),
+      interaction_type: from_inbound_or(inbound, &keys::X_INTERACTION_TYPE, || {
+        "conversation-user".into()
+      }),
+      client_session_id: vars.session_id.clone().unwrap_or_else(|| {
+        from_inbound_or(inbound, &keys::X_CLIENT_SESSION_ID, || {
+          "00000000-0000-0000-0000-000000000000".into()
+        })
+      }),
+      agent_task_id: from_inbound_or(inbound, &keys::X_AGENT_TASK_ID, || {
+        "00000000-0000-0000-0000-000000000000".into()
+      }),
+      stainless_retry_count: opt_from_inbound(inbound, &keys::X_STAINLESS_RETRY_COUNT),
+      stainless_lang: opt_from_inbound(inbound, &keys::X_STAINLESS_LANG),
+      stainless_package_version: opt_from_inbound(inbound, &keys::X_STAINLESS_PACKAGE_VERSION),
+      stainless_os: opt_from_inbound(inbound, &keys::X_STAINLESS_OS),
+      stainless_arch: opt_from_inbound(inbound, &keys::X_STAINLESS_ARCH),
+      stainless_runtime: opt_from_inbound(inbound, &keys::X_STAINLESS_RUNTIME),
+      stainless_runtime_version: opt_from_inbound(inbound, &keys::X_STAINLESS_RUNTIME_VERSION),
+      content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),
+      cookie: opt_from_inbound(inbound, &keys::COOKIE),
+      request_id: vars
+        .request_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_REQUEST_ID)),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -250,5 +312,49 @@ mod tests {
     assert!(!m.contains_key(&keys::X_STAINLESS_LANG));
     // 15 required fields written (22 - 7 stainless now optional).
     assert_eq!(m.len(), 15);
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = CopilotCliHeaders::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(
+      h.user_agent.as_str(),
+      "copilot/1.0.25 (client/sdk win32 v22.19.0) term/unknown"
+    );
+    assert_eq!(h.authorization.as_str(), "<missing>");
+    assert_eq!(h.copilot_integration_id.as_str(), "copilot-developer-cli");
+    assert_eq!(h.openai_intent.as_str(), "conversation-agent");
+    assert_eq!(h.initiator.as_str(), "user");
+    assert_eq!(h.github_api_version.as_str(), "2026-01-09");
+    assert!(h.stainless_lang.is_none());
+    assert!(h.cookie.is_none());
+    assert!(h.request_id.is_none());
+    assert!(h.content_length.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::USER_AGENT.clone(), "copilot/2.0");
+    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer gho_abc");
+    inbound.insert(keys::X_STAINLESS_LANG.clone(), "js");
+    let h = CopilotCliHeaders::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.user_agent.as_str(), "copilot/2.0");
+    assert_eq!(h.authorization.as_str(), "Bearer gho_abc");
+    assert_eq!(h.stainless_lang.as_deref(), Some("js"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      interaction_id: Some("int_42".into()),
+      request_id: Some("req_99".into()),
+      ..Default::default()
+    };
+    let h = CopilotCliHeaders::build(&vars, &HeaderMap::new());
+    assert_eq!(h.client_session_id.as_str(), "ses_xyz");
+    assert_eq!(h.interaction_id.as_str(), "int_42");
+    assert_eq!(h.request_id.as_deref(), Some("req_99"));
   }
 }

@@ -9,9 +9,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaudeCodeHeaders {
@@ -58,6 +60,26 @@ impl HeaderSchema for ClaudeCodeHeaders {
   }
 }
 
+impl ClaudeCodeHeaders {
+  /// Build a [`ClaudeCodeHeaders`] from inbound transport headers and
+  /// correlation [`TemplateVars`].
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      user_agent: from_inbound_or(inbound, &keys::USER_AGENT, || "claude-cli/1.0.0".into()),
+      anthropic_version: opt_from_inbound(inbound, &keys::ANTHROPIC_VERSION),
+      anthropic_beta: opt_from_inbound(inbound, &keys::ANTHROPIC_BETA),
+      session_id: vars
+        .session_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_SESSION_ID)),
+      interaction_id: vars
+        .interaction_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_INTERACTION_ID)),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -72,5 +94,37 @@ mod tests {
       interaction_id: Some("int_99".into()),
     };
     assert_eq!(ClaudeCodeHeaders::parse(&h.dump()).unwrap(), h);
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = ClaudeCodeHeaders::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(h.user_agent.as_str(), "claude-cli/1.0.0");
+    assert!(h.anthropic_version.is_none());
+    assert!(h.anthropic_beta.is_none());
+    assert!(h.session_id.is_none());
+    assert!(h.interaction_id.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::USER_AGENT.clone(), "claude-cli/2.0");
+    inbound.insert(keys::ANTHROPIC_VERSION.clone(), "2023-06-01");
+    let h = ClaudeCodeHeaders::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.user_agent.as_str(), "claude-cli/2.0");
+    assert_eq!(h.anthropic_version.as_deref(), Some("2023-06-01"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      interaction_id: Some("int_42".into()),
+      ..Default::default()
+    };
+    let h = ClaudeCodeHeaders::build(&vars, &HeaderMap::new());
+    assert_eq!(h.session_id.as_deref(), Some("ses_xyz"));
+    assert_eq!(h.interaction_id.as_deref(), Some("int_42"));
   }
 }

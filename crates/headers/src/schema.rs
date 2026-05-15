@@ -59,3 +59,23 @@ pub fn put_opt(map: &mut HeaderMap, name: &HeaderName, value: &Option<SmolStr>) 
     put(map, name, v);
   }
 }
+
+/// Read a header value from `inbound` if present, otherwise compute the
+/// supplied default. Used by `build` constructors on persona/overlay structs
+/// to populate required fields with persona-specific fallbacks.
+pub fn from_inbound_or<F: FnOnce() -> SmolStr>(
+  inbound: &HeaderMap,
+  key: &HeaderName,
+  default: F,
+) -> SmolStr {
+  inbound
+    .get(key)
+    .map(|v| SmolStr::from(v.as_str()))
+    .unwrap_or_else(default)
+}
+
+/// Read an optional header value from `inbound`. Returns `None` if absent.
+/// Sister to [`from_inbound_or`] for non-required `build` fields.
+pub fn opt_from_inbound(inbound: &HeaderMap, key: &HeaderName) -> Option<SmolStr> {
+  inbound.get(key).map(|v| SmolStr::from(v.as_str()))
+}

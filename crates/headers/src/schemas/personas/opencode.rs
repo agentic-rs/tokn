@@ -12,9 +12,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 /// Inbound headers consistently emitted by the OpenCode CLI persona.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +95,34 @@ impl HeaderSchema for OpencodeHeaders {
   }
 }
 
+impl OpencodeHeaders {
+  /// Build an [`OpencodeHeaders`] from inbound transport headers and
+  /// correlation [`TemplateVars`]. Inbound values win for transport fields;
+  /// correlation fields prefer `vars`. Missing required fields fall back to
+  /// persona-specific defaults derived from real captured traffic.
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      user_agent: from_inbound_or(inbound, &keys::USER_AGENT, || {
+        "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13".into()
+      }),
+      authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
+      host: from_inbound_or(inbound, &keys::HOST, || "api.deepseek.com".into()),
+      accept: from_inbound_or(inbound, &keys::ACCEPT, || "*/*".into()),
+      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || {
+        "gzip, deflate, br, zstd".into()
+      }),
+      connection: from_inbound_or(inbound, &keys::CONNECTION, || "keep-alive".into()),
+      content_type: from_inbound_or(inbound, &keys::CONTENT_TYPE, || "application/json".into()),
+      content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),
+      session_affinity: vars
+        .session_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_SESSION_AFFINITY)),
+      parent_session_id: opt_from_inbound(inbound, &keys::X_PARENT_SESSION_ID),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -136,5 +166,45 @@ mod tests {
   fn opencode_missing_required_returns_error() {
     let m = HeaderMap::new();
     assert!(matches!(OpencodeHeaders::parse(&m), Err(Error::MissingHeader { .. })));
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = OpencodeHeaders::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(
+      h.user_agent.as_str(),
+      "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+    );
+    assert_eq!(h.authorization.as_str(), "<missing>");
+    assert_eq!(h.host.as_str(), "api.deepseek.com");
+    assert_eq!(h.accept.as_str(), "*/*");
+    assert_eq!(h.accept_encoding.as_str(), "gzip, deflate, br, zstd");
+    assert_eq!(h.connection.as_str(), "keep-alive");
+    assert_eq!(h.content_type.as_str(), "application/json");
+    assert!(h.content_length.is_none());
+    assert!(h.session_affinity.is_none());
+    assert!(h.parent_session_id.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::USER_AGENT.clone(), "custom-ua/9.9");
+    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer secret");
+    inbound.insert(keys::CONTENT_LENGTH.clone(), "1234");
+    let h = OpencodeHeaders::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.user_agent.as_str(), "custom-ua/9.9");
+    assert_eq!(h.authorization.as_str(), "Bearer secret");
+    assert_eq!(h.content_length.as_deref(), Some("1234"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      ..Default::default()
+    };
+    let h = OpencodeHeaders::build(&vars, &HeaderMap::new());
+    assert_eq!(h.session_affinity.as_deref(), Some("ses_xyz"));
   }
 }

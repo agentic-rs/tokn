@@ -10,9 +10,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexCliHeaders {
@@ -130,6 +132,44 @@ impl HeaderSchema for CodexCliHeaders {
   }
 }
 
+impl CodexCliHeaders {
+  /// Build a [`CodexCliHeaders`] from inbound transport headers and
+  /// correlation [`TemplateVars`]. Inbound values win for transport fields;
+  /// correlation fields prefer `vars`. Missing required fields fall back to
+  /// persona-specific defaults derived from real captured traffic.
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      user_agent: from_inbound_or(inbound, &keys::USER_AGENT, || {
+        "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)".into()
+      }),
+      authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
+      host: from_inbound_or(inbound, &keys::HOST, || "chatgpt.com".into()),
+      accept: from_inbound_or(inbound, &keys::ACCEPT, || "text/event-stream".into()),
+      originator: from_inbound_or(inbound, &keys::ORIGINATOR, || "codex_exec".into()),
+      chatgpt_account_id: vars.account_id.clone().unwrap_or_else(|| {
+        from_inbound_or(inbound, &keys::CHATGPT_ACCOUNT_ID, || "<missing>".into())
+      }),
+      version: from_inbound_or(inbound, &keys::VERSION, || "0.130.0".into()),
+      content_type: opt_from_inbound(inbound, &keys::CONTENT_TYPE),
+      content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),
+      session_id: vars
+        .session_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::SESSION_ID_LOWER)),
+      thread_id: opt_from_inbound(inbound, &keys::THREAD_ID),
+      client_request_id: vars
+        .request_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_CLIENT_REQUEST_ID)),
+      codex_window_id: opt_from_inbound(inbound, &keys::X_CODEX_WINDOW_ID),
+      codex_beta_features: opt_from_inbound(inbound, &keys::X_CODEX_BETA_FEATURES),
+      codex_turn_metadata: opt_from_inbound(inbound, &keys::X_CODEX_TURN_METADATA),
+      openai_beta: opt_from_inbound(inbound, &keys::OPENAI_BETA),
+      cookie: opt_from_inbound(inbound, &keys::COOKIE),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -166,5 +206,49 @@ mod tests {
   fn missing_required_errors() {
     let m = HeaderMap::new();
     assert!(matches!(CodexCliHeaders::parse(&m), Err(Error::MissingHeader { .. })));
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = CodexCliHeaders::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(
+      h.user_agent.as_str(),
+      "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)"
+    );
+    assert_eq!(h.authorization.as_str(), "<missing>");
+    assert_eq!(h.host.as_str(), "chatgpt.com");
+    assert_eq!(h.accept.as_str(), "text/event-stream");
+    assert_eq!(h.originator.as_str(), "codex_exec");
+    assert_eq!(h.chatgpt_account_id.as_str(), "<missing>");
+    assert_eq!(h.version.as_str(), "0.130.0");
+    assert!(h.content_type.is_none());
+    assert!(h.session_id.is_none());
+    assert!(h.thread_id.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::USER_AGENT.clone(), "codex_exec/9.9.9");
+    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer abc");
+    inbound.insert(keys::OPENAI_BETA.clone(), "responses=v1");
+    let h = CodexCliHeaders::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.user_agent.as_str(), "codex_exec/9.9.9");
+    assert_eq!(h.authorization.as_str(), "Bearer abc");
+    assert_eq!(h.openai_beta.as_deref(), Some("responses=v1"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      request_id: Some("req_42".into()),
+      account_id: Some("acct_z".into()),
+      ..Default::default()
+    };
+    let h = CodexCliHeaders::build(&vars, &HeaderMap::new());
+    assert_eq!(h.session_id.as_deref(), Some("ses_xyz"));
+    assert_eq!(h.client_request_id.as_deref(), Some("req_42"));
+    assert_eq!(h.chatgpt_account_id.as_str(), "acct_z");
   }
 }

@@ -9,9 +9,11 @@ use crate::error::Error;
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::name::HeaderName;
-use crate::schema::{optional, put, put_opt, required, HeaderSchema};
+use crate::schema::{from_inbound_or, opt_from_inbound, optional, put, put_opt, required, HeaderSchema};
+use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClineHeaders {
@@ -44,6 +46,21 @@ impl HeaderSchema for ClineHeaders {
   }
 }
 
+impl ClineHeaders {
+  /// Build a [`ClineHeaders`] from inbound transport headers and
+  /// correlation [`TemplateVars`].
+  pub fn build(vars: &TemplateVars, inbound: &HeaderMap) -> Self {
+    Self {
+      user_agent: from_inbound_or(inbound, &keys::USER_AGENT, || "cline/3.0.0".into()),
+      session_id: vars
+        .session_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_SESSION_ID)),
+      behave_as: opt_from_inbound(inbound, &keys::X_BEHAVE_AS),
+    }
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -56,5 +73,33 @@ mod tests {
       behave_as: Some("agent".into()),
     };
     assert_eq!(ClineHeaders::parse(&h.dump()).unwrap(), h);
+  }
+
+  #[test]
+  fn build_with_empty_inbound_uses_defaults() {
+    let h = ClineHeaders::build(&TemplateVars::default(), &HeaderMap::new());
+    assert_eq!(h.user_agent.as_str(), "cline/3.0.0");
+    assert!(h.session_id.is_none());
+    assert!(h.behave_as.is_none());
+  }
+
+  #[test]
+  fn build_passes_through_inbound() {
+    let mut inbound = HeaderMap::new();
+    inbound.insert(keys::USER_AGENT.clone(), "cline/9.9");
+    inbound.insert(keys::X_BEHAVE_AS.clone(), "agent");
+    let h = ClineHeaders::build(&TemplateVars::default(), &inbound);
+    assert_eq!(h.user_agent.as_str(), "cline/9.9");
+    assert_eq!(h.behave_as.as_deref(), Some("agent"));
+  }
+
+  #[test]
+  fn build_uses_vars_for_correlation() {
+    let vars = TemplateVars {
+      session_id: Some("ses_xyz".into()),
+      ..Default::default()
+    };
+    let h = ClineHeaders::build(&vars, &HeaderMap::new());
+    assert_eq!(h.session_id.as_deref(), Some("ses_xyz"));
   }
 }
