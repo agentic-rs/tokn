@@ -1,6 +1,7 @@
 use super::accumulate::SseAccumulator;
 use super::event::SseEvent;
 use super::pipeline::EventTransformer;
+use super::responses_emit::ResponsesEmitter;
 use crate::error::{ConvertError, Result};
 use crate::ir::IrDelta;
 use crate::provider::Endpoint;
@@ -45,29 +46,43 @@ struct EmitState {
   model: String,
   started: bool,
   finished: bool,
+  responses: Option<ResponsesEmitter>,
 }
 
 impl EmitState {
   fn new(to: Endpoint) -> Self {
+    let id: String = match to {
+      Endpoint::ChatCompletions => "chatcmpl-converted".into(),
+      Endpoint::Responses => "resp_converted".into(),
+      Endpoint::Messages => "msg_converted".into(),
+    };
+    let responses = if matches!(to, Endpoint::Responses) {
+      Some(ResponsesEmitter::new(id.clone(), String::new()))
+    } else {
+      None
+    };
     Self {
       to,
-      id: match to {
-        Endpoint::ChatCompletions => "chatcmpl-converted".into(),
-        Endpoint::Responses => "resp_converted".into(),
-        Endpoint::Messages => "msg_converted".into(),
-      },
+      id,
       model: String::new(),
       started: false,
       finished: false,
+      responses,
     }
   }
 
   fn update_metadata(&mut self, metadata: super::accumulate::SseMetadata) {
     if let Some(id) = metadata.response_id {
-      self.id = id;
+      self.id = id.clone();
+      if let Some(emitter) = self.responses.as_mut() {
+        emitter.update_id(id);
+      }
     }
     if let Some(model) = metadata.model {
-      self.model = model;
+      self.model = model.clone();
+      if let Some(emitter) = self.responses.as_mut() {
+        emitter.update_model(model);
+      }
     }
   }
 
@@ -76,7 +91,7 @@ impl EmitState {
       return Vec::new();
     }
     let mut out = Vec::new();
-    if !self.started {
+    if !self.started && !matches!(self.to, Endpoint::Responses) {
       out.extend(self.start());
       self.started = true;
     }
@@ -87,8 +102,9 @@ impl EmitState {
         }
       }
       Endpoint::Responses => {
-        for (event, value) in crate::responses::events_from_deltas(&self.id, &self.model, deltas, false) {
-          out.push(SseEvent::json(Some(&event), value));
+        if let Some(emitter) = self.responses.as_mut() {
+          out.extend(emitter.emit(deltas));
+          self.started = true;
         }
       }
       Endpoint::Messages => {
@@ -106,21 +122,16 @@ impl EmitState {
     }
     self.finished = true;
     let mut out = Vec::new();
-    if !self.started {
+    if !self.started && !matches!(self.to, Endpoint::Responses) {
       out.extend(self.start());
       self.started = true;
     }
     match self.to {
       Endpoint::ChatCompletions => out.push(SseEvent::done()),
       Endpoint::Responses => {
-        let event = "response.completed";
-        out.push(SseEvent::json(
-          Some(event),
-          serde_json::json!({
-            "type": event,
-            "response": { "id": self.id, "object": "response", "status": "completed", "model": self.model }
-          }),
-        ));
+        if let Some(emitter) = self.responses.as_mut() {
+          out.extend(emitter.finish());
+        }
       }
       Endpoint::Messages => {
         out.push(SseEvent::json(
@@ -138,14 +149,7 @@ impl EmitState {
 
   fn start(&self) -> Vec<SseEvent> {
     match self.to {
-      Endpoint::ChatCompletions => Vec::new(),
-      Endpoint::Responses => vec![SseEvent::json(
-        Some("response.created"),
-        serde_json::json!({
-          "type": "response.created",
-          "response": { "id": self.id, "object": "response", "status": "in_progress", "model": self.model }
-        }),
-      )],
+      Endpoint::ChatCompletions | Endpoint::Responses => Vec::new(),
       Endpoint::Messages => vec![
         SseEvent::json(
           Some("message_start"),
@@ -410,5 +414,276 @@ mod tests {
     let call = &tool[0].json.as_ref().unwrap()["choices"][0]["delta"]["tool_calls"][0];
     assert_eq!(call["id"], "ctc_1");
     assert_eq!(call["function"]["arguments"], "abc");
+  }
+
+  fn collect_event_types(events: &[SseEvent]) -> Vec<String> {
+    events
+      .iter()
+      .map(|e| {
+        e.event
+          .clone()
+          .or_else(|| e.json.as_ref().and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string)))
+          .unwrap_or_default()
+      })
+      .collect()
+  }
+
+  fn chat_text_chunk(id: &str, model: &str, content: &str) -> SseEvent {
+    SseEvent::json(
+      None,
+      json!({
+        "id": id,
+        "model": model,
+        "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": null}]
+      }),
+    )
+  }
+
+  #[test]
+  fn chat_to_responses_emits_full_text_lifecycle() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    for piece in ["Hi", "!", " 👋", " What", " can", " I", " help"] {
+      events.extend(t.transform(chat_text_chunk("chatcmpl-x", "gpt-5.3-codex", piece)).unwrap());
+    }
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"chatcmpl-x","model":"gpt-5.3-codex",
+          "choices":[{"index":0,"delta":{"content":null},"finish_reason":"stop"}],
+          "usage":{"prompt_tokens":7,"completion_tokens":7,"total_tokens":14}
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+
+    // sequence numbers monotonic from 0
+    for (i, e) in events.iter().enumerate() {
+      assert_eq!(e.json.as_ref().unwrap()["sequence_number"], i as u64);
+    }
+
+    let created = &events[0].json.as_ref().unwrap()["response"];
+    assert_eq!(created["id"], "chatcmpl-x");
+    assert_eq!(created["model"], "gpt-5.3-codex");
+    assert_eq!(created["status"], "in_progress");
+
+    let item_added = &events[2].json.as_ref().unwrap()["item"];
+    assert_eq!(item_added["type"], "message");
+    assert_eq!(item_added["status"], "in_progress");
+    let item_id = item_added["id"].as_str().unwrap().to_string();
+    assert!(item_id.starts_with("msg_"));
+
+    let text_delta = events[4].json.as_ref().unwrap();
+    assert_eq!(text_delta["item_id"], item_id);
+    assert_eq!(text_delta["output_index"], 0);
+    assert_eq!(text_delta["content_index"], 0);
+    assert_eq!(text_delta["delta"], "Hi");
+
+    let text_done = events[11].json.as_ref().unwrap();
+    assert_eq!(text_done["text"], "Hi! 👋 What can I help");
+
+    let item_done = events[13].json.as_ref().unwrap();
+    assert_eq!(item_done["item"]["status"], "completed");
+    assert_eq!(item_done["item"]["content"][0]["text"], "Hi! 👋 What can I help");
+
+    let completed = &events[14].json.as_ref().unwrap()["response"];
+    assert_eq!(completed["status"], "completed");
+    assert_eq!(completed["usage"]["input_tokens"], 7);
+    assert_eq!(completed["usage"]["output_tokens"], 7);
+    assert_eq!(completed["output"][0]["type"], "message");
+    assert_eq!(completed["output"][0]["content"][0]["text"], "Hi! 👋 What can I help");
+  }
+
+  #[test]
+  fn chat_to_responses_function_call_lifecycle() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"chatcmpl-y","model":"gpt-5",
+          "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"exec","arguments":"{\"cmd\":"}}]},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"chatcmpl-y","model":"gpt-5",
+          "choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"ls\"}"}}]},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+
+    let added = &events[2].json.as_ref().unwrap()["item"];
+    assert_eq!(added["type"], "function_call");
+    assert_eq!(added["call_id"], "call_abc");
+    assert_eq!(added["name"], "exec");
+
+    let args_done = events[5].json.as_ref().unwrap();
+    assert_eq!(args_done["arguments"], "{\"cmd\":\"ls\"}");
+
+    let item_done = &events[6].json.as_ref().unwrap()["item"];
+    assert_eq!(item_done["status"], "completed");
+    assert_eq!(item_done["arguments"], "{\"cmd\":\"ls\"}");
+    assert_eq!(item_done["call_id"], "call_abc");
+  }
+
+  #[test]
+  fn chat_to_responses_reasoning_lifecycle() {
+    let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"chatcmpl-z","model":"gpt-5",
+          "choices":[{"index":0,"delta":{"reasoning_content":"Think"},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        None,
+        json!({
+          "id":"chatcmpl-z","model":"gpt-5",
+          "choices":[{"index":0,"delta":{"reasoning_content":"ing"},"finish_reason":null}]
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.reasoning_summary_part.added",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.reasoning_summary_part.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+    assert_eq!(events[6].json.as_ref().unwrap()["text"], "Thinking");
+  }
+
+  #[test]
+  fn messages_to_responses_emits_full_text_lifecycle() {
+    let mut t = EndpointTranslator::new(Endpoint::Messages, Endpoint::Responses);
+    let mut events = Vec::new();
+    events.extend(
+      t.transform(SseEvent::json(
+        Some("message_start"),
+        json!({
+          "type":"message_start",
+          "message":{"id":"msg_abc","model":"claude-3","role":"assistant","content":[],"usage":{"input_tokens":4,"output_tokens":0}}
+        }),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        Some("content_block_start"),
+        json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        Some("content_block_delta"),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        Some("content_block_delta"),
+        json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}),
+      ))
+      .unwrap(),
+    );
+    events.extend(
+      t.transform(SseEvent::json(
+        Some("message_delta"),
+        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}),
+      ))
+      .unwrap(),
+    );
+    events.extend(t.finish().unwrap());
+
+    let kinds = collect_event_types(&events);
+    assert_eq!(
+      kinds,
+      vec![
+        "response.created",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.content_part.added",
+        "response.output_text.delta",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.content_part.done",
+        "response.output_item.done",
+        "response.completed",
+      ]
+    );
+
+    let created = &events[0].json.as_ref().unwrap()["response"];
+    assert_eq!(created["id"], "msg_abc");
+    assert_eq!(created["model"], "claude-3");
+
+    let text_done = events[6].json.as_ref().unwrap();
+    assert_eq!(text_done["text"], "Hi!");
   }
 }

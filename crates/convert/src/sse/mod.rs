@@ -2,6 +2,7 @@ pub mod accumulate;
 pub mod codec;
 pub mod event;
 pub mod pipeline;
+pub mod responses_emit;
 pub mod translate;
 
 pub use accumulate::{accumulate, SseAccumulator};

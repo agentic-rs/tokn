@@ -50,9 +50,15 @@ impl SseAccumulator {
 
   pub fn push_value(&mut self, value: &Value) -> Vec<IrDelta> {
     let deltas = match self.endpoint {
-      Endpoint::ChatCompletions => crate::chat::delta_from_chat_chunk(value),
+      Endpoint::ChatCompletions => {
+        self.observe_chat_chunk(value);
+        crate::chat::delta_from_chat_chunk(value)
+      }
       Endpoint::Responses => self.delta_from_responses_event(value),
-      Endpoint::Messages => crate::messages::delta_from_messages_event(value),
+      Endpoint::Messages => {
+        self.observe_messages_event(value);
+        crate::messages::delta_from_messages_event(value)
+      }
     };
     for delta in deltas.iter().cloned() {
       self.response.push_delta(delta);
@@ -90,6 +96,30 @@ impl SseAccumulator {
       }
     }
     deltas
+  }
+
+  fn observe_chat_chunk(&mut self, value: &Value) {
+    if self.responses.response_id.is_none() {
+      self.responses.response_id = value.get("id").and_then(Value::as_str).map(str::to_string);
+    }
+    if self.responses.model.is_none() {
+      self.responses.model = value.get("model").and_then(Value::as_str).map(str::to_string);
+    }
+  }
+
+  fn observe_messages_event(&mut self, value: &Value) {
+    if !matches!(value.get("type").and_then(Value::as_str), Some("message_start")) {
+      return;
+    }
+    let Some(message) = value.get("message") else {
+      return;
+    };
+    if self.responses.response_id.is_none() {
+      self.responses.response_id = message.get("id").and_then(Value::as_str).map(str::to_string);
+    }
+    if self.responses.model.is_none() {
+      self.responses.model = message.get("model").and_then(Value::as_str).map(str::to_string);
+    }
   }
 
   fn observe_responses_response(&mut self, value: &Value) {
