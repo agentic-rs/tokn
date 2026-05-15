@@ -9,6 +9,7 @@ pub mod event;
 pub mod message;
 pub mod request;
 pub mod response;
+pub mod usage;
 
 #[cfg(debug_assertions)]
 mod extra_keys_impls;
@@ -18,6 +19,7 @@ pub use event::{ChatChunk, ChatDelta, ChatEvent, ChunkChoice};
 pub use message::{ChatMessage, ChatToolCall, ChatToolFunction};
 pub use request::{ChatRequest, ChatToolChoice, ChatToolDef};
 pub use response::{ChatChoice, ChatResponse};
+pub use usage::ChatUsage;
 
 use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use llm_endpoint_core::{Extras, FinishReason, Usage};
+use llm_endpoint_core::{Extras, FinishReason};
 
 use crate::message::ChatMessage;
+use crate::usage::ChatUsage;
 
 /// Non-streaming response body returned by `chat.completions`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,7 +19,7 @@ pub struct ChatResponse {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub choices: Vec<ChatChoice>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub usage: Option<Usage>,
+  pub usage: Option<ChatUsage>,
   #[serde(default, flatten)]
   pub extras: Extras,
 }

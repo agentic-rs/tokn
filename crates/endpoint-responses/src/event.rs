@@ -9,6 +9,9 @@ use crate::response::ResponsesResponse;
 /// variant so consumers can route without matching on the variant first.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ResponsesEventCommon {
+  /// Monotonic sequence id; OpenAI emits this on every streaming event.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub sequence_number: Option<u64>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub response_id: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -29,12 +32,16 @@ pub enum ResponsesEvent {
   #[serde(rename = "response.created")]
   Created {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     response: Option<ResponsesResponse>,
     #[serde(default, flatten)]
     extras: Extras,
   },
   #[serde(rename = "response.in_progress")]
   InProgress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     response: Option<ResponsesResponse>,
     #[serde(default, flatten)]
@@ -81,6 +88,10 @@ pub enum ResponsesEvent {
     #[serde(default, flatten)]
     common: ResponsesEventCommon,
     delta: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    obfuscation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logprobs: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -89,6 +100,8 @@ pub enum ResponsesEvent {
     #[serde(default, flatten)]
     common: ResponsesEventCommon,
     text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logprobs: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -97,6 +110,8 @@ pub enum ResponsesEvent {
     #[serde(default, flatten)]
     common: ResponsesEventCommon,
     delta: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    obfuscation: Option<String>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -122,6 +137,8 @@ pub enum ResponsesEvent {
     #[serde(default, flatten)]
     common: ResponsesEventCommon,
     delta: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    obfuscation: Option<String>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -156,12 +173,16 @@ pub enum ResponsesEvent {
   #[serde(rename = "response.completed")]
   Completed {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     response: Option<ResponsesResponse>,
     #[serde(default, flatten)]
     extras: Extras,
   },
   #[serde(rename = "response.failed")]
   Failed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     response: Option<ResponsesResponse>,
     #[serde(default, flatten)]
@@ -170,12 +191,16 @@ pub enum ResponsesEvent {
   #[serde(rename = "response.incomplete")]
   Incomplete {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     response: Option<ResponsesResponse>,
     #[serde(default, flatten)]
     extras: Extras,
   },
   #[serde(rename = "error")]
   Error {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence_number: Option<u64>,
     #[serde(default)]
     error: Value,
     #[serde(default, flatten)]

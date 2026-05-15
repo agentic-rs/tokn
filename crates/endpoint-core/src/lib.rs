@@ -11,7 +11,6 @@ pub mod finish;
 pub mod role;
 pub mod tool;
 pub mod traits;
-pub mod usage;
 
 #[cfg(debug_assertions)]
 mod extra_keys_impls;
@@ -24,4 +23,3 @@ pub use finish::FinishReason;
 pub use role::Role;
 pub use tool::{ToolCall, ToolDef};
 pub use traits::{EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
-pub use usage::Usage;

@@ -5,6 +5,7 @@ pub mod event;
 pub mod message;
 pub mod request;
 pub mod response;
+pub mod usage;
 
 #[cfg(debug_assertions)]
 mod extra_keys_impls;
@@ -14,6 +15,7 @@ pub use event::MessagesEvent;
 pub use message::Message;
 pub use request::{MessagesRequest, MessagesToolChoice, MessagesToolDef, SystemPrompt};
 pub use response::MessagesResponse;
+pub use usage::MessagesUsage;
 
 use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 

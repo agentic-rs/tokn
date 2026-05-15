@@ -5,6 +5,7 @@ use llm_endpoint_core::Extras;
 
 use crate::content::{ContentBlock, ContentBlockDelta};
 use crate::response::MessagesResponse;
+use crate::usage::MessagesUsage;
 
 /// Streaming events emitted by the Messages API.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -36,7 +37,7 @@ pub enum MessagesEvent {
     #[serde(default)]
     delta: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    usage: Option<llm_endpoint_core::Usage>,
+    usage: Option<MessagesUsage>,
     #[serde(default, flatten)]
     extras: Extras,
   },

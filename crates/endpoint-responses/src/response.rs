@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_core::{Extras, Usage};
+use llm_endpoint_core::Extras;
 
 use crate::item::OutputItem;
+use crate::usage::ResponsesUsage;
 
 /// Non-streaming response body returned by the Responses API.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -23,7 +24,7 @@ pub struct ResponsesResponse {
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub output_text: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub usage: Option<Usage>,
+  pub usage: Option<ResponsesUsage>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub error: Option<Value>,
   #[serde(default, flatten)]

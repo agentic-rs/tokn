@@ -8,6 +8,7 @@ pub mod event;
 pub mod item;
 pub mod request;
 pub mod response;
+pub mod usage;
 
 #[cfg(debug_assertions)]
 mod extra_keys_impls;
@@ -21,6 +22,7 @@ pub use item::{
 };
 pub use request::{ResponsesInput, ResponsesRequest, ResponsesToolChoice, ResponsesToolDef};
 pub use response::ResponsesResponse;
+pub use usage::ResponsesUsage;
 
 use llm_endpoint_core::{Endpoint, EndpointEvent, EndpointItem, EndpointRequest, EndpointResponse};
 

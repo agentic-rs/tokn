@@ -9,6 +9,13 @@ use crate::event::{ChatChunk, ChatDelta, ChatEvent, ChunkChoice};
 use crate::message::{ChatMessage, ChatToolCall, ChatToolFunction};
 use crate::request::{ChatRequest, ChatToolDef};
 use crate::response::{ChatChoice, ChatResponse};
+use crate::usage::ChatUsage;
+
+impl ExtraKeys for ChatUsage {
+  fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
+    push_extras(&self.extras, prefix, out);
+  }
+}
 
 impl ExtraKeys for ChatRequest {
   fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {

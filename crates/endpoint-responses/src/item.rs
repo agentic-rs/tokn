@@ -23,9 +23,9 @@ pub enum InputItem {
 
 impl<'de> Deserialize<'de> for InputItem {
   fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-    let value = Value::deserialize(deserializer)?;
-    let kind = value.get("type").and_then(Value::as_str);
-    match kind {
+    let mut value = Value::deserialize(deserializer)?;
+    let kind = value.get("type").and_then(Value::as_str).map(str::to_owned);
+    match kind.as_deref() {
       Some("reasoning") => serde_json::from_value(value)
         .map(InputItem::Reasoning)
         .map_err(serde::de::Error::custom),
@@ -35,9 +35,16 @@ impl<'de> Deserialize<'de> for InputItem {
       Some("function_call_output") => serde_json::from_value(value)
         .map(InputItem::FunctionCallOutput)
         .map_err(serde::de::Error::custom),
-      Some("message") | None => serde_json::from_value(value)
-        .map(InputItem::Message)
-        .map_err(serde::de::Error::custom),
+      Some("message") | None => {
+        // `InputMessage` doesn't model a `type` field, so strip the
+        // discriminator before forwarding to avoid it landing in extras.
+        if let Some(obj) = value.as_object_mut() {
+          obj.remove("type");
+        }
+        serde_json::from_value(value)
+          .map(InputItem::Message)
+          .map_err(serde::de::Error::custom)
+      }
       Some(_) => Ok(InputItem::Other(value)),
     }
   }

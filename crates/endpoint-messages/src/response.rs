@@ -1,9 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use llm_endpoint_core::{Extras, Role, Usage};
+use llm_endpoint_core::{Extras, Role};
 
 use crate::content::ContentBlock;
+use crate::usage::MessagesUsage;
 
 /// Non-streaming response body returned by the Messages API.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -22,8 +23,12 @@ pub struct MessagesResponse {
   pub stop_reason: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub stop_sequence: Option<Value>,
+  /// Provider-specific structured stop information (e.g. Anthropic's
+  /// `stop_details` block); kept as a Value because the schema varies.
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub usage: Option<Usage>,
+  pub stop_details: Option<Value>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub usage: Option<MessagesUsage>,
   #[serde(default, flatten)]
   pub extras: Extras,
 }

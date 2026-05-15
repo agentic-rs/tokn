@@ -13,6 +13,13 @@ use crate::item::{
 };
 use crate::request::{ResponsesInput, ResponsesRequest, ResponsesToolDef};
 use crate::response::ResponsesResponse;
+use crate::usage::ResponsesUsage;
+
+impl ExtraKeys for ResponsesUsage {
+  fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
+    push_extras(&self.extras, prefix, out);
+  }
+}
 
 impl ExtraKeys for ResponsesRequest {
   fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
@@ -171,11 +178,11 @@ impl ExtraKeys for ResponsesEvent {
   fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
     use ResponsesEvent as E;
     match self {
-      E::Created { response, extras }
-      | E::InProgress { response, extras }
-      | E::Completed { response, extras }
-      | E::Failed { response, extras }
-      | E::Incomplete { response, extras } => {
+      E::Created { response, extras, .. }
+      | E::InProgress { response, extras, .. }
+      | E::Completed { response, extras, .. }
+      | E::Failed { response, extras, .. }
+      | E::Incomplete { response, extras, .. } => {
         push_extras(extras, prefix, out);
         response.extra_keys_into(out, &join_path(prefix, "response"));
       }

@@ -9,6 +9,13 @@ use crate::event::MessagesEvent;
 use crate::message::{Message, MessageContent};
 use crate::request::{MessagesRequest, MessagesToolDef, SystemPrompt};
 use crate::response::MessagesResponse;
+use crate::usage::MessagesUsage;
+
+impl ExtraKeys for MessagesUsage {
+  fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {
+    push_extras(&self.extras, prefix, out);
+  }
+}
 
 impl ExtraKeys for MessagesRequest {
   fn extra_keys_into(&self, out: &mut Vec<String>, prefix: &str) {

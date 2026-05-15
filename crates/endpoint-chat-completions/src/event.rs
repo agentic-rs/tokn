@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use llm_endpoint_core::{Extras, FinishReason, Role, Usage};
+use llm_endpoint_core::{Extras, FinishReason, Role};
+
+use crate::usage::ChatUsage;
 
 use crate::message::ChatToolCall;
 
@@ -18,7 +20,7 @@ pub struct ChatChunk {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub choices: Vec<ChunkChoice>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub usage: Option<Usage>,
+  pub usage: Option<ChatUsage>,
   #[serde(default, flatten)]
   pub extras: Extras,
 }

@@ -9,6 +9,9 @@ use llm_endpoint_core::Extras;
 pub enum ContentBlock {
   Text {
     text: String,
+    /// Anthropic prompt-caching directive (e.g. `{"type":"ephemeral"}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -16,6 +19,8 @@ pub enum ContentBlock {
     thinking: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -28,6 +33,8 @@ pub enum ContentBlock {
     name: String,
     #[serde(default)]
     input: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
@@ -37,18 +44,24 @@ pub enum ContentBlock {
     content: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     is_error: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
   Image {
     #[serde(default)]
     source: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
   Document {
     #[serde(default)]
     source: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cache_control: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },

@@ -36,6 +36,8 @@ pub enum OutputContentPart {
     text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     annotations: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    logprobs: Option<Value>,
     #[serde(default, flatten)]
     extras: Extras,
   },
