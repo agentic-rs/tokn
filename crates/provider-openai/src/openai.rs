@@ -1,7 +1,7 @@
 use crate::common::{self, Credential};
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
-use reqwest::header::HeaderMap;
+use llm_headers::HeaderMap;
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
@@ -215,7 +215,7 @@ mod tests {
     let openai = OpenAiProvider::from_account(Arc::new(a)).unwrap();
     let mut h = HeaderMap::new();
     openai.patch_headers(&mut h, &patch_ctx()).unwrap();
-    assert!(h.get("chatgpt-account-id").is_none());
+    assert!(h.get(&llm_headers::HeaderName::new("chatgpt-account-id")).is_none());
   }
 
   #[test]

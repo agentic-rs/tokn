@@ -1,7 +1,7 @@
 use crate::util::secret::Secret;
-use crate::{error, HeaderPatchCtx, Result};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
-use snafu::ResultExt;
+use crate::{HeaderPatchCtx, Result};
+use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use llm_headers::{HeaderMap, HeaderValue};
 
 pub enum Credential {
   ApiKey(Secret<String>),
@@ -22,24 +22,22 @@ pub fn url(base_url: &str, path: &str) -> String {
 
 pub fn patch_openai_headers(headers: &mut HeaderMap, token: &str, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
   headers.insert(
-    AUTHORIZATION,
-    HeaderValue::from_str(&format!("Bearer {token}")).context(error::HeaderValueSnafu { name: "authorization" })?,
+    &AUTHORIZATION,
+    HeaderValue::from_string(format!("Bearer {token}")),
   );
   headers.insert(
-    ACCEPT,
+    &ACCEPT,
     HeaderValue::from_static(if ctx.stream {
       "text/event-stream"
     } else {
       "application/json"
     }),
   );
-  headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+  headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
   if let Some(encoding) = ctx.content_encoding {
     headers.insert(
-      reqwest::header::CONTENT_ENCODING,
-      HeaderValue::from_str(encoding).context(error::HeaderValueSnafu {
-        name: "content-encoding",
-      })?,
+      &CONTENT_ENCODING,
+      HeaderValue::from_string(encoding.to_string()),
     );
   }
   Ok(())

@@ -1,7 +1,7 @@
 use crate::account::AccountConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
-use reqwest::header::HeaderMap;
+use llm_headers::HeaderMap;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;

@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::{InputTransformer, RequestMeta};
 use parking_lot::RwLock;
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use llm_headers::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
@@ -137,8 +138,8 @@ impl CopilotProvider {
   /// Resolve the X-Initiator value to send.
   /// Precedence: inbound `X-Initiator` header > config mode > auto-classify.
   fn resolve_initiator(&self, body: &Value, inbound: &HeaderMap, fallback: &str) -> String {
-    if let Some(v) = inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
-      let v = v.trim().to_ascii_lowercase();
+    if let Some(v) = inbound.get(&HeaderName::new("x-initiator")) {
+      let v = v.as_str().trim().to_ascii_lowercase();
       if v == "user" || v == "agent" {
         return v;
       }
@@ -186,35 +187,26 @@ impl Provider for CopilotProvider {
       message: "missing copilot bearer token for header patch".to_string(),
     })?;
     headers.insert(
-      AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {token}")).map_err(|source| error::Error::HeaderValue {
-        name: "authorization".into(),
-        source,
-      })?,
+      &AUTHORIZATION,
+      HeaderValue::from_string(format!("Bearer {token}")),
     );
     headers.insert(
-      ACCEPT,
+      &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
         "text/event-stream"
       } else {
         "application/json"
       }),
     );
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
-      reqwest::header::HeaderName::from_static("x-initiator"),
-      HeaderValue::from_str(ctx.initiator).map_err(|source| error::Error::HeaderValue {
-        name: "x-initiator".into(),
-        source,
-      })?,
+      &HeaderName::new("x-initiator"),
+      HeaderValue::from_string(ctx.initiator.to_string()),
     );
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(
-        CONTENT_ENCODING,
-        HeaderValue::from_str(encoding).map_err(|source| error::Error::HeaderValue {
-          name: "content-encoding".into(),
-          source,
-        })?,
+        &CONTENT_ENCODING,
+        HeaderValue::from_string(encoding.to_string()),
       );
     }
     Ok(())
@@ -340,8 +332,8 @@ impl CopilotProvider {
   /// body is shaped `{ input: …, instructions: …, … }` rather than
   /// `{ messages: [...] }`.
   fn resolve_initiator_responses(&self, body: &Value, inbound: &HeaderMap, fallback: &str) -> String {
-    if let Some(v) = inbound.get("x-initiator").and_then(|v| v.to_str().ok()) {
-      let v = v.trim().to_ascii_lowercase();
+    if let Some(v) = inbound.get(&HeaderName::new("x-initiator")) {
+      let v = v.as_str().trim().to_ascii_lowercase();
       if v == "user" || v == "agent" {
         return v;
       }
@@ -418,12 +410,12 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, "user", None))
       .unwrap();
-    assert_eq!(h.get("authorization").unwrap(), "Bearer api-tok-fixture");
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
-    assert_eq!(h.get("content-type").unwrap(), "application/json");
-    assert_eq!(h.get("x-initiator").unwrap(), "user");
-    assert!(h.get("content-encoding").is_none());
-    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer api-tok-fixture");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get(&HeaderName::new("x-initiator")).unwrap().as_str(), "user");
+    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
+    let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 4, "unexpected extra headers: {names:?}");
   }
 
@@ -433,8 +425,8 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, "agent", None))
       .unwrap();
-    assert_eq!(h.get("accept").unwrap(), "application/json");
-    assert_eq!(h.get("x-initiator").unwrap(), "agent");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get(&HeaderName::new("x-initiator")).unwrap().as_str(), "agent");
   }
 
   #[test]
@@ -444,8 +436,8 @@ mod tests {
     p.patch_headers(&mut h, &patch_ctx(Endpoint::Responses, true, "user", None))
       .unwrap();
     // patch_headers shape does not vary by endpoint.
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
-    assert_eq!(h.get("x-initiator").unwrap(), "user");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get(&HeaderName::new("x-initiator")).unwrap().as_str(), "user");
   }
 
   #[test]
@@ -454,8 +446,8 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, "user", None))
       .unwrap();
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
-    assert_eq!(h.get("x-initiator").unwrap(), "user");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get(&HeaderName::new("x-initiator")).unwrap().as_str(), "user");
   }
 
   #[test]
@@ -467,7 +459,7 @@ mod tests {
       &patch_ctx(Endpoint::ChatCompletions, false, "user", Some("gzip")),
     )
     .unwrap();
-    assert_eq!(h.get("content-encoding").unwrap(), "gzip");
+    assert_eq!(h.get(&HeaderName::new("content-encoding")).unwrap().as_str(), "gzip");
   }
 
   #[test]

@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 llm-core = { workspace = true }
 llm-auth = { workspace = true }
 llm-catalogue = { workspace = true }
+llm-headers = { workspace = true }
 async-trait = { workspace = true }
 base64 = "0.22"
 bytes = { workspace = true }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use bytes::Bytes;
-use reqwest::header::HeaderMap;
+use llm_headers::HeaderMap;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use snafu::ResultExt;
@@ -60,7 +60,7 @@ pub async fn send(
       resp_body: Bytes::new(),
     });
   }
-  let mut request = client.request(method, url).headers(headers);
+  let mut request = client.request(method, url).headers(headers.into());
   if let Some(body) = body {
     request = request.body(body);
   }

@@ -1,23 +1,24 @@
 use crate::config::CopilotHeaders;
-use crate::provider::{error, Result};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
-use snafu::ResultExt;
+use crate::provider::Result;
+use llm_headers::keys::{
+  ACCEPT, AUTHORIZATION, COPILOT_INTEGRATION_ID, EDITOR_PLUGIN_VERSION, EDITOR_VERSION, OPENAI_INTENT, USER_AGENT,
+};
+use llm_headers::{HeaderMap, HeaderName, HeaderValue};
 
 /// Headers for the Copilot API token exchange (`api.github.com`).
 pub fn token_exchange_headers(github_token: &str, h: &CopilotHeaders) -> Result<HeaderMap> {
   let mut m = HeaderMap::new();
   m.insert(
-    AUTHORIZATION,
-    HeaderValue::from_str(&format!("token {github_token}"))
-      .context(error::HeaderValueSnafu { name: "authorization" })?,
+    &AUTHORIZATION,
+    HeaderValue::from_string(format!("token {github_token}")),
   );
-  m.insert(ACCEPT, HeaderValue::from_static("application/json"));
+  m.insert(&ACCEPT, HeaderValue::from_static("application/json"));
+  m.insert(&USER_AGENT, HeaderValue::from_string(h.user_agent.clone()));
+  m.insert(&EDITOR_VERSION, HeaderValue::from_string(h.editor_version.clone()));
   m.insert(
-    USER_AGENT,
-    HeaderValue::from_str(&h.user_agent).context(error::HeaderValueSnafu { name: "user-agent" })?,
+    &EDITOR_PLUGIN_VERSION,
+    HeaderValue::from_string(h.editor_plugin_version.clone()),
   );
-  insert_str(&mut m, "editor-version", &h.editor_version)?;
-  insert_str(&mut m, "editor-plugin-version", &h.editor_plugin_version)?;
   Ok(m)
 }
 
@@ -34,41 +35,38 @@ pub fn copilot_request_headers(
 ) -> Result<HeaderMap> {
   let mut m = HeaderMap::new();
   m.insert(
-    AUTHORIZATION,
-    HeaderValue::from_str(&format!("Bearer {api_token}")).context(error::HeaderValueSnafu { name: "authorization" })?,
+    &AUTHORIZATION,
+    HeaderValue::from_string(format!("Bearer {api_token}")),
   );
   m.insert(
-    ACCEPT,
+    &ACCEPT,
     HeaderValue::from_static(if streaming {
       "text/event-stream"
     } else {
       "application/json"
     }),
   );
+  m.insert(&USER_AGENT, HeaderValue::from_string(h.user_agent.clone()));
+  m.insert(&EDITOR_VERSION, HeaderValue::from_string(h.editor_version.clone()));
   m.insert(
-    USER_AGENT,
-    HeaderValue::from_str(&h.user_agent).context(error::HeaderValueSnafu { name: "user-agent" })?,
+    &EDITOR_PLUGIN_VERSION,
+    HeaderValue::from_string(h.editor_plugin_version.clone()),
   );
-  insert_str(&mut m, "editor-version", &h.editor_version)?;
-  insert_str(&mut m, "editor-plugin-version", &h.editor_plugin_version)?;
-  insert_str(&mut m, "copilot-integration-id", &h.copilot_integration_id)?;
-  insert_str(&mut m, "openai-intent", &h.openai_intent)?;
-  insert_str(&mut m, "x-initiator", initiator)?;
+  m.insert(
+    &COPILOT_INTEGRATION_ID,
+    HeaderValue::from_string(h.copilot_integration_id.clone()),
+  );
+  m.insert(&OPENAI_INTENT, HeaderValue::from_string(h.openai_intent.clone()));
+  m.insert(
+    &HeaderName::new("x-initiator"),
+    HeaderValue::from_string(initiator.to_string()),
+  );
 
   // Extra (free-form) headers — applied last, overriding earlier values.
   for (k, v) in &h.extra_headers {
-    let name = HeaderName::from_bytes(k.as_bytes()).context(error::HeaderNameSnafu { name: k.clone() })?;
-    let val = HeaderValue::from_str(v).context(error::HeaderValueSnafu { name: k.clone() })?;
-    m.insert(name, val);
+    m.insert(&HeaderName::new(k.clone()), HeaderValue::from_string(v.clone()));
   }
   Ok(m)
-}
-
-fn insert_str(m: &mut HeaderMap, name: &'static str, value: &str) -> Result<()> {
-  let n = HeaderName::from_static(name);
-  let v = HeaderValue::from_str(value).context(error::HeaderValueSnafu { name: name.to_string() })?;
-  m.insert(n, v);
-  Ok(())
 }
 
 #[cfg(test)]
@@ -79,33 +77,37 @@ mod tests {
     CopilotHeaders::default()
   }
 
+  fn name(s: &str) -> HeaderName {
+    HeaderName::new(s)
+  }
+
   #[test]
   fn copilot_request_headers_includes_editor_metadata_and_intent() {
     let h = copilot_request_headers("api-tok", &defaults(), false, "user").unwrap();
-    assert_eq!(h.get("authorization").unwrap(), "Bearer api-tok");
-    assert_eq!(h.get("accept").unwrap(), "application/json");
-    assert_eq!(h.get("user-agent").unwrap(), "GitHubCopilotChat/0.20.0");
-    assert_eq!(h.get("editor-version").unwrap(), "vscode/1.95.0");
-    assert_eq!(h.get("editor-plugin-version").unwrap(), "copilot-chat/0.20.0");
-    assert_eq!(h.get("copilot-integration-id").unwrap(), "vscode-chat");
-    assert_eq!(h.get("openai-intent").unwrap(), "conversation-panel");
-    assert_eq!(h.get("x-initiator").unwrap(), "user");
-    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(h.get(&name("authorization")).unwrap().as_str(), "Bearer api-tok");
+    assert_eq!(h.get(&name("accept")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get(&name("user-agent")).unwrap().as_str(), "GitHubCopilotChat/0.20.0");
+    assert_eq!(h.get(&name("editor-version")).unwrap().as_str(), "vscode/1.95.0");
+    assert_eq!(h.get(&name("editor-plugin-version")).unwrap().as_str(), "copilot-chat/0.20.0");
+    assert_eq!(h.get(&name("copilot-integration-id")).unwrap().as_str(), "vscode-chat");
+    assert_eq!(h.get(&name("openai-intent")).unwrap().as_str(), "conversation-panel");
+    assert_eq!(h.get(&name("x-initiator")).unwrap().as_str(), "user");
+    let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 8, "unexpected extra headers: {names:?}");
   }
 
   #[test]
   fn copilot_request_headers_streaming_toggles_accept() {
     let h = copilot_request_headers("api-tok", &defaults(), true, "user").unwrap();
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get(&name("accept")).unwrap().as_str(), "text/event-stream");
   }
 
   #[test]
   fn copilot_request_headers_x_initiator_round_trips_user_and_agent() {
     let user = copilot_request_headers("t", &defaults(), false, "user").unwrap();
     let agent = copilot_request_headers("t", &defaults(), false, "agent").unwrap();
-    assert_eq!(user.get("x-initiator").unwrap(), "user");
-    assert_eq!(agent.get("x-initiator").unwrap(), "agent");
+    assert_eq!(user.get(&name("x-initiator")).unwrap().as_str(), "user");
+    assert_eq!(agent.get(&name("x-initiator")).unwrap().as_str(), "agent");
   }
 
   #[test]
@@ -117,19 +119,19 @@ mod tests {
       .insert("editor-version".into(), "neovim/0.10.0".into());
     h_cfg.extra_headers.insert("x-custom".into(), "yes".into());
     let h = copilot_request_headers("t", &h_cfg, false, "user").unwrap();
-    assert_eq!(h.get("editor-version").unwrap(), "neovim/0.10.0");
-    assert_eq!(h.get("x-custom").unwrap(), "yes");
+    assert_eq!(h.get(&name("editor-version")).unwrap().as_str(), "neovim/0.10.0");
+    assert_eq!(h.get(&name("x-custom")).unwrap().as_str(), "yes");
   }
 
   #[test]
   fn token_exchange_headers_shape_is_stable() {
     let h = token_exchange_headers("gh-pat", &defaults()).unwrap();
-    assert_eq!(h.get("authorization").unwrap(), "token gh-pat");
-    assert_eq!(h.get("accept").unwrap(), "application/json");
-    assert_eq!(h.get("user-agent").unwrap(), "GitHubCopilotChat/0.20.0");
-    assert_eq!(h.get("editor-version").unwrap(), "vscode/1.95.0");
-    assert_eq!(h.get("editor-plugin-version").unwrap(), "copilot-chat/0.20.0");
-    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(h.get(&name("authorization")).unwrap().as_str(), "token gh-pat");
+    assert_eq!(h.get(&name("accept")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get(&name("user-agent")).unwrap().as_str(), "GitHubCopilotChat/0.20.0");
+    assert_eq!(h.get(&name("editor-version")).unwrap().as_str(), "vscode/1.95.0");
+    assert_eq!(h.get(&name("editor-plugin-version")).unwrap().as_str(), "copilot-chat/0.20.0");
+    let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 5, "unexpected extra headers: {names:?}");
   }
 }

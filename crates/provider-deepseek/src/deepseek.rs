@@ -2,10 +2,10 @@ use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::{InputTransformer, RequestMeta};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_TYPE};
+use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use llm_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
 use serde_json::{json, Value};
-use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
@@ -127,25 +127,22 @@ impl Provider for DeepSeekProvider {
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     headers.insert(
-      AUTHORIZATION,
-      HeaderValue::from_str(&format!("Bearer {}", self.api_key.expose()))
-        .context(error::HeaderValueSnafu { name: "authorization" })?,
+      &AUTHORIZATION,
+      HeaderValue::from_string(format!("Bearer {}", self.api_key.expose())),
     );
     headers.insert(
-      ACCEPT,
+      &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
         "text/event-stream"
       } else {
         "application/json"
       }),
     );
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(
-        reqwest::header::CONTENT_ENCODING,
-        HeaderValue::from_str(encoding).context(error::HeaderValueSnafu {
-          name: "content-encoding",
-        })?,
+        &CONTENT_ENCODING,
+        HeaderValue::from_string(encoding.to_string()),
       );
     }
     Ok(())
@@ -199,6 +196,7 @@ mod tests {
   use super::*;
   use llm_core::account::AccountTier;
   use llm_core::provider::Endpoint;
+  use llm_headers::HeaderName;
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {
@@ -324,12 +322,12 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, None))
       .unwrap();
-    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
-    assert_eq!(h.get("content-type").unwrap(), "application/json");
-    assert!(h.get("content-encoding").is_none());
+    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
+    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
     // Provider must not leak any unexpected headers.
-    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
   }
 
@@ -339,10 +337,10 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, None))
       .unwrap();
-    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
-    assert_eq!(h.get("accept").unwrap(), "application/json");
-    assert_eq!(h.get("content-type").unwrap(), "application/json");
-    assert!(h.get("content-encoding").is_none());
+    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
+    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
   }
 
   #[test]
@@ -352,9 +350,9 @@ mod tests {
     p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None))
       .unwrap();
     // DeepSeek does not differentiate header shape by endpoint.
-    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
-    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
-    assert_eq!(h.get("content-type").unwrap(), "application/json");
+    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
   }
 
   #[test]
@@ -363,7 +361,7 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip")))
       .unwrap();
-    assert_eq!(h.get("content-encoding").unwrap(), "gzip");
+    assert_eq!(h.get(&HeaderName::new("content-encoding")).unwrap().as_str(), "gzip");
   }
 }
 
