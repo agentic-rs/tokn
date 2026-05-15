@@ -450,4 +450,59 @@ mod tests {
       "body was not transformed: {captured_body}"
     );
   }
+
+  // ---------- header stability tests ----------
+  // All four ZAI_PROVIDERS share the same patch_headers impl, so we exercise
+  // one canonical id (zai-coding-plan) and rely on the existing aliases test
+  // for ID coverage.
+
+  fn patch_ctx(stream: bool, content_encoding: Option<&'static str>) -> HeaderPatchCtx<'static> {
+    HeaderPatchCtx {
+      endpoint: Endpoint::ChatCompletions,
+      body: &Value::Null,
+      bearer_token: None,
+      content_encoding,
+      stream,
+      initiator: "user",
+      inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+    }
+  }
+
+  fn provider() -> ZaiProvider {
+    ZaiProvider::from_account(std::sync::Arc::new(acct(
+      "zai-coding-plan",
+      Some("sk-test-fixture"),
+    )))
+    .unwrap()
+  }
+
+  #[test]
+  fn zai_patch_headers_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(true, None)).unwrap();
+    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+    assert!(h.get("content-encoding").is_none());
+    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
+  }
+
+  #[test]
+  fn zai_patch_headers_non_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(false, None)).unwrap();
+    assert_eq!(h.get("accept").unwrap(), "application/json");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+  }
+
+  #[test]
+  fn zai_patch_headers_round_trips_content_encoding() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(false, Some("gzip"))).unwrap();
+    assert_eq!(h.get("content-encoding").unwrap(), "gzip");
+  }
 }

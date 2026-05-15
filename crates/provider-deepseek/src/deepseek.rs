@@ -296,6 +296,68 @@ mod tests {
     let p = DeepSeekProvider::from_account(Arc::new(account)).unwrap();
     assert_eq!(p.messages_path(), "/v1/messages");
   }
+
+  // ---------- header stability tests ----------
+
+  fn patch_ctx(endpoint: Endpoint, stream: bool, content_encoding: Option<&'static str>) -> HeaderPatchCtx<'static> {
+    HeaderPatchCtx {
+      endpoint,
+      body: &Value::Null,
+      bearer_token: None,
+      content_encoding,
+      stream,
+      initiator: "user",
+      inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+    }
+  }
+
+  fn provider() -> DeepSeekProvider {
+    DeepSeekProvider::from_account(Arc::new(acct(Some("sk-test-fixture")))).unwrap()
+  }
+
+  #[test]
+  fn deepseek_patch_headers_chat_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, None)).unwrap();
+    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+    assert!(h.get("content-encoding").is_none());
+    // Provider must not leak any unexpected headers.
+    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
+  }
+
+  #[test]
+  fn deepseek_patch_headers_chat_non_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, None)).unwrap();
+    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap(), "application/json");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+    assert!(h.get("content-encoding").is_none());
+  }
+
+  #[test]
+  fn deepseek_patch_headers_messages_streaming_matches_chat_shape() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None)).unwrap();
+    // DeepSeek does not differentiate header shape by endpoint.
+    assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+  }
+
+  #[test]
+  fn deepseek_patch_headers_round_trips_content_encoding() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip"))).unwrap();
+    assert_eq!(h.get("content-encoding").unwrap(), "gzip");
+  }
 }
 
 fn shape_request(endpoint: crate::Endpoint, body: Value) -> Value {

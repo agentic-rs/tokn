@@ -354,3 +354,126 @@ impl CopilotProvider {
     }
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use llm_core::account::AccountTier;
+
+  fn acct(refresh: Option<&str>) -> AccountConfig {
+    AccountConfig {
+      id: "test".into(),
+      provider: ID_GITHUB_COPILOT.into(),
+      enabled: true,
+      tier: AccountTier::Active,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: refresh.map(|s| Secret::new(s.into())),
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
+
+  fn provider() -> CopilotProvider {
+    CopilotProvider::from_account(Arc::new(acct(Some("gh-test-fixture")))).unwrap()
+  }
+
+  fn patch_ctx(
+    endpoint: Endpoint,
+    stream: bool,
+    initiator: &'static str,
+    content_encoding: Option<&'static str>,
+  ) -> HeaderPatchCtx<'static> {
+    HeaderPatchCtx {
+      endpoint,
+      body: Box::leak(Box::new(Value::Null)),
+      bearer_token: Some("api-tok-fixture"),
+      content_encoding,
+      stream,
+      initiator,
+      inbound_headers: Box::leak(Box::new(HeaderMap::new())),
+    }
+  }
+
+  #[test]
+  fn copilot_patch_headers_chat_streaming_user_initiator() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, "user", None))
+      .unwrap();
+    assert_eq!(h.get("authorization").unwrap(), "Bearer api-tok-fixture");
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap(), "application/json");
+    assert_eq!(h.get("x-initiator").unwrap(), "user");
+    assert!(h.get("content-encoding").is_none());
+    let names: Vec<_> = h.keys().map(|k| k.as_str().to_string()).collect();
+    assert_eq!(names.len(), 4, "unexpected extra headers: {names:?}");
+  }
+
+  #[test]
+  fn copilot_patch_headers_chat_non_streaming_agent_initiator() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, "agent", None))
+      .unwrap();
+    assert_eq!(h.get("accept").unwrap(), "application/json");
+    assert_eq!(h.get("x-initiator").unwrap(), "agent");
+  }
+
+  #[test]
+  fn copilot_patch_headers_responses_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Responses, true, "user", None)).unwrap();
+    // patch_headers shape does not vary by endpoint.
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("x-initiator").unwrap(), "user");
+  }
+
+  #[test]
+  fn copilot_patch_headers_messages_streaming() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, "user", None)).unwrap();
+    assert_eq!(h.get("accept").unwrap(), "text/event-stream");
+    assert_eq!(h.get("x-initiator").unwrap(), "user");
+  }
+
+  #[test]
+  fn copilot_patch_headers_round_trips_content_encoding() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, "user", Some("gzip")))
+      .unwrap();
+    assert_eq!(h.get("content-encoding").unwrap(), "gzip");
+  }
+
+  #[test]
+  fn copilot_patch_headers_requires_bearer_token() {
+    let p = provider();
+    let mut h = HeaderMap::new();
+    let ctx = HeaderPatchCtx {
+      endpoint: Endpoint::ChatCompletions,
+      body: &Value::Null,
+      bearer_token: None,
+      content_encoding: None,
+      stream: false,
+      initiator: "user",
+      inbound_headers: &HeaderMap::new(),
+    };
+    let err = p.patch_headers(&mut h, &ctx).unwrap_err();
+    assert!(err.to_string().contains("copilot bearer token"), "{err}");
+  }
+}
