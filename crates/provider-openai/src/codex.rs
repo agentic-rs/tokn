@@ -8,7 +8,9 @@ use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX};
+use crate::{
+  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_CODEX,
+};
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 pub const CODEX_CLIENT_VERSION: &str = "0.130.0";

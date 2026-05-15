@@ -218,7 +218,10 @@ mod tests {
         json!({"content_index":0,"delta":"Let","output_index":0,"response_id":"resp_converted","type":"response.reasoning_text.delta"}),
       ))
       .unwrap();
-    assert_eq!(reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"], "Let");
+    assert_eq!(
+      reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"],
+      "Let"
+    );
 
     let text = t
       .transform(SseEvent::json(
@@ -226,7 +229,10 @@ mod tests {
         json!({"content_index":0,"delta":"I'll help","output_index":0,"response_id":"resp_converted","type":"response.output_text.delta"}),
       ))
       .unwrap();
-    assert_eq!(text[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"], "I'll help");
+    assert_eq!(
+      text[0].json.as_ref().unwrap()["choices"][0]["delta"]["content"],
+      "I'll help"
+    );
 
     let tool = t
       .transform(SseEvent::json(
@@ -245,7 +251,10 @@ mod tests {
         json!({"response":{"id":"resp_converted","model":"","object":"response","status":"completed"},"type":"response.completed"}),
       ))
       .unwrap();
-    assert_eq!(completed[0].json.as_ref().unwrap()["choices"][0]["finish_reason"], "stop");
+    assert_eq!(
+      completed[0].json.as_ref().unwrap()["choices"][0]["finish_reason"],
+      "stop"
+    );
 
     let done = t.finish().unwrap();
     assert_eq!(done.len(), 1);
@@ -311,7 +320,10 @@ mod tests {
       ))
       .unwrap();
     assert_eq!(completed[0].json.as_ref().unwrap()["usage"]["prompt_tokens"], 37);
-    assert_eq!(completed[1].json.as_ref().unwrap()["choices"][0]["finish_reason"], "stop");
+    assert_eq!(
+      completed[1].json.as_ref().unwrap()["choices"][0]["finish_reason"],
+      "stop"
+    );
   }
 
   #[test]
@@ -364,7 +376,10 @@ mod tests {
         json!({"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Thinking"}),
       ))
       .unwrap();
-    assert_eq!(reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"], "Thinking");
+    assert_eq!(
+      reasoning[0].json.as_ref().unwrap()["choices"][0]["delta"]["reasoning_content"],
+      "Thinking"
+    );
     assert!(t
       .transform(SseEvent::json(
         Some("response.reasoning_summary_text.done"),
@@ -422,7 +437,11 @@ mod tests {
       .map(|e| {
         e.event
           .clone()
-          .or_else(|| e.json.as_ref().and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string)))
+          .or_else(|| {
+            e.json
+              .as_ref()
+              .and_then(|v| v.get("type").and_then(|t| t.as_str()).map(str::to_string))
+          })
           .unwrap_or_default()
       })
       .collect()
@@ -444,7 +463,10 @@ mod tests {
     let mut t = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
     let mut events = Vec::new();
     for piece in ["Hi", "!", " 👋", " What", " can", " I", " help"] {
-      events.extend(t.transform(chat_text_chunk("chatcmpl-x", "gpt-5.3-codex", piece)).unwrap());
+      events.extend(
+        t.transform(chat_text_chunk("chatcmpl-x", "gpt-5.3-codex", piece))
+          .unwrap(),
+      );
     }
     events.extend(
       t.transform(SseEvent::json(
@@ -711,11 +733,11 @@ mod tests {
       vec![
         "response.created",
         "response.in_progress",
-        "response.output_item.added",          // reasoning
+        "response.output_item.added", // reasoning
         "response.reasoning_text.delta",
         "response.reasoning_text.done",
-        "response.output_item.done",           // reasoning closed
-        "response.output_item.added",          // message
+        "response.output_item.done",  // reasoning closed
+        "response.output_item.added", // message
         "response.content_part.added",
         "response.output_text.delta",
         "response.output_text.done",
@@ -760,13 +782,13 @@ mod tests {
       vec![
         "response.created",
         "response.in_progress",
-        "response.output_item.added",          // message
+        "response.output_item.added", // message
         "response.content_part.added",
         "response.output_text.delta",
         "response.output_text.done",
         "response.content_part.done",
-        "response.output_item.done",           // message closed
-        "response.output_item.added",          // function_call
+        "response.output_item.done",  // message closed
+        "response.output_item.added", // function_call
         "response.function_call_arguments.delta",
         "response.function_call_arguments.done",
         "response.output_item.done",
@@ -807,11 +829,11 @@ mod tests {
       vec![
         "response.created",
         "response.in_progress",
-        "response.output_item.added",          // call a
+        "response.output_item.added", // call a
         "response.function_call_arguments.delta",
         "response.function_call_arguments.done",
-        "response.output_item.done",           // a closed
-        "response.output_item.added",          // call b
+        "response.output_item.done",  // a closed
+        "response.output_item.added", // call b
         "response.function_call_arguments.delta",
         "response.function_call_arguments.done",
         "response.output_item.done",
@@ -825,6 +847,9 @@ mod tests {
     let b_added = &events[6].json.as_ref().unwrap()["item"];
     assert_eq!(b_added["call_id"], "b");
     assert_eq!(b_added["name"], "y");
-    assert_eq!(b_added["id"].as_str().unwrap(), events[6].json.as_ref().unwrap()["item"]["id"].as_str().unwrap());
+    assert_eq!(
+      b_added["id"].as_str().unwrap(),
+      events[6].json.as_ref().unwrap()["item"]["id"].as_str().unwrap()
+    );
   }
 }

@@ -8,8 +8,8 @@ pub mod openai;
 
 pub use llm_catalogue as catalogue;
 pub use llm_core::provider::{
-  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_CODEX,
-  ID_OPENAI,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars,
+  ID_CODEX, ID_OPENAI,
 };
 pub use llm_core::{account as config, provider, util};
 

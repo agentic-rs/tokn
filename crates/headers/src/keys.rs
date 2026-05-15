@@ -28,8 +28,16 @@ key!(HOST, "Host", "host");
 // Tool / persona identity
 key!(EDITOR_VERSION, "Editor-Version", "editor-version");
 key!(EDITOR_PLUGIN_VERSION, "Editor-Plugin-Version", "editor-plugin-version");
-key!(COPILOT_INTEGRATION_ID, "Copilot-Integration-Id", "copilot-integration-id");
-key!(COPILOT_VISION_REQUEST, "Copilot-Vision-Request", "copilot-vision-request");
+key!(
+  COPILOT_INTEGRATION_ID,
+  "Copilot-Integration-Id",
+  "copilot-integration-id"
+);
+key!(
+  COPILOT_VISION_REQUEST,
+  "Copilot-Vision-Request",
+  "copilot-vision-request"
+);
 key!(OPENAI_INTENT, "OpenAI-Intent", "openai-intent");
 key!(OPENAI_BETA, "OpenAI-Beta", "openai-beta");
 key!(CHATGPT_ACCOUNT_ID, "chatgpt-account-id", "chatgpt-account-id");
@@ -78,13 +86,42 @@ mod tests {
       };
     }
     check!(
-      AUTHORIZATION, CONTENT_TYPE, CONTENT_ENCODING, CONTENT_LENGTH, ACCEPT, ACCEPT_ENCODING,
-      ACCEPT_LANGUAGE, CONNECTION, COOKIE, USER_AGENT, HOST, EDITOR_VERSION,
-      EDITOR_PLUGIN_VERSION, COPILOT_INTEGRATION_ID, COPILOT_VISION_REQUEST, OPENAI_INTENT,
-      OPENAI_BETA, CHATGPT_ACCOUNT_ID, ANTHROPIC_BETA, ANTHROPIC_VERSION, X_API_KEY,
-      X_SESSION_ID, X_SESSION_AFFINITY, X_PARENT_SESSION_ID, X_REQUEST_ID, X_INITIATOR,
-      X_PROJECT_CWD, X_INTERACTION_ID, X_BEHAVE_AS, ORIGINATOR, VERSION, SESSION_ID_LOWER,
-      THREAD_ID, X_CLIENT_REQUEST_ID, X_CODEX_BETA_FEATURES, X_CODEX_TURN_METADATA,
+      AUTHORIZATION,
+      CONTENT_TYPE,
+      CONTENT_ENCODING,
+      CONTENT_LENGTH,
+      ACCEPT,
+      ACCEPT_ENCODING,
+      ACCEPT_LANGUAGE,
+      CONNECTION,
+      COOKIE,
+      USER_AGENT,
+      HOST,
+      EDITOR_VERSION,
+      EDITOR_PLUGIN_VERSION,
+      COPILOT_INTEGRATION_ID,
+      COPILOT_VISION_REQUEST,
+      OPENAI_INTENT,
+      OPENAI_BETA,
+      CHATGPT_ACCOUNT_ID,
+      ANTHROPIC_BETA,
+      ANTHROPIC_VERSION,
+      X_API_KEY,
+      X_SESSION_ID,
+      X_SESSION_AFFINITY,
+      X_PARENT_SESSION_ID,
+      X_REQUEST_ID,
+      X_INITIATOR,
+      X_PROJECT_CWD,
+      X_INTERACTION_ID,
+      X_BEHAVE_AS,
+      ORIGINATOR,
+      VERSION,
+      SESSION_ID_LOWER,
+      THREAD_ID,
+      X_CLIENT_REQUEST_ID,
+      X_CODEX_BETA_FEATURES,
+      X_CODEX_TURN_METADATA,
       X_CODEX_WINDOW_ID,
     );
   }

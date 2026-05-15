@@ -23,8 +23,7 @@ pub fn url(base_url: &str, path: &str) -> String {
 pub fn patch_openai_headers(headers: &mut HeaderMap, token: &str, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
   headers.insert(
     AUTHORIZATION,
-    HeaderValue::from_str(&format!("Bearer {token}"))
-      .context(error::HeaderValueSnafu { name: "authorization" })?,
+    HeaderValue::from_str(&format!("Bearer {token}")).context(error::HeaderValueSnafu { name: "authorization" })?,
   );
   headers.insert(
     ACCEPT,

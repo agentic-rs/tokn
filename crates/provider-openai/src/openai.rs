@@ -7,7 +7,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_OPENAI};
+use crate::{
+  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_OPENAI,
+};
 
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 

@@ -467,14 +467,8 @@ mod tests {
         endpoints: &[Endpoint::ChatCompletions],
       },
     ];
-    assert_eq!(
-      match_endpoint_rule(RULES, "claude-3", Endpoint::Messages),
-      Some(true)
-    );
-    assert_eq!(
-      match_endpoint_rule(RULES, "claude-3", Endpoint::Responses),
-      Some(false)
-    );
+    assert_eq!(match_endpoint_rule(RULES, "claude-3", Endpoint::Messages), Some(true));
+    assert_eq!(match_endpoint_rule(RULES, "claude-3", Endpoint::Responses), Some(false));
     assert_eq!(
       match_endpoint_rule(RULES, "gpt-4", Endpoint::ChatCompletions),
       Some(true)

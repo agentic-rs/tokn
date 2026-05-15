@@ -16,7 +16,10 @@ use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument};
 
-use crate::{error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_GITHUB_COPILOT};
+use crate::{
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars,
+  ID_GITHUB_COPILOT,
+};
 
 #[allow(dead_code)]
 pub const GITHUB_API: &str = "https://api.github.com";
@@ -438,7 +441,8 @@ mod tests {
   fn copilot_patch_headers_responses_streaming() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::Responses, true, "user", None)).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Responses, true, "user", None))
+      .unwrap();
     // patch_headers shape does not vary by endpoint.
     assert_eq!(h.get("accept").unwrap(), "text/event-stream");
     assert_eq!(h.get("x-initiator").unwrap(), "user");
@@ -448,7 +452,8 @@ mod tests {
   fn copilot_patch_headers_messages_streaming() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, "user", None)).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, "user", None))
+      .unwrap();
     assert_eq!(h.get("accept").unwrap(), "text/event-stream");
     assert_eq!(h.get("x-initiator").unwrap(), "user");
   }
@@ -457,8 +462,11 @@ mod tests {
   fn copilot_patch_headers_round_trips_content_encoding() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, "user", Some("gzip")))
-      .unwrap();
+    p.patch_headers(
+      &mut h,
+      &patch_ctx(Endpoint::ChatCompletions, false, "user", Some("gzip")),
+    )
+    .unwrap();
     assert_eq!(h.get("content-encoding").unwrap(), "gzip");
   }
 

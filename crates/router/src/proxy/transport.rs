@@ -1,5 +1,5 @@
-use super::connect_proxy::{connect_upstream, ConnectProxy};
 use super::ca::DynamicResolver;
+use super::connect_proxy::{connect_upstream, ConnectProxy};
 use super::passthrough::proxy_passthrough;
 use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
 use crate::accounts::registry::Registry;

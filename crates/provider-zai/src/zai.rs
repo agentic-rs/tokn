@@ -26,7 +26,9 @@ use serde_json::Value;
 use snafu::ResultExt;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ZAI_PROVIDERS};
+use crate::{
+  error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ZAI_PROVIDERS,
+};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -472,11 +474,7 @@ mod tests {
   }
 
   fn provider() -> ZaiProvider {
-    ZaiProvider::from_account(std::sync::Arc::new(acct(
-      "zai-coding-plan",
-      Some("sk-test-fixture"),
-    )))
-    .unwrap()
+    ZaiProvider::from_account(std::sync::Arc::new(acct("zai-coding-plan", Some("sk-test-fixture")))).unwrap()
   }
 
   #[test]

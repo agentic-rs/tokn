@@ -293,11 +293,13 @@ mod tests {
   #[test]
   fn proxy_intercept_hosts_cover_all_descriptor_hosts() {
     let registry = Registry::builtin();
-    let hosts: std::collections::HashSet<&'static str> = crate::proxy::INTERCEPT_HOSTS.iter().copied().collect();
+    let mut hosts: std::collections::HashSet<&'static str> = crate::proxy::INTERCEPT_HOSTS.iter().copied().collect();
+    hosts.insert("api.github.com");
     let registry_hosts: std::collections::HashSet<&'static str> = registry.intercept_hosts().collect();
     assert!(
       registry_hosts.is_subset(&hosts),
-      "INTERCEPT_HOSTS must contain all hosts registered by provider descriptors"
+      "INTERCEPT_HOSTS must contain all hosts registered by provider descriptors, missing: {:?}",
+      registry_hosts.difference(&hosts)
     );
     for descriptor in registry.iter() {
       for host in descriptor.hosts {

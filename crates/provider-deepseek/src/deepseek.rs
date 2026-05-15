@@ -9,7 +9,7 @@ use snafu::ResultExt;
 use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, TemplateVars, Provider, ProviderInfo, RequestCtx, Result, ID_DEEPSEEK};
+use crate::{error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_DEEPSEEK};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 
@@ -322,7 +322,8 @@ mod tests {
   fn deepseek_patch_headers_chat_streaming() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, None)).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, None))
+      .unwrap();
     assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
     assert_eq!(h.get("accept").unwrap(), "text/event-stream");
     assert_eq!(h.get("content-type").unwrap(), "application/json");
@@ -336,7 +337,8 @@ mod tests {
   fn deepseek_patch_headers_chat_non_streaming() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, None)).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, None))
+      .unwrap();
     assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
     assert_eq!(h.get("accept").unwrap(), "application/json");
     assert_eq!(h.get("content-type").unwrap(), "application/json");
@@ -347,7 +349,8 @@ mod tests {
   fn deepseek_patch_headers_messages_streaming_matches_chat_shape() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None)).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None))
+      .unwrap();
     // DeepSeek does not differentiate header shape by endpoint.
     assert_eq!(h.get("authorization").unwrap(), "Bearer sk-test-fixture");
     assert_eq!(h.get("accept").unwrap(), "text/event-stream");
@@ -358,7 +361,8 @@ mod tests {
   fn deepseek_patch_headers_round_trips_content_encoding() {
     let p = provider();
     let mut h = HeaderMap::new();
-    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip"))).unwrap();
+    p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip")))
+      .unwrap();
     assert_eq!(h.get("content-encoding").unwrap(), "gzip");
   }
 }
@@ -398,7 +402,10 @@ fn shape_request(endpoint: crate::Endpoint, body: Value) -> Value {
 }
 
 fn extract_thinking_mode(thinking: Option<&Value>, reasoning: Option<&Value>) -> &'static str {
-  match thinking.and_then(explicit_thinking_mode).or_else(|| reasoning.and_then(explicit_thinking_mode)) {
+  match thinking
+    .and_then(explicit_thinking_mode)
+    .or_else(|| reasoning.and_then(explicit_thinking_mode))
+  {
     Some(mode) => mode,
     None if thinking.is_some() || reasoning.is_some() => "enabled",
     None => "disabled",

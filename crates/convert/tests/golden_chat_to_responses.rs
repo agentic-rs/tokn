@@ -50,9 +50,7 @@ fn run_case(dir: &Path, update: bool) -> Result<(), String> {
   let mut translator = EndpointTranslator::new(Endpoint::ChatCompletions, Endpoint::Responses);
   let mut produced: Vec<SseEvent> = Vec::new();
   for ev in input_events {
-    let outs = translator
-      .transform(ev)
-      .map_err(|e| format!("transform: {e}"))?;
+    let outs = translator.transform(ev).map_err(|e| format!("transform: {e}"))?;
     produced.extend(outs);
   }
   let finals = translator.finish().map_err(|e| format!("finish: {e}"))?;
@@ -65,7 +63,8 @@ fn run_case(dir: &Path, update: bool) -> Result<(), String> {
     return Ok(());
   }
 
-  let expected = fs::read_to_string(&expected_path).map_err(|e| format!("read expected.sse: {e} (run with UPDATE_GOLDEN=1 to bootstrap)"))?;
+  let expected = fs::read_to_string(&expected_path)
+    .map_err(|e| format!("read expected.sse: {e} (run with UPDATE_GOLDEN=1 to bootstrap)"))?;
   let expected = normalize_sse(&expected);
 
   if actual != expected {

@@ -46,8 +46,12 @@ impl HeaderSchema for CodexOverlay {
     m
   }
   fn known_names() -> &'static [&'static HeaderName] {
-    static NAMES: [&HeaderName; 4] =
-      [&keys::OPENAI_BETA, &keys::OPENAI_INTENT, &keys::CHATGPT_ACCOUNT_ID, &keys::X_SESSION_ID];
+    static NAMES: [&HeaderName; 4] = [
+      &keys::OPENAI_BETA,
+      &keys::OPENAI_INTENT,
+      &keys::CHATGPT_ACCOUNT_ID,
+      &keys::X_SESSION_ID,
+    ];
     &NAMES
   }
 }

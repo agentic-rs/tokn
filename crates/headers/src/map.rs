@@ -18,9 +18,7 @@ pub struct HeaderMap {
 impl HeaderMap {
   /// Create an empty map.
   pub fn new() -> Self {
-    Self {
-      entries: Vec::new(),
-    }
+    Self { entries: Vec::new() }
   }
 
   /// Create a map with capacity for `n` entries (no allocations until exceeded).
@@ -145,7 +143,10 @@ mod tests {
     m.insert(name("X-Aaa"), "1");
     m.insert(name("Authorization"), "Bearer x");
     m.insert(name("Content-Type"), "application/json");
-    let collected: Vec<_> = m.iter().map(|(n, v)| (n.original().to_string(), v.as_str().to_string())).collect();
+    let collected: Vec<_> = m
+      .iter()
+      .map(|(n, v)| (n.original().to_string(), v.as_str().to_string()))
+      .collect();
     assert_eq!(
       collected,
       vec![
@@ -182,7 +183,10 @@ mod tests {
     m.insert(name("B"), "2");
     m.insert(name("Set-Cookie"), "old2");
     m.replace(name("set-cookie"), "new");
-    let collected: Vec<_> = m.iter().map(|(n, v)| (n.original().to_string(), v.as_str().to_string())).collect();
+    let collected: Vec<_> = m
+      .iter()
+      .map(|(n, v)| (n.original().to_string(), v.as_str().to_string()))
+      .collect();
     assert_eq!(
       collected,
       vec![
@@ -221,10 +225,10 @@ mod tests {
     let mut b = HeaderMap::new();
     b.insert(name("x"), "new");
     a.merge_replacing(b);
-    let collected: Vec<_> = a.iter().map(|(n, v)| (n.original().to_string(), v.as_str().to_string())).collect();
-    assert_eq!(
-      collected,
-      vec![("Y".into(), "keep".into()), ("x".into(), "new".into())]
-    );
+    let collected: Vec<_> = a
+      .iter()
+      .map(|(n, v)| (n.original().to_string(), v.as_str().to_string()))
+      .collect();
+    assert_eq!(collected, vec![("Y".into(), "keep".into()), ("x".into(), "new".into())]);
   }
 }

@@ -69,7 +69,10 @@ pub struct ResponsesEmitter {
 
 impl ResponsesEmitter {
   pub fn new(id: String, model: String) -> Self {
-    let created_at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let created_at = SystemTime::now()
+      .duration_since(UNIX_EPOCH)
+      .map(|d| d.as_secs())
+      .unwrap_or(0);
     Self {
       id,
       model,
@@ -160,7 +163,12 @@ impl ResponsesEmitter {
       match delta {
         IrDelta::Text(text) => self.handle_text(text, &mut out),
         IrDelta::Reasoning(text) => self.handle_reasoning(text, &mut out),
-        IrDelta::ToolCall { index, id, name, arguments_delta } => {
+        IrDelta::ToolCall {
+          index,
+          id,
+          name,
+          arguments_delta,
+        } => {
           self.handle_tool_call(*index, id.clone(), name.clone(), arguments_delta, &mut out);
         }
         IrDelta::Usage(usage) => {
@@ -227,7 +235,13 @@ impl ResponsesEmitter {
         part_open: true,
       });
     }
-    let (output_index, item_id) = if let Some(OpenItem::Message { output_index, item_id, text: buf, .. }) = &mut self.current {
+    let (output_index, item_id) = if let Some(OpenItem::Message {
+      output_index,
+      item_id,
+      text: buf,
+      ..
+    }) = &mut self.current
+    {
       buf.push_str(text);
       (*output_index, item_id.clone())
     } else {
@@ -279,7 +293,13 @@ impl ResponsesEmitter {
         part_open: true,
       });
     }
-    let (output_index, item_id) = if let Some(OpenItem::Reasoning { output_index, item_id, summary, .. }) = &mut self.current {
+    let (output_index, item_id) = if let Some(OpenItem::Reasoning {
+      output_index,
+      item_id,
+      summary,
+      ..
+    }) = &mut self.current
+    {
       summary.push_str(text);
       (*output_index, item_id.clone())
     } else {
@@ -341,7 +361,15 @@ impl ResponsesEmitter {
         arguments: String::new(),
       });
     }
-    let (output_index, item_id) = if let Some(OpenItem::FunctionCall { output_index, item_id, name, call_id, arguments, .. }) = &mut self.current {
+    let (output_index, item_id) = if let Some(OpenItem::FunctionCall {
+      output_index,
+      item_id,
+      name,
+      call_id,
+      arguments,
+      ..
+    }) = &mut self.current
+    {
       arguments.push_str(args_delta);
       if let Some(n) = name_hint {
         if name.is_empty() {
@@ -442,7 +470,12 @@ impl ResponsesEmitter {
         ));
         self.closed.push(final_item);
       }
-      OpenItem::FunctionCall { call_id, name, arguments, .. } => {
+      OpenItem::FunctionCall {
+        call_id,
+        name,
+        arguments,
+        ..
+      } => {
         let seq = self.next_seq();
         out.push(SseEvent::json(
           Some("response.function_call_arguments.done"),
@@ -474,7 +507,11 @@ impl ResponsesEmitter {
         ));
         self.closed.push(final_item);
       }
-      OpenItem::Reasoning { summary: text, part_open, .. } => {
+      OpenItem::Reasoning {
+        summary: text,
+        part_open,
+        ..
+      } => {
         if part_open {
           let seq = self.next_seq();
           out.push(SseEvent::json(

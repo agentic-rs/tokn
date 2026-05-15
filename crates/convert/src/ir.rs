@@ -207,7 +207,10 @@ pub fn usage_from_openai(v: &Value) -> Option<Usage> {
   let reasoning_output_tokens = u
     .get("output_tokens_details")
     .and_then(|d| d.get("reasoning_tokens"))
-    .or_else(|| u.get("completion_tokens_details").and_then(|d| d.get("reasoning_tokens")))
+    .or_else(|| {
+      u.get("completion_tokens_details")
+        .and_then(|d| d.get("reasoning_tokens"))
+    })
     .and_then(Value::as_u64);
   Some(Usage {
     input_tokens: u

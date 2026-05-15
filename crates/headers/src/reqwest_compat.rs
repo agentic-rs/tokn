@@ -56,7 +56,10 @@ mod tests {
     assert_eq!(r.get("authorization").unwrap().to_str().unwrap(), "Bearer abc");
     let back: HeaderMap = (&r).into();
     assert_eq!(back.len(), 3);
-    assert_eq!(back.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer abc");
+    assert_eq!(
+      back.get(&HeaderName::new("authorization")).unwrap().as_str(),
+      "Bearer abc"
+    );
   }
 
   #[test]

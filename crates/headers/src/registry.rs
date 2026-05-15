@@ -94,15 +94,24 @@ mod tests {
   fn lookup_known_pairs() {
     assert_eq!(
       lookup("openai", &Persona::CodexCli),
-      Some(ResolvedSchema { persona: PersonaKind::CodexCli, overlay: Some(OverlayKind::Codex) })
+      Some(ResolvedSchema {
+        persona: PersonaKind::CodexCli,
+        overlay: Some(OverlayKind::Codex)
+      })
     );
     assert_eq!(
       lookup("copilot", &Persona::Opencode),
-      Some(ResolvedSchema { persona: PersonaKind::Opencode, overlay: Some(OverlayKind::Copilot) })
+      Some(ResolvedSchema {
+        persona: PersonaKind::Opencode,
+        overlay: Some(OverlayKind::Copilot)
+      })
     );
     assert_eq!(
       lookup("deepseek", &Persona::ClaudeCode),
-      Some(ResolvedSchema { persona: PersonaKind::ClaudeCode, overlay: None })
+      Some(ResolvedSchema {
+        persona: PersonaKind::ClaudeCode,
+        overlay: None
+      })
     );
   }
 
@@ -128,10 +137,16 @@ mod tests {
   #[test]
   fn compose_overlay_wins_on_conflict() {
     let mut persona_map = HeaderMap::new();
-    persona_map.insert(HeaderName::new("X-Session-Id"), HeaderValue::from_string("from-persona".into()));
+    persona_map.insert(
+      HeaderName::new("X-Session-Id"),
+      HeaderValue::from_string("from-persona".into()),
+    );
     persona_map.insert(HeaderName::new("X-Persona-Only"), HeaderValue::from_string("p".into()));
     let mut overlay_map = HeaderMap::new();
-    overlay_map.insert(HeaderName::new("x-session-id"), HeaderValue::from_string("from-overlay".into()));
+    overlay_map.insert(
+      HeaderName::new("x-session-id"),
+      HeaderValue::from_string("from-overlay".into()),
+    );
     overlay_map.insert(HeaderName::new("X-Overlay-Only"), HeaderValue::from_string("o".into()));
 
     let composed = ResolvedSchema::compose(persona_map, Some(overlay_map));

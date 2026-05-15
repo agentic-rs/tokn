@@ -311,11 +311,7 @@ fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
       }
       Some("function_call") => {
         let call_id = item.get("call_id").and_then(Value::as_str).map(str::to_string);
-        let name = item
-          .get("name")
-          .and_then(Value::as_str)
-          .unwrap_or_default()
-          .to_string();
+        let name = item.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let arguments_raw = item.get("arguments").cloned().unwrap_or(Value::Null);
         let arguments = match &arguments_raw {
           Value::String(s) => serde_json::from_str(s).unwrap_or_else(|_| Value::String(s.clone())),
@@ -338,7 +334,11 @@ fn input_to_messages(input: &Value) -> Result<(Vec<String>, Vec<IrMessage>)> {
       }
       Some("function_call_output") => {
         let call_id = item.get("call_id").and_then(Value::as_str).map(str::to_string);
-        let output = item.get("output").and_then(Value::as_str).unwrap_or_default().to_string();
+        let output = item
+          .get("output")
+          .and_then(Value::as_str)
+          .unwrap_or_default()
+          .to_string();
         messages.push(IrMessage {
           role: Role::Tool,
           content: vec![ContentPart::Text { text: output }],
@@ -511,10 +511,15 @@ mod tests {
     assert_eq!(m.get("role").and_then(Value::as_str), Some("assistant"));
     assert_eq!(
       m.get("reasoning_content").and_then(Value::as_str),
-      Some("\nI'll read the numbers from `tool_call/data.txt`, sum them, and write the total to `tool_call/answer.txt`.")
+      Some(
+        "\nI'll read the numbers from `tool_call/data.txt`, sum them, and write the total to `tool_call/answer.txt`."
+      )
     );
     // No tool_calls expected for a pure reasoning item.
-    assert!(m.get("tool_calls").is_none(), "reasoning item must not carry tool_calls");
+    assert!(
+      m.get("tool_calls").is_none(),
+      "reasoning item must not carry tool_calls"
+    );
   }
 
   #[test]
@@ -532,10 +537,16 @@ mod tests {
     let m = &messages[0];
     assert_eq!(m.get("role").and_then(Value::as_str), Some("assistant"));
 
-    let tool_calls = m.get("tool_calls").and_then(Value::as_array).expect("tool_calls present");
+    let tool_calls = m
+      .get("tool_calls")
+      .and_then(Value::as_array)
+      .expect("tool_calls present");
     assert_eq!(tool_calls.len(), 1);
     let call = &tool_calls[0];
-    assert_eq!(call.get("id").and_then(Value::as_str), Some("tool-f0095fe26fc64ca6bb22994d08bd1724"));
+    assert_eq!(
+      call.get("id").and_then(Value::as_str),
+      Some("tool-f0095fe26fc64ca6bb22994d08bd1724")
+    );
     assert_eq!(call.get("type").and_then(Value::as_str), Some("function"));
     assert_eq!(
       call.pointer("/function/name").and_then(Value::as_str),
@@ -571,7 +582,9 @@ mod tests {
     );
     assert_eq!(
       m.get("content").and_then(Value::as_str),
-      Some("Chunk ID: f0d8f5\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n")
+      Some(
+        "Chunk ID: f0d8f5\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 0\nOutput:\n"
+      )
     );
   }
 

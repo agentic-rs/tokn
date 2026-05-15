@@ -18,7 +18,11 @@ impl ConnectProxy {
     Self {
       explicit: options.url.as_deref().and_then(parse_proxy_route),
       system: options.system.then(system_proxy_route).flatten(),
-      no_proxy: options.no_proxy.iter().map(|value| value.to_ascii_lowercase()).collect(),
+      no_proxy: options
+        .no_proxy
+        .iter()
+        .map(|value| value.to_ascii_lowercase())
+        .collect(),
     }
   }
 
@@ -70,9 +74,7 @@ where
   S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
   let authority = format!("{host}:{port}");
-  let mut request = format!(
-    "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: Keep-Alive\r\n"
-  );
+  let mut request = format!("CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: Keep-Alive\r\n");
   if let Some(value) = &proxy.authorization {
     request.push_str("Proxy-Authorization: ");
     request.push_str(value);

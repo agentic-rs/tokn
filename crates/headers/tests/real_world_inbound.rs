@@ -22,8 +22,7 @@ const USER_AGENTS_JSON: &str = include_str!("fixtures/user_agents.json");
 
 /// Parse the fixture into `(cell_key, HeaderMap)` pairs.
 fn load_cells() -> Vec<(String, HeaderMap)> {
-  let root: serde_json::Map<String, Value> =
-    serde_json::from_str(FIXTURE_JSON).expect("fixture is valid JSON object");
+  let root: serde_json::Map<String, Value> = serde_json::from_str(FIXTURE_JSON).expect("fixture is valid JSON object");
   let mut out = Vec::with_capacity(root.len());
   for (key, value) in root {
     let obj = value.as_object().expect("each cell is a JSON object");
@@ -41,7 +40,11 @@ fn load_cells() -> Vec<(String, HeaderMap)> {
 fn fixture_loads_with_expected_cell_count() {
   let cells = load_cells();
   // 41 = 50 mined cells minus 9 dropped (missing-persona, browser, OTel).
-  assert_eq!(cells.len(), 41, "fixture cell count drifted; re-run mine_inbound.py and update");
+  assert_eq!(
+    cells.len(),
+    41,
+    "fixture cell count drifted; re-run mine_inbound.py and update"
+  );
 }
 
 #[test]
@@ -90,13 +93,7 @@ fn distinct_header_inventory_covers_known_keys() {
     }
   }
   // Sanity expectations — these are universally present across captures.
-  for required in [
-    "host",
-    "user-agent",
-    "content-type",
-    "authorization",
-    "accept",
-  ] {
+  for required in ["host", "user-agent", "content-type", "authorization", "accept"] {
     assert!(all.contains(required), "expected `{required}` to appear at least once");
   }
   // Diagnostic: print the inventory so future regressions are easy to read.
@@ -107,8 +104,7 @@ fn distinct_header_inventory_covers_known_keys() {
 
 #[test]
 fn user_agents_fixture_covers_known_clients() {
-  let uas: Vec<String> =
-    serde_json::from_str(USER_AGENTS_JSON).expect("user_agents.json is a JSON array");
+  let uas: Vec<String> = serde_json::from_str(USER_AGENTS_JSON).expect("user_agents.json is a JSON array");
   assert!(!uas.is_empty(), "user_agents.json must not be empty");
   // Sorted, distinct invariant.
   let mut sorted = uas.clone();
@@ -126,8 +122,8 @@ fn user_agents_fixture_covers_known_clients() {
 
 #[test]
 fn opencode_schema_parses_real_deepseek_capture() {
-  use llm_headers::HeaderSchema;
   use llm_headers::schemas::OpencodeHeaders;
+  use llm_headers::HeaderSchema;
 
   let cells = load_cells();
   // Pick any opencode-on-deepseek POST cell. Key format from miner is
@@ -136,6 +132,5 @@ fn opencode_schema_parses_real_deepseek_capture() {
     .iter()
     .find(|(k, _)| k.starts_with("api.deepseek.com__") && k.ends_with("__opencode"))
     .expect("fixture must contain at least one opencode/deepseek cell");
-  OpencodeHeaders::parse(map)
-    .unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
+  OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
 }

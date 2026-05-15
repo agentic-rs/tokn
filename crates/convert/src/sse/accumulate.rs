@@ -156,7 +156,11 @@ impl SseAccumulator {
       entry.status = item.get("status").and_then(Value::as_str).map(str::to_string);
     }
     if entry.id.is_none() {
-      entry.id = item.get("id").or_else(|| value.get("item_id")).and_then(Value::as_str).map(str::to_string);
+      entry.id = item
+        .get("id")
+        .or_else(|| value.get("item_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
     }
     if entry.call_id.is_none() {
       entry.call_id = item.get("call_id").and_then(Value::as_str).map(str::to_string);
@@ -164,7 +168,11 @@ impl SseAccumulator {
     if entry.name.is_none() {
       entry.name = item.get("name").and_then(Value::as_str).map(str::to_string);
     }
-    if let Some(arguments) = item.get("arguments").or_else(|| item.get("input")).and_then(Value::as_str) {
+    if let Some(arguments) = item
+      .get("arguments")
+      .or_else(|| item.get("input"))
+      .and_then(Value::as_str)
+    {
       entry.arguments = arguments.to_string();
     }
   }
