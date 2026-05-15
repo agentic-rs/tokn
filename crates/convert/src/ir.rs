@@ -99,6 +99,12 @@ pub struct Usage {
   pub input_tokens: Option<u64>,
   pub output_tokens: Option<u64>,
   pub total_tokens: Option<u64>,
+  /// `prompt_tokens_details.cached_tokens` (chat) /
+  /// `input_tokens_details.cached_tokens` (responses).
+  pub cached_input_tokens: Option<u64>,
+  /// `completion_tokens_details.reasoning_tokens` (chat) /
+  /// `output_tokens_details.reasoning_tokens` (responses).
+  pub reasoning_output_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -193,6 +199,16 @@ pub fn reasoning_from_parts(parts: &[ContentPart]) -> Option<String> {
 
 pub fn usage_from_openai(v: &Value) -> Option<Usage> {
   let u = v.get("usage")?;
+  let cached_input_tokens = u
+    .get("input_tokens_details")
+    .and_then(|d| d.get("cached_tokens"))
+    .or_else(|| u.get("prompt_tokens_details").and_then(|d| d.get("cached_tokens")))
+    .and_then(Value::as_u64);
+  let reasoning_output_tokens = u
+    .get("output_tokens_details")
+    .and_then(|d| d.get("reasoning_tokens"))
+    .or_else(|| u.get("completion_tokens_details").and_then(|d| d.get("reasoning_tokens")))
+    .and_then(Value::as_u64);
   Some(Usage {
     input_tokens: u
       .get("prompt_tokens")
@@ -203,23 +219,39 @@ pub fn usage_from_openai(v: &Value) -> Option<Usage> {
       .or_else(|| u.get("output_tokens"))
       .and_then(Value::as_u64),
     total_tokens: u.get("total_tokens").and_then(Value::as_u64),
+    cached_input_tokens,
+    reasoning_output_tokens,
   })
 }
 
 pub fn usage_to_chat(usage: &Usage) -> Value {
-  serde_json::json!({
+  let mut v = serde_json::json!({
     "prompt_tokens": usage.input_tokens.unwrap_or(0),
     "completion_tokens": usage.output_tokens.unwrap_or(0),
     "total_tokens": usage.total_tokens.unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
-  })
+  });
+  if let Some(c) = usage.cached_input_tokens {
+    v["prompt_tokens_details"] = serde_json::json!({ "cached_tokens": c });
+  }
+  if let Some(r) = usage.reasoning_output_tokens {
+    v["completion_tokens_details"] = serde_json::json!({ "reasoning_tokens": r });
+  }
+  v
 }
 
 pub fn usage_to_io(usage: &Usage) -> Value {
-  serde_json::json!({
+  let mut v = serde_json::json!({
     "input_tokens": usage.input_tokens.unwrap_or(0),
     "output_tokens": usage.output_tokens.unwrap_or(0),
     "total_tokens": usage.total_tokens.unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
-  })
+  });
+  if let Some(c) = usage.cached_input_tokens {
+    v["input_tokens_details"] = serde_json::json!({ "cached_tokens": c });
+  }
+  if let Some(r) = usage.reasoning_output_tokens {
+    v["output_tokens_details"] = serde_json::json!({ "reasoning_tokens": r });
+  }
+  v
 }
 
 pub fn extras_from_object(obj: &Map<String, Value>, known: &[&str]) -> BTreeMap<String, Value> {

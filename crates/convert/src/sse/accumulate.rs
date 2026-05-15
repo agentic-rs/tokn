@@ -1,5 +1,5 @@
 use super::super::error::{ConvertError, Result};
-use super::super::ir::{IrDelta, IrResponse, Usage};
+use super::super::ir::{IrDelta, IrResponse};
 use super::event::SseEvent;
 use crate::provider::Endpoint;
 use eventsource_stream::Eventsource;
@@ -132,18 +132,8 @@ impl SseAccumulator {
     if self.responses.model.is_none() {
       self.responses.model = response.get("model").and_then(Value::as_str).map(str::to_string);
     }
-    if let Some(usage) = response.get("usage") {
-      self.response.usage = Some(Usage {
-        input_tokens: usage
-          .get("input_tokens")
-          .or_else(|| usage.get("prompt_tokens"))
-          .and_then(Value::as_u64),
-        output_tokens: usage
-          .get("output_tokens")
-          .or_else(|| usage.get("completion_tokens"))
-          .and_then(Value::as_u64),
-        total_tokens: usage.get("total_tokens").and_then(Value::as_u64),
-      });
+    if let Some(usage) = crate::ir::usage_from_openai(response) {
+      self.response.usage = Some(usage);
     }
   }
 

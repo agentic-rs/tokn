@@ -161,17 +161,7 @@ pub fn response_from_value(v: &Value) -> Result<IrResponse> {
     role: Some(Role::Assistant),
     content,
     tool_calls,
-    usage: v.get("usage").map(|u| Usage {
-      input_tokens: u
-        .get("input_tokens")
-        .or_else(|| u.get("prompt_tokens"))
-        .and_then(Value::as_u64),
-      output_tokens: u
-        .get("output_tokens")
-        .or_else(|| u.get("completion_tokens"))
-        .and_then(Value::as_u64),
-      total_tokens: u.get("total_tokens").and_then(Value::as_u64),
-    }),
+    usage: crate::ir::usage_from_openai(v),
     finish_reason: v.get("status").and_then(Value::as_str).map(str::to_string),
     extras: BTreeMap::new(),
   })
@@ -242,17 +232,7 @@ pub fn delta_from_responses_event(v: &Value) -> Vec<IrDelta> {
     }
     Some("response.completed") => {
       if let Some(resp) = v.get("response") {
-        if let Some(usage) = resp.get("usage").map(|u| Usage {
-          input_tokens: u
-            .get("input_tokens")
-            .or_else(|| u.get("prompt_tokens"))
-            .and_then(Value::as_u64),
-          output_tokens: u
-            .get("output_tokens")
-            .or_else(|| u.get("completion_tokens"))
-            .and_then(Value::as_u64),
-          total_tokens: u.get("total_tokens").and_then(Value::as_u64),
-        }) {
+        if let Some(usage) = crate::ir::usage_from_openai(resp) {
           out.push(IrDelta::Usage(usage));
         }
       }

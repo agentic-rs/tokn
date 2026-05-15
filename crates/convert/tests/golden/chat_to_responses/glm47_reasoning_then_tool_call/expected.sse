@@ -1,0 +1,78 @@
+event: response.created
+data: {"response":{"created_at":0,"id":"20260515121433230e8da2d5de46d8","model":"glm-4.7","object":"response","output":[],"status":"in_progress","usage":null},"type":"response.created"}
+
+event: response.in_progress
+data: {"response":{"created_at":0,"id":"20260515121433230e8da2d5de46d8","model":"glm-4.7","object":"response","output":[],"status":"in_progress","usage":null},"type":"response.in_progress"}
+
+event: response.output_item.added
+data: {"item":{"content":[],"id":"<rs-0>","status":"in_progress","summary":[],"type":"reasoning"},"output_index":0,"type":"response.output_item.added"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":"\n","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":"I","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":"'ll sum","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" all the","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" numbers from","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" the file","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" and write","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" the total","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" to","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" the answer","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" file.","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" Let","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" me break","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" this down","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" into","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.delta
+data: {"content_index":0,"delta":" steps.","item_id":"<rs-0>","output_index":0,"type":"response.reasoning_text.delta"}
+
+event: response.reasoning_text.done
+data: {"content_index":0,"item_id":"<rs-0>","output_index":0,"text":"\nI'll sum all the numbers from the file and write the total to the answer file. Let me break this down into steps.","type":"response.reasoning_text.done"}
+
+event: response.output_item.done
+data: {"item":{"content":[{"text":"\nI'll sum all the numbers from the file and write the total to the answer file. Let me break this down into steps.","type":"reasoning_text"}],"id":"<rs-0>","status":"completed","summary":[],"type":"reasoning"},"output_index":0,"type":"response.output_item.done"}
+
+event: response.output_item.added
+data: {"item":{"arguments":"","call_id":"tool-e542e4390ba847c4bf4c682ee5c53090","id":"<fc-0>","name":"update_plan","status":"in_progress","type":"function_call"},"output_index":1,"type":"response.output_item.added"}
+
+event: response.function_call_arguments.delta
+data: {"delta":"{\"plan\": [{\"step\": \"Read tool_call/data.txt to get numbers\", \"status\": \"in_progress\"}, {\"step\": \"Sum all the numbers\", \"status\": \"pending\"}, {\"step\": \"Write total to tool_call/answer.txt\", \"status\": \"pending\"}]}","item_id":"<fc-0>","output_index":1,"type":"response.function_call_arguments.delta"}
+
+event: response.function_call_arguments.done
+data: {"arguments":"{\"plan\": [{\"step\": \"Read tool_call/data.txt to get numbers\", \"status\": \"in_progress\"}, {\"step\": \"Sum all the numbers\", \"status\": \"pending\"}, {\"step\": \"Write total to tool_call/answer.txt\", \"status\": \"pending\"}]}","item_id":"<fc-0>","output_index":1,"type":"response.function_call_arguments.done"}
+
+event: response.output_item.done
+data: {"item":{"arguments":"{\"plan\": [{\"step\": \"Read tool_call/data.txt to get numbers\", \"status\": \"in_progress\"}, {\"step\": \"Sum all the numbers\", \"status\": \"pending\"}, {\"step\": \"Write total to tool_call/answer.txt\", \"status\": \"pending\"}]}","call_id":"tool-e542e4390ba847c4bf4c682ee5c53090","id":"<fc-0>","name":"update_plan","status":"completed","type":"function_call"},"output_index":1,"type":"response.output_item.done"}
+
+event: response.completed
+data: {"response":{"completed_at":0,"created_at":0,"id":"20260515121433230e8da2d5de46d8","model":"glm-4.7","object":"response","output":[{"content":[{"text":"\nI'll sum all the numbers from the file and write the total to the answer file. Let me break this down into steps.","type":"reasoning_text"}],"id":"<rs-0>","status":"completed","summary":[],"type":"reasoning"},{"arguments":"{\"plan\": [{\"step\": \"Read tool_call/data.txt to get numbers\", \"status\": \"in_progress\"}, {\"step\": \"Sum all the numbers\", \"status\": \"pending\"}, {\"step\": \"Write total to tool_call/answer.txt\", \"status\": \"pending\"}]}","call_id":"tool-e542e4390ba847c4bf4c682ee5c53090","id":"<fc-0>","name":"update_plan","status":"completed","type":"function_call"}],"status":"completed","usage":{"input_tokens":9828,"input_tokens_details":{"cached_tokens":0},"output_tokens":94,"output_tokens_details":{"reasoning_tokens":27},"total_tokens":9922}},"type":"response.completed"}
+

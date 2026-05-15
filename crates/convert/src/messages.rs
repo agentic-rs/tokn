@@ -138,6 +138,8 @@ pub fn response_from_value(v: &Value) -> Result<IrResponse> {
       input_tokens: u.get("input_tokens").and_then(Value::as_u64),
       output_tokens: u.get("output_tokens").and_then(Value::as_u64),
       total_tokens: None,
+      cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
+      reasoning_output_tokens: None,
     }),
     finish_reason: v.get("stop_reason").and_then(Value::as_str).map(str::to_string),
     extras: BTreeMap::new(),
@@ -222,6 +224,8 @@ pub fn delta_from_messages_event(v: &Value) -> Vec<IrDelta> {
           input_tokens: None,
           output_tokens: u.get("output_tokens").and_then(Value::as_u64),
           total_tokens: None,
+          cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
+          reasoning_output_tokens: None,
         }));
       }
     }
@@ -231,6 +235,8 @@ pub fn delta_from_messages_event(v: &Value) -> Vec<IrDelta> {
           input_tokens: u.get("input_tokens").and_then(Value::as_u64),
           output_tokens: u.get("output_tokens").and_then(Value::as_u64),
           total_tokens: None,
+          cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
+          reasoning_output_tokens: None,
         }));
       }
     }

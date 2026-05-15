@@ -1,0 +1,39 @@
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"\n"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"I"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"'ll sum"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" all the"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" numbers from"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" the file"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" and write"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" the total"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" to"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" the answer"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" file."}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" Let"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" me break"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" this down"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" into"}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":" steps."}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"tool_calls":[{"id":"tool-e542e4390ba847c4bf4c682ee5c53090","index":0,"type":"function","function":{"name":"update_plan","arguments":"{\"plan\": [{\"step\": \"Read tool_call/data.txt to get numbers\", \"status\": \"in_progress\"}, {\"step\": \"Sum all the numbers\", \"status\": \"pending\"}, {\"step\": \"Write total to tool_call/answer.txt\", \"status\": \"pending\"}]}"}}]}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}
+
+data: {"id":"20260515121433230e8da2d5de46d8","created":1778818473,"object":"chat.completion.chunk","model":"glm-4.7","choices":[{"index":0,"finish_reason":"tool_calls","delta":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":9828,"completion_tokens":94,"total_tokens":9922,"prompt_tokens_details":{"cached_tokens":0},"completion_tokens_details":{"reasoning_tokens":27}}}
+
+data: [DONE]

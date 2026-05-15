@@ -164,11 +164,7 @@ impl ResponsesEmitter {
           self.handle_tool_call(*index, id.clone(), name.clone(), arguments_delta, &mut out);
         }
         IrDelta::Usage(usage) => {
-          self.usage = Some(json!({
-            "input_tokens": usage.input_tokens,
-            "output_tokens": usage.output_tokens,
-            "total_tokens": usage.total_tokens,
-          }));
+          self.usage = Some(crate::ir::usage_to_io(usage));
         }
         IrDelta::Finish(reason) => {
           self.finish_reason = reason.clone();
@@ -185,6 +181,12 @@ impl ResponsesEmitter {
   }
 
   fn handle_text(&mut self, text: &str, out: &mut Vec<SseEvent>) {
+    // Suppress no-op empty deltas. If no message item is open we don't open
+    // one for an empty string; if one is already open we drop the empty
+    // delta event silently.
+    if text.is_empty() {
+      return;
+    }
     if !matches!(self.current, Some(OpenItem::Message { .. })) {
       self.close_current(out);
       let output_index = self.next_output_index;
@@ -246,6 +248,9 @@ impl ResponsesEmitter {
   }
 
   fn handle_reasoning(&mut self, text: &str, out: &mut Vec<SseEvent>) {
+    if text.is_empty() {
+      return;
+    }
     if !matches!(self.current, Some(OpenItem::Reasoning { .. })) {
       self.close_current(out);
       let output_index = self.next_output_index;
