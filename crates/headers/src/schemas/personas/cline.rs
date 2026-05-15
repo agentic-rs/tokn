@@ -31,7 +31,7 @@ impl HeaderSchema for ClineHeaders {
       behave_as: optional(map, &keys::X_BEHAVE_AS),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put_opt(&mut m, &keys::X_SESSION_ID, &self.session_id);
@@ -55,6 +55,6 @@ mod tests {
       session_id: Some("ses_cli".into()),
       behave_as: Some("agent".into()),
     };
-    assert_eq!(ClineHeaders::parse(&h.build()).unwrap(), h);
+    assert_eq!(ClineHeaders::parse(&h.dump()).unwrap(), h);
   }
 }

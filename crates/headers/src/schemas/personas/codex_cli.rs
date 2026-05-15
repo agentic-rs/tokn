@@ -85,7 +85,7 @@ impl HeaderSchema for CodexCliHeaders {
       cookie: optional(map, &keys::COOKIE),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put(&mut m, &keys::AUTHORIZATION, &self.authorization);
@@ -159,7 +159,7 @@ mod tests {
   #[test]
   fn responses_round_trip() {
     let h = responses_sample();
-    assert_eq!(CodexCliHeaders::parse(&h.build()).unwrap(), h);
+    assert_eq!(CodexCliHeaders::parse(&h.dump()).unwrap(), h);
   }
 
   #[test]

@@ -20,6 +20,7 @@ pub enum Persona {
   CodexCli,
   ClaudeCode,
   Cline,
+  CopilotCli,
   Custom(SmolStr),
 }
 
@@ -31,6 +32,7 @@ impl Persona {
       "codex" | "codex-cli" => Self::CodexCli,
       "claude-code" => Self::ClaudeCode,
       "cline" => Self::Cline,
+      "copilot" | "copilot-cli" => Self::CopilotCli,
       other => Self::Custom(SmolStr::new(other)),
     }
   }
@@ -42,6 +44,7 @@ impl Persona {
       Self::CodexCli => "codex-cli",
       Self::ClaudeCode => "claude-code",
       Self::Cline => "cline",
+      Self::CopilotCli => "copilot-cli",
       Self::Custom(s) => s.as_str(),
     }
   }
@@ -78,7 +81,7 @@ mod tests {
 
   #[test]
   fn known_personas_round_trip() {
-    for s in ["opencode", "codex-cli", "claude-code", "cline"] {
+    for s in ["opencode", "codex-cli", "claude-code", "cline", "copilot-cli"] {
       let p = Persona::from_str_lossy(s);
       assert_eq!(p.as_str(), s);
       assert_eq!(p.to_string(), s);
@@ -88,6 +91,11 @@ mod tests {
   #[test]
   fn codex_alias_normalizes() {
     assert_eq!(Persona::from_str_lossy("codex"), Persona::CodexCli);
+  }
+
+  #[test]
+  fn copilot_alias_normalizes() {
+    assert_eq!(Persona::from_str_lossy("copilot"), Persona::CopilotCli);
   }
 
   #[test]

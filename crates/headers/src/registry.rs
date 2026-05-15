@@ -19,6 +19,7 @@ pub enum PersonaKind {
   CodexCli,
   ClaudeCode,
   Cline,
+  CopilotCli,
 }
 
 impl PersonaKind {
@@ -29,6 +30,7 @@ impl PersonaKind {
       Persona::CodexCli => Some(Self::CodexCli),
       Persona::ClaudeCode => Some(Self::ClaudeCode),
       Persona::Cline => Some(Self::Cline),
+      Persona::CopilotCli => Some(Self::CopilotCli),
       Persona::Custom(_) => None,
     }
   }
@@ -132,6 +134,13 @@ mod tests {
   fn openai_with_non_codex_persona_has_no_overlay() {
     let r = lookup("openai", &Persona::Opencode).unwrap();
     assert!(r.overlay.is_none());
+  }
+
+  #[test]
+  fn copilot_cli_resolves_with_copilot_overlay() {
+    let r = lookup("copilot", &Persona::CopilotCli).unwrap();
+    assert_eq!(r.persona, PersonaKind::CopilotCli);
+    assert_eq!(r.overlay, Some(OverlayKind::Copilot));
   }
 
   #[test]

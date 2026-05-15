@@ -19,9 +19,14 @@ pub trait HeaderSchema: Sized {
   /// fails domain-specific validation.
   fn parse(map: &HeaderMap) -> Result<Self, Error>;
 
-  /// Render the typed struct back into a [`HeaderMap`]. Optional fields that
-  /// are `None` are omitted from the output.
-  fn build(&self) -> HeaderMap;
+  /// Render the typed struct back into a [`HeaderMap`]. Inverse of [`parse`];
+  /// optional fields that are `None` are omitted from the output.
+  ///
+  /// The verb `dump` is deliberately distinct from `build`: a future `build`
+  /// constructor (or `build_from_vars`) will *construct* a populated schema
+  /// from a [`crate::TemplateVars`] instance. `dump` only round-trips an
+  /// already-populated schema.
+  fn dump(&self) -> HeaderMap;
 
   /// All header names that this schema may emit. Useful for golden-test
   /// allowlists and schema documentation.

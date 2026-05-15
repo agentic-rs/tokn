@@ -37,7 +37,7 @@ impl HeaderSchema for CodexOverlay {
       session_id: optional(map, &keys::X_SESSION_ID),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::OPENAI_BETA, &self.openai_beta);
     put_opt(&mut m, &keys::OPENAI_INTENT, &self.openai_intent);
@@ -68,6 +68,6 @@ mod tests {
       chatgpt_account_id: Some("acct_99".into()),
       session_id: Some("ses_codex".into()),
     };
-    assert_eq!(CodexOverlay::parse(&h.build()).unwrap(), h);
+    assert_eq!(CodexOverlay::parse(&h.dump()).unwrap(), h);
   }
 }

@@ -65,6 +65,28 @@ key!(X_CODEX_BETA_FEATURES, "x-codex-beta-features", "x-codex-beta-features");
 key!(X_CODEX_TURN_METADATA, "x-codex-turn-metadata", "x-codex-turn-metadata");
 key!(X_CODEX_WINDOW_ID, "x-codex-window-id", "x-codex-window-id");
 
+// Copilot CLI / Stainless SDK family
+key!(X_GITHUB_API_VERSION, "X-GitHub-Api-Version", "x-github-api-version");
+key!(X_INTERACTION_TYPE, "X-Interaction-Type", "x-interaction-type");
+key!(X_CLIENT_SESSION_ID, "X-Client-Session-Id", "x-client-session-id");
+key!(X_AGENT_TASK_ID, "X-Agent-Task-Id", "x-agent-task-id");
+key!(SEC_FETCH_MODE, "Sec-Fetch-Mode", "sec-fetch-mode");
+key!(X_STAINLESS_RETRY_COUNT, "X-Stainless-Retry-Count", "x-stainless-retry-count");
+key!(X_STAINLESS_LANG, "X-Stainless-Lang", "x-stainless-lang");
+key!(
+  X_STAINLESS_PACKAGE_VERSION,
+  "X-Stainless-Package-Version",
+  "x-stainless-package-version"
+);
+key!(X_STAINLESS_OS, "X-Stainless-OS", "x-stainless-os");
+key!(X_STAINLESS_ARCH, "X-Stainless-Arch", "x-stainless-arch");
+key!(X_STAINLESS_RUNTIME, "X-Stainless-Runtime", "x-stainless-runtime");
+key!(
+  X_STAINLESS_RUNTIME_VERSION,
+  "X-Stainless-Runtime-Version",
+  "x-stainless-runtime-version"
+);
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -123,6 +145,18 @@ mod tests {
       X_CODEX_BETA_FEATURES,
       X_CODEX_TURN_METADATA,
       X_CODEX_WINDOW_ID,
+      X_GITHUB_API_VERSION,
+      X_INTERACTION_TYPE,
+      X_CLIENT_SESSION_ID,
+      X_AGENT_TASK_ID,
+      SEC_FETCH_MODE,
+      X_STAINLESS_RETRY_COUNT,
+      X_STAINLESS_LANG,
+      X_STAINLESS_PACKAGE_VERSION,
+      X_STAINLESS_OS,
+      X_STAINLESS_ARCH,
+      X_STAINLESS_RUNTIME,
+      X_STAINLESS_RUNTIME_VERSION,
     );
   }
 

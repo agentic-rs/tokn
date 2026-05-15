@@ -42,7 +42,7 @@ impl HeaderSchema for CopilotOverlay {
       initiator: optional(map, &keys::X_INITIATOR),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::EDITOR_VERSION, &self.editor_version);
     put(&mut m, &keys::EDITOR_PLUGIN_VERSION, &self.editor_plugin_version);
@@ -76,7 +76,7 @@ mod tests {
       vision_request: Some("true".into()),
       initiator: Some("agent".into()),
     };
-    assert_eq!(CopilotOverlay::parse(&h.build()).unwrap(), h);
+    assert_eq!(CopilotOverlay::parse(&h.dump()).unwrap(), h);
   }
 
   #[test]

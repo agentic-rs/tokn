@@ -37,7 +37,7 @@ impl HeaderSchema for ClaudeCodeHeaders {
       interaction_id: optional(map, &keys::X_INTERACTION_ID),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put_opt(&mut m, &keys::ANTHROPIC_VERSION, &self.anthropic_version);
@@ -71,6 +71,6 @@ mod tests {
       session_id: Some("ses_cc".into()),
       interaction_id: Some("int_99".into()),
     };
-    assert_eq!(ClaudeCodeHeaders::parse(&h.build()).unwrap(), h);
+    assert_eq!(ClaudeCodeHeaders::parse(&h.dump()).unwrap(), h);
   }
 }

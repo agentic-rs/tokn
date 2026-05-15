@@ -62,7 +62,7 @@ impl HeaderSchema for OpencodeHeaders {
       parent_session_id: optional(map, &keys::X_PARENT_SESSION_ID),
     })
   }
-  fn build(&self) -> HeaderMap {
+  fn dump(&self) -> HeaderMap {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put(&mut m, &keys::AUTHORIZATION, &self.authorization);
@@ -115,7 +115,7 @@ mod tests {
   #[test]
   fn opencode_round_trip() {
     let h = sample();
-    let parsed = OpencodeHeaders::parse(&h.build()).unwrap();
+    let parsed = OpencodeHeaders::parse(&h.dump()).unwrap();
     assert_eq!(parsed, h);
   }
 
@@ -125,7 +125,7 @@ mod tests {
     h.content_length = None;
     h.session_affinity = None;
     h.parent_session_id = None;
-    let m = h.build();
+    let m = h.dump();
     // 7 required fields, 0 optional written.
     assert_eq!(m.len(), 7);
     assert!(!m.contains_key(&keys::CONTENT_LENGTH));
