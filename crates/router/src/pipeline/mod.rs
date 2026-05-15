@@ -429,7 +429,7 @@ mod tests {
     assert_eq!(parsed.meta.initiator, "user");
     assert_eq!(parsed.body, body);
     assert_eq!(
-      parsed.meta.inbound_headers.get(&"x-session-id".into()).map(|v| v.as_str()),
+      parsed.meta.inbound_headers.get("x-session-id").map(|v| v.as_str()),
       headers.get("x-session-id").and_then(|v| v.to_str().ok())
     );
   }
@@ -642,7 +642,7 @@ mod tests {
     assert_eq!(inbound_status, 400);
     assert!(request_error.as_deref().unwrap().contains("tools.0.function.name"));
     assert_eq!(
-      inbound_resp_headers.get(&"content-type".into()).unwrap().as_str(),
+      inbound_resp_headers.get("content-type").unwrap().as_str(),
       "application/json"
     );
     let envelope: serde_json::Value = serde_json::from_slice(&inbound_resp_body).unwrap();

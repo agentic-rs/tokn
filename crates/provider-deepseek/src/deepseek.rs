@@ -196,7 +196,6 @@ mod tests {
   use super::*;
   use llm_core::account::AccountTier;
   use llm_core::provider::Endpoint;
-  use llm_headers::HeaderName;
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {
@@ -322,10 +321,10 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, true, None))
       .unwrap();
-    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
-    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
-    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
-    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
+    assert!(h.get("content-encoding").is_none());
     // Provider must not leak any unexpected headers.
     let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
@@ -337,10 +336,10 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, None))
       .unwrap();
-    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
-    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "application/json");
-    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
-    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
+    assert!(h.get("content-encoding").is_none());
   }
 
   #[test]
@@ -350,9 +349,9 @@ mod tests {
     p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None))
       .unwrap();
     // DeepSeek does not differentiate header shape by endpoint.
-    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
-    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
-    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
   }
 
   #[test]
@@ -361,7 +360,7 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip")))
       .unwrap();
-    assert_eq!(h.get(&HeaderName::new("content-encoding")).unwrap().as_str(), "gzip");
+    assert_eq!(h.get("content-encoding").unwrap().as_str(), "gzip");
   }
 }
 

@@ -160,8 +160,8 @@ mod tests {
 
     let composed = ResolvedSchema::compose(persona_map, Some(overlay_map));
     assert_eq!(composed.get(&keys::X_SESSION_ID).unwrap().as_str(), "from-overlay");
-    assert_eq!(composed.get(&HeaderName::new("X-Persona-Only")).unwrap().as_str(), "p");
-    assert_eq!(composed.get(&HeaderName::new("X-Overlay-Only")).unwrap().as_str(), "o");
+    assert_eq!(composed.get("X-Persona-Only").unwrap().as_str(), "p");
+    assert_eq!(composed.get("X-Overlay-Only").unwrap().as_str(), "o");
   }
 
   #[test]

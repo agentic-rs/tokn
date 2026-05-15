@@ -11,7 +11,59 @@ use crate::value::HeaderValue;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Cow;
 use std::fmt;
+
+/// Trait for values that can be used as a lookup key against a [`HeaderMap`].
+///
+/// Implementations exist for [`HeaderName`] and `&HeaderName` (zero-allocation,
+/// reusing the cached lowercase form), and for `&str` / `String` /
+/// `&String` (lowercased on the fly when needed).
+pub trait AsHeaderName {
+  /// Return the ASCII-lowercase form of this name. Borrows from the value
+  /// when already lowercase, allocates otherwise.
+  fn as_lower(&self) -> Cow<'_, str>;
+}
+
+impl AsHeaderName for HeaderName {
+  fn as_lower(&self) -> Cow<'_, str> {
+    Cow::Borrowed(self.as_str())
+  }
+}
+
+impl AsHeaderName for &HeaderName {
+  fn as_lower(&self) -> Cow<'_, str> {
+    Cow::Borrowed(self.as_str())
+  }
+}
+
+impl AsHeaderName for str {
+  fn as_lower(&self) -> Cow<'_, str> {
+    if self.bytes().all(|b| !b.is_ascii_uppercase()) {
+      Cow::Borrowed(self)
+    } else {
+      Cow::Owned(self.to_ascii_lowercase())
+    }
+  }
+}
+
+impl AsHeaderName for &str {
+  fn as_lower(&self) -> Cow<'_, str> {
+    <str as AsHeaderName>::as_lower(self)
+  }
+}
+
+impl AsHeaderName for String {
+  fn as_lower(&self) -> Cow<'_, str> {
+    <str as AsHeaderName>::as_lower(self.as_str())
+  }
+}
+
+impl AsHeaderName for &String {
+  fn as_lower(&self) -> Cow<'_, str> {
+    <str as AsHeaderName>::as_lower(self.as_str())
+  }
+}
 
 /// A list of (name, value) pairs in insertion order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -64,25 +116,37 @@ impl HeaderMap {
   }
 
   /// Remove all entries matching `name`. Returns the count removed.
-  pub fn remove(&mut self, name: &HeaderName) -> usize {
+  pub fn remove<N: AsHeaderName>(&mut self, name: N) -> usize {
+    let lower = name.as_lower();
     let before = self.entries.len();
-    self.entries.retain(|(n, _)| n != name);
+    self.entries.retain(|(n, _)| n.as_str() != lower.as_ref());
     before - self.entries.len()
   }
 
   /// First value matching `name`, if any.
-  pub fn get(&self, name: &HeaderName) -> Option<&HeaderValue> {
-    self.entries.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+  pub fn get<N: AsHeaderName>(&self, name: N) -> Option<&HeaderValue> {
+    let lower = name.as_lower();
+    self
+      .entries
+      .iter()
+      .find(|(n, _)| n.as_str() == lower.as_ref())
+      .map(|(_, v)| v)
   }
 
   /// All values matching `name`, in insertion order.
-  pub fn get_all<'a>(&'a self, name: &'a HeaderName) -> impl Iterator<Item = &'a HeaderValue> + 'a {
-    self.entries.iter().filter(move |(n, _)| n == name).map(|(_, v)| v)
+  pub fn get_all<N: AsHeaderName>(&self, name: N) -> impl Iterator<Item = &HeaderValue> {
+    let lower = name.as_lower().into_owned();
+    self
+      .entries
+      .iter()
+      .filter(move |(n, _)| n.as_str() == lower.as_str())
+      .map(|(_, v)| v)
   }
 
   /// Whether at least one entry matches `name`.
-  pub fn contains_key(&self, name: &HeaderName) -> bool {
-    self.entries.iter().any(|(n, _)| n == name)
+  pub fn contains_key<N: AsHeaderName>(&self, name: N) -> bool {
+    let lower = name.as_lower();
+    self.entries.iter().any(|(n, _)| n.as_str() == lower.as_ref())
   }
 
   /// Iterate entries in insertion order.

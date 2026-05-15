@@ -275,7 +275,6 @@ mod tests {
   use super::*;
   use crate::config::Account as AcctCfg;
   use crate::provider::{new_outbound_capture, Endpoint, RequestCtx, ZAI_PROVIDERS};
-  use llm_headers::HeaderName;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   fn acct(provider: &str, key: Option<&str>) -> AcctCfg {
@@ -478,10 +477,10 @@ mod tests {
     let p = provider();
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(true, None)).unwrap();
-    assert_eq!(h.get(&HeaderName::new("authorization")).unwrap().as_str(), "Bearer sk-test-fixture");
-    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "text/event-stream");
-    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
-    assert!(h.get(&HeaderName::new("content-encoding")).is_none());
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test-fixture");
+    assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
+    assert!(h.get("content-encoding").is_none());
     let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
   }
@@ -491,8 +490,8 @@ mod tests {
     let p = provider();
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(false, None)).unwrap();
-    assert_eq!(h.get(&HeaderName::new("accept")).unwrap().as_str(), "application/json");
-    assert_eq!(h.get(&HeaderName::new("content-type")).unwrap().as_str(), "application/json");
+    assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
   }
 
   #[test]
@@ -500,6 +499,6 @@ mod tests {
     let p = provider();
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(false, Some("gzip"))).unwrap();
-    assert_eq!(h.get(&HeaderName::new("content-encoding")).unwrap().as_str(), "gzip");
+    assert_eq!(h.get("content-encoding").unwrap().as_str(), "gzip");
   }
 }
