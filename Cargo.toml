@@ -5,7 +5,10 @@ members = [
   "crates/auth",
   "crates/catalogue",
   "crates/convert",
-  "crates/headers",
+  "crates/endpoint-core",
+  "crates/endpoint-chat-completions",
+  "crates/endpoint-responses",
+  "crates/endpoint-messages",
   "crates/router",
   "crates/gateway-cli",
   "crates/provider-copilot",
@@ -21,6 +24,10 @@ llm-config = { path = "crates/config" }
 llm-auth = { path = "crates/auth" }
 llm-catalogue = { path = "crates/catalogue" }
 llm-convert = { path = "crates/convert" }
+llm-endpoint-core = { path = "crates/endpoint-core" }
+llm-endpoint-chat-completions = { path = "crates/endpoint-chat-completions" }
+llm-endpoint-responses = { path = "crates/endpoint-responses" }
+llm-endpoint-messages = { path = "crates/endpoint-messages" }
 llm-headers = { path = "crates/headers" }
 llm-router = { path = "crates/router" }
 llm-provider-copilot = { path = "crates/provider-copilot" }
