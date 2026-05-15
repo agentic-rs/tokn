@@ -2,6 +2,7 @@
 //! defaults (e.g. `"application/json"`) cost zero allocations while dynamic
 //! values (auth tokens, session IDs) heap-allocate on demand.
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smol_str::SmolStr;
 use std::borrow::Cow;
 use std::fmt;
@@ -10,6 +11,19 @@ use std::fmt;
 /// to avoid allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HeaderValue(Cow<'static, str>);
+
+impl Serialize for HeaderValue {
+  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&self.0)
+  }
+}
+
+impl<'de> Deserialize<'de> for HeaderValue {
+  fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    let s = String::deserialize(deserializer)?;
+    Ok(HeaderValue::from_string(s))
+  }
+}
 
 impl HeaderValue {
   /// Construct from a `'static` string literal at compile time.
@@ -65,6 +79,12 @@ impl From<SmolStr> for HeaderValue {
 impl From<Cow<'static, str>> for HeaderValue {
   fn from(value: Cow<'static, str>) -> Self {
     Self(value)
+  }
+}
+
+impl From<&HeaderValue> for HeaderValue {
+  fn from(value: &HeaderValue) -> Self {
+    value.clone()
   }
 }
 

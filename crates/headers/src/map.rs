@@ -8,6 +8,10 @@
 
 use crate::name::HeaderName;
 use crate::value::HeaderValue;
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::ser::{SerializeMap, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
 
 /// A list of (name, value) pairs in insertion order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -129,6 +133,117 @@ impl IntoIterator for HeaderMap {
   }
 }
 
+impl<'a> IntoIterator for &'a HeaderMap {
+  type Item = (&'a HeaderName, &'a HeaderValue);
+  type IntoIter = std::iter::Map<
+    std::slice::Iter<'a, (HeaderName, HeaderValue)>,
+    fn(&'a (HeaderName, HeaderValue)) -> (&'a HeaderName, &'a HeaderValue),
+  >;
+  fn into_iter(self) -> Self::IntoIter {
+    self.entries.iter().map(|(n, v)| (n, v))
+  }
+}
+
+// --- serde ---
+//
+// JSON shape: object keyed by the **original-cased** header name, with the
+// value either a single string (one entry for that name) or an array of strings
+// (multiple entries, in insertion order).
+//
+// Deserialization accepts both shapes (string-or-array-of-strings) and is
+// also backward-compatible with legacy DB rows whose values are always single
+// strings (as written by the previous `reqwest::header::HeaderMap` serde impl).
+
+impl Serialize for HeaderMap {
+  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    // Group consecutive duplicate names, preserving first-occurrence order.
+    let mut grouped: Vec<(&HeaderName, Vec<&HeaderValue>)> = Vec::with_capacity(self.entries.len());
+    'outer: for (n, v) in &self.entries {
+      for (existing_name, vs) in grouped.iter_mut() {
+        if *existing_name == n {
+          vs.push(v);
+          continue 'outer;
+        }
+      }
+      grouped.push((n, vec![v]));
+    }
+    let mut map = serializer.serialize_map(Some(grouped.len()))?;
+    for (name, vals) in grouped {
+      if vals.len() == 1 {
+        map.serialize_entry(name, vals[0])?;
+      } else {
+        map.serialize_entry(name, &vals)?;
+      }
+    }
+    map.end()
+  }
+}
+
+/// Visitor accepting either a single string or a sequence of strings as the
+/// value side of a header-map entry.
+struct StringOrSeq;
+
+impl<'de> Visitor<'de> for StringOrSeq {
+  type Value = Vec<String>;
+
+  fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    f.write_str("a string or array of strings")
+  }
+
+  fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+    Ok(vec![v.to_string()])
+  }
+
+  fn visit_string<E: de::Error>(self, v: String) -> Result<Self::Value, E> {
+    Ok(vec![v])
+  }
+
+  fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+    let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+    while let Some(s) = seq.next_element::<String>()? {
+      out.push(s);
+    }
+    Ok(out)
+  }
+}
+
+#[derive(Default)]
+struct HeaderMapVisitor;
+
+impl<'de> Visitor<'de> for HeaderMapVisitor {
+  type Value = HeaderMap;
+
+  fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    f.write_str("a map of header name to string or array of strings")
+  }
+
+  fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Self::Value, A::Error> {
+    let mut out = HeaderMap::with_capacity(access.size_hint().unwrap_or(0));
+    while let Some(name) = access.next_key::<HeaderName>()? {
+      let values = access.next_value_seed(StringOrSeqSeed)?;
+      for v in values {
+        out.insert(name.clone(), HeaderValue::from_string(v));
+      }
+    }
+    Ok(out)
+  }
+}
+
+struct StringOrSeqSeed;
+
+impl<'de> de::DeserializeSeed<'de> for StringOrSeqSeed {
+  type Value = Vec<String>;
+  fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<Self::Value, D::Error> {
+    deserializer.deserialize_any(StringOrSeq)
+  }
+}
+
+impl<'de> Deserialize<'de> for HeaderMap {
+  fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    deserializer.deserialize_map(HeaderMapVisitor)
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -230,5 +345,51 @@ mod tests {
       .map(|(n, v)| (n.original().to_string(), v.as_str().to_string()))
       .collect();
     assert_eq!(collected, vec![("Y".into(), "keep".into()), ("x".into(), "new".into())]);
+  }
+
+  #[test]
+  fn ref_into_iter_yields_borrowed_pairs() {
+    let mut m = HeaderMap::new();
+    m.insert(name("A"), "1");
+    m.insert(name("B"), "2");
+    let collected: Vec<_> = (&m).into_iter().map(|(n, v)| (n.as_str(), v.as_str())).collect();
+    assert_eq!(collected, vec![("a", "1"), ("b", "2")]);
+  }
+
+  #[test]
+  fn serde_round_trip_preserves_case_and_duplicates() {
+    let mut m = HeaderMap::new();
+    m.insert(name("Authorization"), "Bearer x");
+    m.insert(name("Set-Cookie"), "a=1");
+    m.insert(name("Set-Cookie"), "b=2");
+    m.insert(name("Content-Type"), "application/json");
+    let json = serde_json::to_string(&m).unwrap();
+    assert!(json.contains("\"Authorization\":\"Bearer x\""), "got {json}");
+    assert!(json.contains("\"Set-Cookie\":[\"a=1\",\"b=2\"]"), "got {json}");
+    let back: HeaderMap = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.len(), 4);
+    assert_eq!(back.get(&name("authorization")).unwrap().as_str(), "Bearer x");
+    let cookie_name = name("set-cookie");
+    let cookies: Vec<_> = back.get_all(&cookie_name).map(|v| v.as_str()).collect();
+    assert_eq!(cookies, vec!["a=1", "b=2"]);
+  }
+
+  #[test]
+  fn serde_deserialize_accepts_legacy_string_only_object() {
+    // Legacy DB shape: every value a single string, no arrays.
+    let json = r#"{"authorization":"Bearer x","content-type":"application/json"}"#;
+    let m: HeaderMap = serde_json::from_str(json).unwrap();
+    assert_eq!(m.len(), 2);
+    assert_eq!(m.get(&name("Authorization")).unwrap().as_str(), "Bearer x");
+  }
+
+  #[test]
+  fn serde_deserialize_accepts_array_value() {
+    let json = r#"{"X-Foo":["a","b","c"]}"#;
+    let m: HeaderMap = serde_json::from_str(json).unwrap();
+    assert_eq!(m.len(), 3);
+    let foo = name("x-foo");
+    let vals: Vec<_> = m.get_all(&foo).map(|v| v.as_str()).collect();
+    assert_eq!(vals, vec!["a", "b", "c"]);
   }
 }

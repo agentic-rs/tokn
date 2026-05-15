@@ -14,6 +14,7 @@
 //! assert_eq!(AUTH.as_str(), "authorization");
 //! ```
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smol_str::SmolStr;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -24,6 +25,19 @@ use std::hash::{Hash, Hasher};
 pub struct HeaderName {
   original: SmolStr,
   lower: SmolStr,
+}
+
+impl Serialize for HeaderName {
+  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&self.original)
+  }
+}
+
+impl<'de> Deserialize<'de> for HeaderName {
+  fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+    let s = SmolStr::deserialize(deserializer)?;
+    Ok(HeaderName::new(s))
+  }
 }
 
 impl HeaderName {
@@ -96,6 +110,12 @@ impl From<String> for HeaderName {
 impl From<SmolStr> for HeaderName {
   fn from(value: SmolStr) -> Self {
     Self::new(value)
+  }
+}
+
+impl From<&HeaderName> for HeaderName {
+  fn from(value: &HeaderName) -> Self {
+    value.clone()
   }
 }
 
