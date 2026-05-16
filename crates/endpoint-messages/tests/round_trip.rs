@@ -68,3 +68,25 @@ fn parse_streaming_events() {
     assert_eq!(parsed.kind(), e.get("type").and_then(|v| v.as_str()).unwrap());
   }
 }
+
+#[test]
+fn lenient_param_type_mismatch_falls_into_extras() {
+  let body = json!({
+    "model": "claude-sonnet",
+    "max_tokens": 1024,
+    "messages": [{ "role": "user", "content": "hi" }],
+    "temperature": "hot",
+    "top_p": 0.9,
+    "top_k": "many",
+    "service_tier": 7
+  });
+
+  let req: MessagesRequest = serde_json::from_value(body).expect("lenient parse");
+  assert!(req.params.temperature.is_none(), "bad temperature should not bind");
+  assert_eq!(req.params.top_p, Some(0.9));
+  assert!(req.params.top_k.is_none(), "bad top_k should not bind");
+  assert!(req.params.service_tier.is_none(), "bad service_tier should not bind");
+  assert_eq!(req.extras.get("temperature"), Some(&json!("hot")));
+  assert_eq!(req.extras.get("top_k"), Some(&json!("many")));
+  assert_eq!(req.extras.get("service_tier"), Some(&json!(7)));
+}

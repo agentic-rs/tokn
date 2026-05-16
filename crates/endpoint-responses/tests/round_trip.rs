@@ -74,3 +74,26 @@ fn parse_streaming_events() {
     assert_eq!(parsed.kind(), e.get("type").and_then(|v| v.as_str()).unwrap());
   }
 }
+
+#[test]
+fn lenient_param_type_mismatch_falls_into_extras() {
+  let body = json!({
+    "model": "gpt-5",
+    "input": "hi",
+    "temperature": "hot",
+    "top_p": 0.9,
+    "parallel_tool_calls": "yes",
+    "background": "yes",
+    "truncation": "auto"
+  });
+
+  let req: ResponsesRequest = serde_json::from_value(body).expect("lenient parse");
+  assert!(req.params.temperature.is_none(), "bad temperature should not bind");
+  assert_eq!(req.params.top_p, Some(0.9));
+  assert!(req.params.parallel_tool_calls.is_none(), "bad parallel_tool_calls should not bind");
+  assert!(req.params.background.is_none(), "bad background should not bind");
+  assert_eq!(req.params.truncation.as_deref(), Some("auto"));
+  assert_eq!(req.extras.get("temperature"), Some(&json!("hot")));
+  assert_eq!(req.extras.get("parallel_tool_calls"), Some(&json!("yes")));
+  assert_eq!(req.extras.get("background"), Some(&json!("yes")));
+}

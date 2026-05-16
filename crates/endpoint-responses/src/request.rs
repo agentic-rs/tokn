@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
-use llm_endpoint_core::Extras;
+use llm_endpoint_core::{
+  drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras,
+};
 pub use llm_endpoint_core::ToolChoice as ResponsesToolChoice;
 
 use crate::item::InputItem;
@@ -24,10 +26,14 @@ impl Default for ResponsesInput {
 /// Request body for `POST /v1/responses`.
 ///
 /// Behavior knobs (temperature, top_p, max_*_tokens, tool_choice,
-/// reasoning, etc.) live on the embedded
+/// reasoning, text, etc.) live on the embedded
 /// [`ResponsesRequestParameters`]; this struct keeps content,
 /// streaming controls and structured payloads at the top level.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Deserialization is **lenient on parameter fields**: see
+/// [`ChatRequest`](crate::ResponsesRequest) for details; the same
+/// semantics apply.
+#[derive(Clone, Debug, Serialize)]
 pub struct ResponsesRequest {
   pub model: String,
   pub input: ResponsesInput,
@@ -46,12 +52,46 @@ pub struct ResponsesRequest {
   /// Free-form per-request metadata echoed back by some providers.
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub client_metadata: Option<Value>,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub params: ResponsesRequestParameters,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub extra_params: ResponsesExtraParameters,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub extras: Extras,
+}
+
+impl<'de> Deserialize<'de> for ResponsesRequest {
+  fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+    let mut root = Map::<String, Value>::deserialize(d)?;
+
+    let model: String = take_required(&mut root, "model")?;
+    let input: ResponsesInput = take_required(&mut root, "input")?;
+    let instructions: Option<String> = take_optional(&mut root, "instructions")?;
+    let stream: Option<bool> = take_optional(&mut root, "stream")?;
+    let tools: Vec<ResponsesToolDef> = take_optional_default(&mut root, "tools")?;
+    let stop: Option<Value> = root.remove("stop");
+    let include: Option<Vec<String>> = take_optional(&mut root, "include")?;
+    let client_metadata: Option<Value> = root.remove("client_metadata");
+
+    let mut extras: Extras = Map::new();
+    let params: ResponsesRequestParameters = peel_lenient(&mut root, &mut extras);
+    let extra_params: ResponsesExtraParameters = peel_lenient(&mut root, &mut extras);
+    drain_into_extras(&mut root, &mut extras);
+
+    Ok(ResponsesRequest {
+      model,
+      input,
+      instructions,
+      stream,
+      tools,
+      stop,
+      include,
+      client_metadata,
+      params,
+      extra_params,
+      extras,
+    })
+  }
 }
 
 /// `tools[]` entry. The Responses API permits multiple tool kinds

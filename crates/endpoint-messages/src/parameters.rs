@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use llm_endpoint_macros::LenientFields;
+
 use crate::request::MessagesToolChoice;
 
 /// Scalar / small-enum generation knobs accepted by the Anthropic
@@ -20,7 +22,7 @@ use crate::request::MessagesToolChoice;
 /// Vendor-specific scalar fields go in
 /// [`MessagesExtraParameters`](crate::MessagesExtraParameters);
 /// unknown JSON keys are captured by the parent's `extras` field.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct MessagesRequestParameters {
   /// Sampling temperature in `[0, 1]` (Anthropic clamps higher
   /// values).
@@ -60,5 +62,5 @@ pub struct MessagesRequestParameters {
 /// reports new vendor extensions. Embed alongside
 /// [`MessagesRequestParameters`] on the request struct via
 /// `#[serde(flatten)]`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct MessagesExtraParameters {}

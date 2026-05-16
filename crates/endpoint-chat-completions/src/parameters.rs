@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use llm_endpoint_core::ToolChoice;
+use llm_endpoint_macros::LenientFields;
 
 /// Scalar / small-enum generation knobs accepted by the OpenAI Chat
 /// Completions API request body (`POST /v1/chat/completions`).
@@ -21,7 +22,7 @@ use llm_endpoint_core::ToolChoice;
 /// Vendor-specific scalar fields go in
 /// [`ChatExtraParameters`](crate::ChatExtraParameters); unknown JSON
 /// keys are captured by the parent's `extras` field.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ChatRequestParameters {
   /// Sampling temperature in `[0, 2]`. Higher values make output more
   /// random; lower values make it more deterministic.
@@ -133,7 +134,7 @@ pub struct ChatRequestParameters {
 /// `#[serde(flatten)]`.
 ///
 /// Unknown JSON keys still fall through to the parent's `extras`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ChatExtraParameters {
   /// Repetition penalty (xAI, vLLM, llama.cpp, others). Multiplicative
   /// penalty applied to previously generated tokens; values `> 1.0`

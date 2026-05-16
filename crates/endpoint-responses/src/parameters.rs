@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use llm_endpoint_core::ToolChoice;
+use llm_endpoint_macros::LenientFields;
 
 /// Scalar / small-enum generation knobs accepted by the OpenAI Responses
 /// API request body (`POST /v1/responses`).
@@ -26,7 +27,7 @@ use llm_endpoint_core::ToolChoice;
 /// Vendor-specific scalar fields go in
 /// [`ResponsesExtraParameters`](crate::ResponsesExtraParameters);
 /// unknown JSON keys are captured by the parent's `extras` field.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ResponsesRequestParameters {
   /// Sampling temperature in `[0, 2]`. Higher values increase
   /// randomness.
@@ -126,5 +127,5 @@ pub struct ResponsesRequestParameters {
 /// the harness reports new vendor extensions. Embed alongside
 /// [`ResponsesRequestParameters`] on the request struct via
 /// `#[serde(flatten)]`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ResponsesExtraParameters {}

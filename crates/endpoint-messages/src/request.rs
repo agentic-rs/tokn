@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
-use llm_endpoint_core::Extras;
+use llm_endpoint_core::{
+  drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras,
+};
 
 use crate::content::ContentBlock;
 use crate::message::Message;
@@ -23,7 +25,11 @@ pub enum SystemPrompt {
 /// [`MessagesRequestParameters`]; structured payloads, content,
 /// `max_tokens` (required) and streaming controls stay at the top
 /// level.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+///
+/// Deserialization is **lenient on parameter fields**: see
+/// [`ChatRequest`](crate::MessagesRequest) for details; the same
+/// semantics apply.
+#[derive(Clone, Debug, Serialize)]
 pub struct MessagesRequest {
   pub model: String,
   pub messages: Vec<Message>,
@@ -38,12 +44,46 @@ pub struct MessagesRequest {
   pub stop_sequences: Option<Value>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub metadata: Option<Value>,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub params: MessagesRequestParameters,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub extra_params: MessagesExtraParameters,
-  #[serde(default, flatten)]
+  #[serde(flatten)]
   pub extras: Extras,
+}
+
+impl<'de> Deserialize<'de> for MessagesRequest {
+  fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+    let mut root = Map::<String, Value>::deserialize(d)?;
+
+    let model: String = take_required(&mut root, "model")?;
+    let messages: Vec<Message> = take_required(&mut root, "messages")?;
+    let system: Option<SystemPrompt> = take_optional(&mut root, "system")?;
+    let max_tokens: u64 = take_required(&mut root, "max_tokens")?;
+    let stream: Option<bool> = take_optional(&mut root, "stream")?;
+    let tools: Vec<MessagesToolDef> = take_optional_default(&mut root, "tools")?;
+    let stop_sequences: Option<Value> = root.remove("stop_sequences");
+    let metadata: Option<Value> = root.remove("metadata");
+
+    let mut extras: Extras = Map::new();
+    let params: MessagesRequestParameters = peel_lenient(&mut root, &mut extras);
+    let extra_params: MessagesExtraParameters = peel_lenient(&mut root, &mut extras);
+    drain_into_extras(&mut root, &mut extras);
+
+    Ok(MessagesRequest {
+      model,
+      messages,
+      system,
+      max_tokens,
+      stream,
+      tools,
+      stop_sequences,
+      metadata,
+      params,
+      extra_params,
+      extras,
+    })
+  }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -6,6 +6,7 @@ members = [
   "crates/catalogue",
   "crates/convert",
   "crates/endpoint-core",
+  "crates/endpoint-macros",
   "crates/endpoint-chat-completions",
   "crates/endpoint-responses",
   "crates/endpoint-messages",
@@ -25,6 +26,7 @@ llm-auth = { path = "crates/auth" }
 llm-catalogue = { path = "crates/catalogue" }
 llm-convert = { path = "crates/convert" }
 llm-endpoint-core = { path = "crates/endpoint-core" }
+llm-endpoint-macros = { path = "crates/endpoint-macros" }
 llm-endpoint-chat-completions = { path = "crates/endpoint-chat-completions" }
 llm-endpoint-responses = { path = "crates/endpoint-responses" }
 llm-endpoint-messages = { path = "crates/endpoint-messages" }

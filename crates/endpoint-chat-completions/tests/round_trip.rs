@@ -86,3 +86,30 @@ fn round_trip_event() {
   let done: ChatEvent = serde_json::from_value(json!("[DONE]")).expect("parse done");
   matches!(done, ChatEvent::Done);
 }
+
+#[test]
+fn lenient_param_type_mismatch_falls_into_extras() {
+  // `temperature` should be a number but the client sent a string; the
+  // good `top_p` field should still parse normally, and the bad
+  // `temperature` value should end up in `extras` instead of failing
+  // the whole request.
+  let body = json!({
+    "model": "gpt-4o",
+    "messages": [{ "role": "user", "content": "hi" }],
+    "temperature": "hot",
+    "top_p": 0.9,
+    "parallel_tool_calls": "yes",
+    "repetition_penalty": 1.2,
+    "min_p": "bad"
+  });
+
+  let req: ChatRequest = serde_json::from_value(body).expect("lenient parse");
+  assert!(req.params.temperature.is_none(), "bad temperature should not bind");
+  assert_eq!(req.params.top_p, Some(0.9));
+  assert!(req.params.parallel_tool_calls.is_none(), "bad parallel_tool_calls should not bind");
+  assert_eq!(req.extra_params.repetition_penalty, Some(1.2));
+  assert!(req.extra_params.min_p.is_none(), "bad min_p should not bind");
+  assert_eq!(req.extras.get("temperature"), Some(&json!("hot")));
+  assert_eq!(req.extras.get("parallel_tool_calls"), Some(&json!("yes")));
+  assert_eq!(req.extras.get("min_p"), Some(&json!("bad")));
+}
