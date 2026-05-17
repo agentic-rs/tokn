@@ -85,20 +85,70 @@ pub(crate) fn build_failure_result_event(
   upstream_body: Option<Bytes>,
 ) -> Event {
   let api_err = ApiError::upstream(status, error_msg.clone());
-  let inbound_body = api_err.body_bytes();
+  build_failure_result_event_from_api_err(request_id, attempt, started, &api_err, upstream_body)
+}
+
+/// Same as [`build_failure_result_event`] but uses the exact `ApiError`
+/// supplied so the persisted envelope (status, `type`, message) matches what
+/// the client actually receives — including non-upstream kinds like
+/// `not_implemented_error` and `bad_gateway`.
+pub(crate) fn build_failure_result_event_from_api_err(
+  request_id: String,
+  attempt: u32,
+  started: Instant,
+  api_err: &ApiError,
+  upstream_body: Option<Bytes>,
+) -> Event {
   Event::RequestResult {
     request_id,
     attempt,
     session_source: SessionSource::Auto,
     latency_ms: started.elapsed().as_millis() as u64,
-    inbound_status: status.as_u16(),
+    inbound_status: api_err.status().as_u16(),
     usage: Usage::default(),
-    request_error: Some(error_msg),
+    request_error: Some(api_err.to_string()),
     inbound_resp_headers: (&json_envelope_headers()).into(),
-    inbound_resp_body: inbound_body,
+    inbound_resp_body: api_err.body_bytes(),
     outbound_resp_body: upstream_body,
     messages: Vec::new(),
   }
+}
+
+/// Emit the synthetic `RequestParsed` + `RequestResult` pair used by
+/// early-failure paths in [`handle_endpoint`] (resolver/prepare failures that
+/// abort before any upstream send). This ensures DB rows still get the
+/// requested `model`, the inbound request body, and the rendered JSON error
+/// envelope even though no account was ever selected.
+///
+/// `account_id`/`provider_id` are persisted as the sentinel `"none"` because
+/// route resolution did not yield one.
+fn emit_early_failure(
+  state: &AppState,
+  request_id: &str,
+  attempt: u32,
+  started: Instant,
+  parsed_meta: &llm_core::pipeline::RequestMeta,
+  inbound_body: Bytes,
+  api_err: &ApiError,
+) {
+  state.events.emit(Event::RequestParsed {
+    request_id: request_id.to_string(),
+    attempt,
+    account_id: "none".to_string(),
+    provider_id: "none".to_string(),
+    model: parsed_meta.model.clone(),
+    stream: parsed_meta.stream,
+    initiator: parsed_meta.initiator.clone(),
+    behave_as: parsed_meta.behave_as.clone(),
+    inbound_body,
+  });
+  state.events.emit(build_failure_result_event_from_api_err(
+    request_id.to_string(),
+    attempt,
+    started,
+    api_err,
+    None,
+  ));
 }
 
 pub(crate) async fn handle_endpoint(
@@ -131,6 +181,15 @@ pub(crate) async fn handle_endpoint(
     let mut resolved = match resolver.resolve(&state, parsed.clone(), attempt) {
       Ok(resolved) => resolved,
       Err(e) => {
+        emit_early_failure(
+          &state,
+          &request_id,
+          attempt_u32,
+          started,
+          &parsed.meta,
+          decoded.decoded_body.clone(),
+          &e,
+        );
         completion.failure(Some(e.status().as_u16()), e.to_string());
         return Err(e);
       }
@@ -156,8 +215,18 @@ pub(crate) async fn handle_endpoint(
     let prepared = match prepare_request(resolved) {
       Ok(prepared) => prepared,
       Err(e) => {
-        completion.failure(Some(StatusCode::BAD_GATEWAY.as_u16()), e.to_string());
-        return Err(ApiError::bad_gateway(e.to_string()));
+        let api_err = ApiError::bad_gateway(e.to_string());
+        emit_early_failure(
+          &state,
+          &request_id,
+          attempt_u32,
+          started,
+          &parsed.meta,
+          decoded.decoded_body.clone(),
+          &api_err,
+        );
+        completion.failure(Some(api_err.status().as_u16()), api_err.to_string());
+        return Err(api_err);
       }
     };
 
@@ -677,6 +746,33 @@ mod tests {
     assert_eq!(inbound_status, 502);
     assert_eq!(attempt, 2);
     assert!(outbound_resp_body.is_none());
+  }
+
+  #[test]
+  fn build_failure_result_event_from_api_err_preserves_not_implemented_envelope() {
+    let api_err = ApiError::not_implemented("messages", "claude-sonnet-4-6");
+    let event =
+      build_failure_result_event_from_api_err("req-3".into(), 0, Instant::now(), &api_err, None);
+    let Event::RequestResult {
+      inbound_status,
+      inbound_resp_body,
+      request_error,
+      ..
+    } = event
+    else {
+      panic!("wrong variant");
+    };
+    assert_eq!(inbound_status, 501);
+    let err_msg = request_error.expect("request_error populated");
+    assert!(err_msg.contains("messages"));
+    assert!(err_msg.contains("claude-sonnet-4-6"));
+    let envelope: serde_json::Value = serde_json::from_slice(&inbound_resp_body).unwrap();
+    assert_eq!(envelope["error"]["code"], 501);
+    assert_eq!(envelope["error"]["type"], "not_implemented_error");
+    assert!(envelope["error"]["message"]
+      .as_str()
+      .unwrap()
+      .contains("claude-sonnet-4-6"));
   }
 
   #[test]
