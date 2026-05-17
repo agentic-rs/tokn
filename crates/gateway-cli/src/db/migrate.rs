@@ -1,6 +1,6 @@
 //! Generic, in-process SQLite migration runner.
 //!
-//! Each database (usage, sessions, every requests/<day>.db) embeds a
+//! Each database (usage, sessions, every `requests/<day>.db`) embeds a
 //! `&[Migration]` slice describing its full version history. On open we
 //! ensure a `schema_migrations` table exists, take a `<path>.bak` snapshot
 //! if any work needs doing, and apply pending migrations inside a single

@@ -20,7 +20,7 @@ use crate::request::MessagesToolChoice;
 /// - Streaming: `stream`
 ///
 /// Vendor-specific scalar fields go in
-/// [`MessagesExtraParameters`](crate::MessagesExtraParameters);
+/// [`MessagesExtraParameters`];
 /// unknown JSON keys are captured by the parent's `extras` field.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct MessagesRequestParameters {

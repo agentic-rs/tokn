@@ -1,6 +1,6 @@
 //! GitHub OAuth Device Flow for the Copilot client_id.
 //!
-//! Reference: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow
+//! Reference: <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps#device-flow>
 
 use crate::provider::{error, Result};
 use crate::util::redact::token_fingerprint;

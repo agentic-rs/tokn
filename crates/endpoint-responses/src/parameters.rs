@@ -25,7 +25,7 @@ use llm_endpoint_macros::LenientFields;
 /// - Streaming: `stream`
 ///
 /// Vendor-specific scalar fields go in
-/// [`ResponsesExtraParameters`](crate::ResponsesExtraParameters);
+/// [`ResponsesExtraParameters`];
 /// unknown JSON keys are captured by the parent's `extras` field.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ResponsesRequestParameters {

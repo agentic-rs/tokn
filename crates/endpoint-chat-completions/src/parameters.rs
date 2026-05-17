@@ -20,7 +20,7 @@ use llm_endpoint_macros::LenientFields;
 /// - Streaming/metadata: `stream`, `stream_options`, `metadata`
 ///
 /// Vendor-specific scalar fields go in
-/// [`ChatExtraParameters`](crate::ChatExtraParameters); unknown JSON
+/// [`ChatExtraParameters`]; unknown JSON
 /// keys are captured by the parent's `extras` field.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, LenientFields)]
 pub struct ChatRequestParameters {
