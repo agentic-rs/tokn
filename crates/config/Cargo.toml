@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 llm-core = { workspace = true }
+llm-headers = { workspace = true }
 anyhow = { workspace = true }
 directories = { workspace = true }
 reqwest = { workspace = true }

@@ -77,13 +77,13 @@ pub fn parse_inbound_vars(inbound: &HeaderMap) -> TemplateVars {
   }
 }
 
-fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+fn header_value(headers: &HeaderMap, name: &str) -> Option<smol_str::SmolStr> {
   headers
     .get(name)
     .and_then(|v| v.to_str().ok())
     .map(str::trim)
     .filter(|s| !s.is_empty())
-    .map(ToOwned::to_owned)
+    .map(smol_str::SmolStr::from)
 }
 
 #[cfg(test)]

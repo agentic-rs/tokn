@@ -2,6 +2,7 @@ use crate::account::AccountConfig;
 use async_trait::async_trait;
 use bytes::Bytes;
 use llm_headers::HeaderMap;
+pub use llm_headers::TemplateVars;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -286,19 +287,6 @@ pub type OutboundCapture = Arc<OnceLock<crate::db::OutboundSnapshot>>;
 
 pub fn new_outbound_capture() -> OutboundCapture {
   Arc::new(OnceLock::new())
-}
-
-/// Per-request template variables resolved from inbound headers and other
-/// caller-supplied correlation metadata. Shared verbatim between profile
-/// header rendering and provider header patching so both surfaces see the
-/// same view of the request.
-#[derive(Debug, Clone, Default)]
-pub struct TemplateVars {
-  pub session_id: Option<String>,
-  pub request_id: Option<String>,
-  pub project_cwd: Option<String>,
-  pub interaction_id: Option<String>,
-  pub account_id: Option<String>,
 }
 
 pub struct HeaderPatchCtx<'a> {

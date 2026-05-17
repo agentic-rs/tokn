@@ -48,7 +48,7 @@ pub struct Profiles {
   table: BTreeMap<String, PersonaProfile>,
 }
 
-pub use llm_core::provider::TemplateVars;
+pub use llm_headers::TemplateVars;
 
 static GLOBAL: OnceLock<Profiles> = OnceLock::new();
 static WARNED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
@@ -326,11 +326,11 @@ fn static_template_value(name: &str) -> Option<String> {
 
 fn request_template_value(name: &str, vars: &TemplateVars) -> Option<String> {
   match name {
-    "session_id" => vars.session_id.clone(),
-    "request_id" => vars.request_id.clone(),
-    "project_cwd" => vars.project_cwd.clone(),
-    "interaction_id" => vars.interaction_id.clone(),
-    "account_id" => vars.account_id.clone(),
+    "session_id" => vars.session_id.as_ref().map(|s| s.to_string()),
+    "request_id" => vars.request_id.as_ref().map(|s| s.to_string()),
+    "project_cwd" => vars.project_cwd.as_ref().map(|s| s.to_string()),
+    "interaction_id" => vars.interaction_id.as_ref().map(|s| s.to_string()),
+    "account_id" => vars.account_id.as_ref().map(|s| s.to_string()),
     _ => None,
   }
   .filter(|s| !s.is_empty())
