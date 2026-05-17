@@ -1,6 +1,6 @@
-use crate::accounts::{AccountHandle, EndpointAcquire};
+use llm_accounts::{AccountHandle, EndpointAcquire};
 use crate::api::error::ApiError;
-use crate::api::routing::RouteResolution;
+use llm_accounts::routing::RouteResolution;
 use crate::api::AppState;
 use crate::pipeline::parse::RequestParser;
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
@@ -103,7 +103,7 @@ fn resolve_request(state: &AppState, parsed: ParsedRequest, attempt: usize) -> R
         .meta
         .inbound_headers
         .get(&llm_headers::HeaderName::new(
-          crate::api::routing::RouteResolver::mode_header(),
+          llm_accounts::routing::RouteResolver::mode_header(),
         ))
         .map(|v| v.as_str()),
     )

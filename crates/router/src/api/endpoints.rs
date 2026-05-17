@@ -1,5 +1,5 @@
 use super::error::ApiError;
-use super::routing::route_mode_as_str;
+use llm_accounts::routing::route_mode_as_str;
 use super::AppState;
 use crate::pipeline::{
   handle_endpoint, request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,

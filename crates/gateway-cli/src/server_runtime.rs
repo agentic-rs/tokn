@@ -103,7 +103,7 @@ pub fn state_with_route_mode(
   cfg: &Config,
 ) -> llm_router::api::AppState {
   let mut state = state.clone();
-  state.route = Arc::new(llm_router::api::routing::RouteResolver::new(
+  state.route = Arc::new(llm_router::accounts::routing::RouteResolver::new(
     route_mode,
     &cfg.model_families,
   ));

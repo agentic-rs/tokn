@@ -1,6 +1,6 @@
 use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
-use crate::api::routing::{RouteResolution, RouteSelector};
+use crate::routing::{RouteResolution, RouteSelector};
 use llm_config::Config;
 use llm_core::account::{AccountConfig, AccountTier};
 use llm_core::provider::{Endpoint, Provider};
@@ -491,7 +491,7 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::provider::{
+  use llm_core::provider::{
     AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
   };
   use async_trait::async_trait;
@@ -528,11 +528,11 @@ mod tests {
       &self.info
     }
 
-    async fn list_models(&self, _http: &reqwest::Client) -> crate::provider::Result<Value> {
+    async fn list_models(&self, _http: &reqwest::Client) -> llm_core::provider::Result<Value> {
       Ok(serde_json::json!({ "object": "list", "data": [] }))
     }
 
-    async fn chat(&self, _ctx: RequestCtx<'_>) -> crate::provider::Result<reqwest::Response> {
+    async fn chat(&self, _ctx: RequestCtx<'_>) -> llm_core::provider::Result<reqwest::Response> {
       unreachable!()
     }
   }

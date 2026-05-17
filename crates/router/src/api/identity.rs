@@ -3,7 +3,7 @@ use llm_core::account::AccountConfig;
 use llm_core::provider::ID_GITHUB_COPILOT;
 use std::collections::HashMap;
 
-use crate::accounts::registry::Registry;
+use llm_accounts::registry::Registry;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountIdentity {

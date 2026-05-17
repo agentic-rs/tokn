@@ -36,7 +36,7 @@ pub(super) async fn proxy_passthrough(
     .route
     .resolve_mode(hx.route_mode_hint.as_deref())
     .ok()
-    .map(crate::api::routing::route_mode_as_str)
+    .map(llm_accounts::routing::route_mode_as_str)
     .map(str::to_string);
   state.events.emit(llm_core::event::Event::RequestStarted {
     request_id: request_id.clone(),

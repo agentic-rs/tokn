@@ -4,7 +4,7 @@ pub mod header_pipeline;
 mod passthrough;
 mod transport;
 
-use crate::accounts::registry::Registry;
+use llm_accounts::registry::Registry;
 use crate::api::AppState;
 use anyhow::{Context, Result};
 use axum::http::Method;
