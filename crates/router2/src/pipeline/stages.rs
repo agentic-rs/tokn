@@ -24,6 +24,7 @@ use llm_core::ClientId;
 use llm_headers::{HeaderMap, TemplateVars};
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::Arc;
 
 /// Raw inbound HTTP payload passed to the Extract stage. The runner is
 /// responsible for assembling this from whatever transport is in front of
@@ -65,7 +66,7 @@ pub struct Extracted {
   pub headers: HeaderMap,
   pub raw_body: Bytes,
   pub decoded_body: Bytes,
-  pub body_json: Value,
+  pub body_json: Arc<Value>,
   /// Content-encoding the client used on the request body, parsed from
   /// the inbound `Content-Encoding` header. `None` when the body arrived
   /// uncompressed. ConvertRequest uses this to re-encode the outbound
@@ -118,7 +119,11 @@ pub struct BuiltHeaders {
 /// `Content-Encoding` value to put on the outbound request (when any).
 #[derive(Debug, Clone)]
 pub struct ConvertedRequest {
-  pub upstream_body: Value,
+  /// Upstream-shaped JSON body. Wrapped in `Arc` so observers and the
+  /// runner's per-stage [`OutcomeSnapshot`] can clone cheaply.
+  ///
+  /// [`OutcomeSnapshot`]: crate::pipeline::snapshot::OutcomeSnapshot
+  pub upstream_body: Arc<Value>,
   pub upstream_wire_body: Bytes,
   /// Uncompressed serialized JSON, mirroring the legacy
   /// `prepare_request` behaviour where structured logs / tests want to
@@ -165,7 +170,9 @@ pub enum ConvertedResponse {
   Buffered {
     status: u16,
     headers: HeaderMap,
-    body_json: Value,
+    /// Buffered upstream JSON. `Arc`-wrapped so snapshots/observers can
+    /// clone cheaply without re-serializing the body.
+    body_json: Arc<Value>,
     body_bytes: Bytes,
   },
   Stream {

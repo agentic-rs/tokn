@@ -21,6 +21,7 @@ use llm_core::ClientId;
 use llm_headers::HeaderMap;
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::Arc;
 
 const SESSION_ID_HEADERS: &[&str] = &[
   "x-session-id",
@@ -97,7 +98,7 @@ impl ExtractStage for DefaultExtract {
       headers,
       raw_body,
       decoded_body,
-      body_json,
+      body_json: Arc::new(body_json),
       content_encoding,
     })
   }

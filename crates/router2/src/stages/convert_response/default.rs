@@ -26,6 +26,7 @@ use bytes::Bytes;
 use llm_convert::sse::{EndpointTranslator, SsePipeline};
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::Arc;
 use tracing::{debug, instrument};
 
 pub struct DefaultConvertResponse;
@@ -89,7 +90,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
       return Ok(ConvertedResponse::Buffered {
         status,
         headers,
-        body_json: Value::Null,
+        body_json: Arc::new(Value::Null),
         body_bytes: Bytes::new(),
       });
     }
@@ -125,7 +126,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
     Ok(ConvertedResponse::Buffered {
       status,
       headers,
-      body_json,
+      body_json: Arc::new(body_json),
       body_bytes,
     })
   }

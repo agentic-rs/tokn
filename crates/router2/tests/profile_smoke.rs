@@ -152,10 +152,10 @@ fn known_kinds(events: &[Event]) -> Vec<&'static str> {
         StageEvent::Started { .. } => "started",
         StageEvent::Extract { .. } => "extract",
         StageEvent::Resolve { .. } => "resolve",
-        StageEvent::BuildHeaders => "build_headers",
-        StageEvent::ConvertRequest => "convert_request",
-        StageEvent::Send => "send",
-        StageEvent::ConvertResponse => "convert_response",
+        StageEvent::BuildHeaders { .. } => "build_headers",
+        StageEvent::ConvertRequest { .. } => "convert_request",
+        StageEvent::Send { .. } => "send",
+        StageEvent::ConvertResponse { .. } => "convert_response",
         StageEvent::Error { .. } => "error",
         StageEvent::Completed { .. } => "completed",
       },
@@ -419,4 +419,153 @@ async fn full_pipeline_buffered_happy_path() {
     }
     other => panic!("expected Buffered, got {other:?}"),
   }
+}
+
+// ---------- PR3c: failure preserves partial outcome ----------
+
+/// Provider whose `chat` always returns an upstream 401. Used to assert
+/// that a Send-stage failure preserves the resolved account, built
+/// headers, and converted request body on the returned `PipelineOutcome`,
+/// and that the same partial snapshot is embedded in the Error +
+/// Completed events.
+struct FailingProvider {
+  info: ProviderInfo,
+}
+
+#[async_trait]
+impl Provider for FailingProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+  async fn chat(&self, _ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    let resp = http::Response::builder()
+      .status(401)
+      .header("content-type", "application/json")
+      .body(r#"{"error":"unauthorized"}"#)
+      .unwrap();
+    Ok(reqwest::Response::from(resp))
+  }
+}
+
+fn failing_handle(provider_id: &str, account_id: &str) -> Arc<AccountHandle> {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "failing",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  let provider = FailingProvider { info };
+  Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider)))
+}
+
+#[tokio::test]
+async fn pipeline_send_failure_preserves_partial_outcome() {
+  let (bus, log) = capture_bus();
+
+  let handle = failing_handle("zai-coding-plan", "acct-1");
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-fail",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  let outcome = runner.run(raw_chat("glm-4")).await;
+
+  // The pipeline failed at Send — but every earlier stage's output must
+  // survive on the returned outcome so the CLI / caller can render
+  // diagnostic context.
+  assert!(!outcome.success, "expected failure, got {outcome:?}");
+  let err = outcome.error.as_ref().expect("failure must carry error");
+  assert_eq!(err.stage, Stage::Send);
+  assert!(
+    err.message.contains("401"),
+    "error message should mention upstream status: {}",
+    err.message
+  );
+  assert!(outcome.resolved.is_some(), "Resolve output must survive Send failure");
+  assert!(
+    outcome.built_headers.is_some(),
+    "BuildHeaders output must survive Send failure"
+  );
+  assert!(
+    outcome.converted_request.is_some(),
+    "ConvertRequest output must survive Send failure"
+  );
+  assert!(
+    outcome.converted_response.is_none(),
+    "ConvertResponse must not run after Send failure"
+  );
+
+  // Event sequence stops at Send (no convert_response), then error +
+  // completed.
+  let events = log.lock().unwrap();
+  let kinds = known_kinds(&events);
+  assert_eq!(
+    kinds,
+    [
+      "started",
+      "extract",
+      "resolve",
+      "build_headers",
+      "convert_request",
+      "error",
+      "completed",
+    ]
+  );
+
+  // The Error event's snapshot must mirror the partial outcome: same
+  // resolved/built_headers/converted_request, success=false, no response.
+  let snap = events
+    .iter()
+    .find_map(|e| match &e.payload {
+      EventPayload::Known(StageEvent::Error { snapshot, .. }) => Some(snapshot.clone()),
+      _ => None,
+    })
+    .expect("Error event must be present");
+  assert!(!snap.success);
+  assert!(snap.resolved.is_some());
+  assert!(snap.built_headers.is_some());
+  assert!(snap.converted_request.is_some());
+  assert!(snap.converted_response.is_none());
+  assert!(snap.error.is_some());
 }

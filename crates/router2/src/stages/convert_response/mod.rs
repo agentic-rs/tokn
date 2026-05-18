@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use llm_headers::HeaderMap;
 use serde_json::Value;
+use std::sync::Arc;
 
 pub mod default;
 pub use default::DefaultConvertResponse;
@@ -26,7 +27,7 @@ impl ConvertResponseStage for NoopConvertResponse {
     Ok(ConvertedResponse::Buffered {
       status: 0,
       headers: HeaderMap::new(),
-      body_json: Value::Null,
+      body_json: Arc::new(Value::Null),
       body_bytes: Bytes::new(),
     })
   }

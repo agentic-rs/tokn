@@ -5,15 +5,21 @@
 //! tagged with the originating [`Stage`] so subscribers can filter without
 //! pattern-matching on N error variants.
 //!
-//! Back-half variants (`BuildHeaders`, `ConvertRequest`, `Send`,
-//! `ConvertResponse`) are declared in PR1 but never emitted until the
-//! corresponding stage impls land.
+//! Every variant except [`StageEvent::Started`] carries an
+//! `Arc<OutcomeSnapshot>` capturing whatever the pipeline had accumulated up
+//! to (and including) that event. Subscribers — the CLI's failure printer,
+//! retry decorators, observability sinks — read directly from the snapshot
+//! instead of replaying earlier events. The runner reuses the same `Arc` for
+//! the `Error` + `Completed` pair after a failure.
 //!
 //! [`PipelineRunner`]: crate::pipeline::PipelineRunner
+//! [`OutcomeSnapshot`]: crate::pipeline::snapshot::OutcomeSnapshot
 
+use crate::pipeline::snapshot::OutcomeSnapshot;
 use llm_core::provider::Endpoint;
 use llm_core::ClientId;
 use smol_str::SmolStr;
+use std::sync::Arc;
 
 /// Identifies which pipeline stage produced an event. Used both as a tag on
 /// success variants and as a field on [`StageEvent::Error`].
@@ -48,13 +54,19 @@ impl std::fmt::Display for Stage {
 
 #[derive(Debug, Clone)]
 pub enum StageEvent {
-  /// Emitted once at the very start of [`PipelineRunner::run`].
-  Started { endpoint: Endpoint },
+  /// Emitted once at the very start of [`PipelineRunner::run`]; no
+  /// snapshot because no stage has produced state yet.
+  ///
+  /// [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
+  Started {
+    endpoint: Endpoint,
+  },
   /// Extract stage completed successfully.
   Extract {
     client_id: Option<ClientId>,
     model: SmolStr,
     stream: bool,
+    snapshot: Arc<OutcomeSnapshot>,
   },
   /// Resolve stage completed successfully.
   Resolve {
@@ -64,24 +76,41 @@ pub enum StageEvent {
     account_id: SmolStr,
     provider_id: SmolStr,
     upstream_endpoint: Endpoint,
+    snapshot: Arc<OutcomeSnapshot>,
   },
-  /// Reserved for PR2.
-  BuildHeaders,
-  /// Reserved for PR2.
-  ConvertRequest,
-  /// Reserved for PR2.
-  Send,
-  /// Reserved for PR2.
-  ConvertResponse,
+  BuildHeaders {
+    snapshot: Arc<OutcomeSnapshot>,
+  },
+  ConvertRequest {
+    snapshot: Arc<OutcomeSnapshot>,
+  },
+  Send {
+    snapshot: Arc<OutcomeSnapshot>,
+  },
+  ConvertResponse {
+    snapshot: Arc<OutcomeSnapshot>,
+  },
   /// Any stage failure. `recoverable` is propagated verbatim from the
   /// [`PipelineError`] returned by the stage; the runner does not infer it.
+  /// `snapshot` carries every field the pipeline managed to populate
+  /// before the failure (resolved account, built headers, converted
+  /// request body, etc.) so subscribers can diagnose without replay.
   ///
   /// [`PipelineError`]: crate::pipeline::error::PipelineError
   Error {
     stage: Stage,
     message: SmolStr,
     recoverable: bool,
+    snapshot: Arc<OutcomeSnapshot>,
   },
-  /// Emitted once at the end of [`PipelineRunner::run`], success or failure.
-  Completed { success: bool, attempts: u32 },
+  /// Emitted once at the end of [`PipelineRunner::run`], success or
+  /// failure. After a failure the runner reuses the same `snapshot` `Arc`
+  /// as the preceding [`StageEvent::Error`].
+  ///
+  /// [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
+  Completed {
+    success: bool,
+    attempts: u32,
+    snapshot: Arc<OutcomeSnapshot>,
+  },
 }

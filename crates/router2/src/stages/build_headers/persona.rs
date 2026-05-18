@@ -217,7 +217,7 @@ mod tests {
       headers,
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
-      body_json: json!({}),
+      body_json: std::sync::Arc::new(json!({})),
       content_encoding: None,
     }
   }

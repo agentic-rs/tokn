@@ -131,7 +131,7 @@ mod tests {
       headers: HeaderMap::new(),
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
-      body_json: serde_json::Value::Null,
+      body_json: std::sync::Arc::new(serde_json::Value::Null),
       content_encoding: None,
     }
   }

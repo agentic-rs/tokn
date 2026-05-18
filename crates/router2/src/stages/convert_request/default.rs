@@ -30,6 +30,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::Arc;
 
 pub struct DefaultConvertRequest;
 
@@ -57,7 +58,7 @@ impl ConvertRequestStage for DefaultConvertRequest {
     let debug_outbound_body =
       Bytes::from(serde_json::to_vec(&upstream_body).map_err(|e| perm(format!("serialize upstream body: {e}")))?);
 
-    let unchanged = upstream_body == extracted.body_json;
+    let unchanged = upstream_body == *extracted.body_json;
     let upstream_wire_body = if unchanged {
       // Reuse the original wire payload — preserves byte-for-byte
       // parity with whatever the client sent (including its
@@ -68,7 +69,7 @@ impl ConvertRequestStage for DefaultConvertRequest {
     };
 
     Ok(ConvertedRequest {
-      upstream_body,
+      upstream_body: Arc::new(upstream_body),
       upstream_wire_body,
       debug_outbound_body,
       content_encoding: extracted.content_encoding,
@@ -126,7 +127,7 @@ mod tests {
       headers: HeaderMap::new(),
       raw_body: wire.clone(),
       decoded_body: Bytes::from(serde_json::to_vec(&body).unwrap()),
-      body_json: body,
+      body_json: Arc::new(body),
       content_encoding: encoding,
     }
   }
@@ -155,7 +156,7 @@ mod tests {
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
-    assert_eq!(out.upstream_body, body);
+    assert_eq!(*out.upstream_body, body);
     // Body unchanged → original wire bytes reused verbatim.
     assert_eq!(out.upstream_wire_body, raw);
     assert!(out.content_encoding.is_none());
@@ -215,7 +216,7 @@ mod tests {
       .await
       .unwrap();
     assert_ne!(
-      out.upstream_body, body,
+      *out.upstream_body, body,
       "expected cross-endpoint conversion to mutate body"
     );
     // wire body was re-serialized (not the original raw bytes).

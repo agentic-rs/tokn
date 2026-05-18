@@ -60,7 +60,7 @@ impl SendStage for DefaultSend {
     let req_ctx = RequestCtx {
       endpoint: resolved.upstream_endpoint,
       http: &self.http,
-      body: &body.upstream_body,
+      body: body.upstream_body.as_ref(),
       body_bytes: Some(&body.upstream_wire_body),
       content_encoding: body.content_encoding.map(|e| e.as_str()),
       stream: extracted.stream,
@@ -171,7 +171,7 @@ mod tests {
       headers: llm_headers::HeaderMap::new(),
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
-      body_json: Value::Null,
+      body_json: Arc::new(Value::Null),
       content_encoding: None,
     }
   }
@@ -192,7 +192,7 @@ mod tests {
     let v = serde_json::json!({"model": "m"});
     let bytes = Bytes::from(serde_json::to_vec(&v).unwrap());
     ConvertedRequest {
-      upstream_body: v,
+      upstream_body: Arc::new(v),
       upstream_wire_body: bytes.clone(),
       debug_outbound_body: bytes,
       content_encoding: None,

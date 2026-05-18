@@ -92,6 +92,13 @@ pub struct SendArgs {
   #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
   pub format: OutputFormat,
 
+  /// Print outbound and upstream headers verbatim instead of redacting
+  /// sensitive values (authorization, cookies, api keys). Off by default
+  /// because output is often pasted into bug reports — only set when you
+  /// are actively debugging upstream auth and know what you're showing.
+  #[arg(long)]
+  pub no_redact: bool,
+
   /// Read the raw JSON request body from a file (or `-` for stdin) instead
   /// of the auto-built body. When set, `message` is optional and `--model`
   /// defaults to whatever the body declares.
@@ -181,6 +188,12 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
   let headers = build_inbound_headers(&args.headers)?;
 
+  if args.no_redact {
+    eprintln!(
+      "warning: --no-redact is set; outbound + upstream headers will be printed verbatim (including authorization, cookies, api keys). Do not paste this output into bug reports."
+    );
+  }
+
   if args.format == OutputFormat::Text {
     println!("provider: {}", args.provider.as_deref().unwrap_or("(any)"));
     println!("account:  {}", args.account.as_deref().unwrap_or("(any)"));
@@ -245,6 +258,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   if !outcome.success {
+    print_failure_outcome(&outcome, args.format, !args.no_redact)?;
     let err = outcome
       .error
       .as_ref()
@@ -254,9 +268,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   if args.dry_run {
-    print_dry_run_outcome(&outcome, args.format)?;
+    print_dry_run_outcome(&outcome, args.format, !args.no_redact)?;
   } else {
-    print_live_outcome(outcome, args.format).await?;
+    print_live_outcome(outcome, args.format, !args.no_redact).await?;
   }
 
   Ok(())
@@ -277,6 +291,7 @@ fn print_event(event: &Event) {
       client_id,
       model,
       stream,
+      ..
     }) => {
       let cid = client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!("[extract]          model={model} stream={stream} client_id={cid}");
@@ -288,32 +303,34 @@ fn print_event(event: &Event) {
       account_id,
       provider_id,
       upstream_endpoint,
+      ..
     }) => {
       let cid = client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
         "[resolve]          model={model} -> {upstream_model} account={account_id} provider={provider_id} upstream_endpoint={upstream_endpoint} client_id={cid}"
       );
     }
-    EventPayload::Known(StageEvent::BuildHeaders) => {
+    EventPayload::Known(StageEvent::BuildHeaders { .. }) => {
       println!("[build_headers]    ok");
     }
-    EventPayload::Known(StageEvent::ConvertRequest) => {
+    EventPayload::Known(StageEvent::ConvertRequest { .. }) => {
       println!("[convert_request]  ok");
     }
-    EventPayload::Known(StageEvent::Send) => {
+    EventPayload::Known(StageEvent::Send { .. }) => {
       println!("[send]             ok");
     }
-    EventPayload::Known(StageEvent::ConvertResponse) => {
+    EventPayload::Known(StageEvent::ConvertResponse { .. }) => {
       println!("[convert_response] ok");
     }
     EventPayload::Known(StageEvent::Error {
       stage,
       message,
       recoverable,
+      ..
     }) => {
       println!("[error]            stage={stage} recoverable={recoverable} message={message}");
     }
-    EventPayload::Known(StageEvent::Completed { success, attempts }) => {
+    EventPayload::Known(StageEvent::Completed { success, attempts, .. }) => {
       println!("[completed]        success={success} attempts={attempts}");
     }
     EventPayload::Custom(c) => {
@@ -322,15 +339,17 @@ fn print_event(event: &Event) {
   }
 }
 
-fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat) -> Result<()> {
+fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
   let resolved = outcome.resolved.as_ref();
   let headers = outcome.built_headers.as_ref();
   let converted = outcome.converted_request.as_ref();
 
   match format {
     OutputFormat::Json => {
-      let headers_json = headers.map(|h| headers_json_value(&h.headers)).unwrap_or(Value::Null);
-      let body_json = converted.map(|c| c.upstream_body.clone()).unwrap_or(Value::Null);
+      let headers_json = headers
+        .map(|h| headers_json_value(&h.headers, redact))
+        .unwrap_or(Value::Null);
+      let body_json = converted.map(|c| (*c.upstream_body).clone()).unwrap_or(Value::Null);
       let report = serde_json::json!({
         "dry_run": true,
         "attempts": outcome.attempts,
@@ -359,7 +378,7 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
         println!("headers:");
         for (name, value) in h.headers.iter() {
           let v = value.as_str();
-          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v));
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
         }
       }
       if let Some(c) = converted {
@@ -367,7 +386,7 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
           println!("content-encoding: {}", enc.as_str());
         }
         println!("body:");
-        println!("{}", serde_json::to_string_pretty(&c.upstream_body)?);
+        println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);
       }
     }
   }
@@ -379,7 +398,7 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
 /// text preview; for streaming responses we forward the SSE byte chunks
 /// to stdout as they arrive (curl `-N` semantics) and finish with a
 /// concise summary.
-async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: OutputFormat) -> Result<()> {
+async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
   let PipelineOutcome {
     attempts,
     resolved,
@@ -406,8 +425,8 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
           "upstream_model": resolved.as_ref().map(|r| r.upstream_model.as_str()),
           "upstream_endpoint": resolved.as_ref().map(|r| r.upstream_endpoint.to_string()),
           "status": status,
-          "headers": headers_json_value(&headers),
-          "body": body_json,
+          "headers": headers_json_value(&headers, redact),
+          "body": &*body_json,
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
       }
@@ -425,10 +444,10 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
         println!("headers:");
         for (name, value) in headers.iter() {
           let v = value.as_str();
-          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v));
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
         }
         println!("body:");
-        println!("{}", serde_json::to_string_pretty(&body_json)?);
+        println!("{}", serde_json::to_string_pretty(&*body_json)?);
       }
     },
     ConvertedResponse::Stream {
@@ -456,7 +475,7 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
         println!("headers:");
         for (name, value) in headers.iter() {
           let v = value.as_str();
-          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v));
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
         }
         println!("body:");
       }
@@ -481,19 +500,90 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
   Ok(())
 }
 
-fn headers_json_value(headers: &llm_headers::HeaderMap) -> Value {
+/// Render whatever partial state the pipeline managed to accumulate before
+/// failing. Mirrors `print_dry_run_outcome` shape so the user sees the same
+/// fields whether the run succeeded, was dry-run, or aborted mid-stream.
+fn print_failure_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
+  let resolved = outcome.resolved.as_ref();
+  let headers = outcome.built_headers.as_ref();
+  let converted_req = outcome.converted_request.as_ref();
+  let err = outcome.error.as_ref();
+
+  match format {
+    OutputFormat::Json => {
+      let headers_json = headers
+        .map(|h| headers_json_value(&h.headers, redact))
+        .unwrap_or(Value::Null);
+      let body_json = converted_req.map(|c| (*c.upstream_body).clone()).unwrap_or(Value::Null);
+      let report = serde_json::json!({
+        "success": false,
+        "attempts": outcome.attempts,
+        "error": err.map(|e| serde_json::json!({
+          "stage": e.stage.as_str(),
+          "message": &e.message,
+          "recoverable": e.recoverable,
+        })),
+        "account": resolved.map(|r| r.account_id.as_str()),
+        "provider": resolved.map(|r| r.provider_id.as_str()),
+        "model": resolved.map(|r| r.model.as_str()),
+        "upstream_model": resolved.map(|r| r.upstream_model.as_str()),
+        "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
+        "headers": headers_json,
+        "body": body_json,
+        "content_encoding": converted_req.and_then(|c| c.content_encoding.map(|e| e.as_str())),
+      });
+      println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    OutputFormat::Text => {
+      println!();
+      println!("--- failure ---");
+      println!("attempts: {}", outcome.attempts);
+      if let Some(e) = err {
+        println!("stage:    {}", e.stage);
+        println!("recoverable: {}", e.recoverable);
+        println!("message:  {}", e.message);
+      }
+      if let Some(r) = resolved {
+        println!("account:  {}", r.account_id);
+        println!("provider: {}", r.provider_id);
+        println!("model:    {} -> {}", r.model, r.upstream_model);
+        println!("upstream: {}", r.upstream_endpoint);
+      }
+      if let Some(h) = headers {
+        println!("headers:");
+        for (name, value) in h.headers.iter() {
+          let v = value.as_str();
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
+        }
+      }
+      if let Some(c) = converted_req {
+        if let Some(enc) = c.content_encoding {
+          println!("content-encoding: {}", enc.as_str());
+        }
+        println!("body:");
+        println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);
+      }
+    }
+  }
+  Ok(())
+}
+
+fn headers_json_value(headers: &llm_headers::HeaderMap, redact: bool) -> Value {
   let mut map = serde_json::Map::new();
   for (name, value) in headers.iter() {
     let v = value.as_str();
     map.insert(
       name.as_str().to_string(),
-      Value::String(redact_header(name.as_str(), v)),
+      Value::String(redact_header(name.as_str(), v, redact)),
     );
   }
   Value::Object(map)
 }
 
-fn redact_header(name: &str, value: &str) -> String {
+fn redact_header(name: &str, value: &str, redact: bool) -> String {
+  if !redact {
+    return value.to_string();
+  }
   match name.to_ascii_lowercase().as_str() {
     "authorization" | "proxy-authorization" | "cookie" | "set-cookie" | "x-api-key" => "<redacted>".into(),
     _ => value.to_string(),

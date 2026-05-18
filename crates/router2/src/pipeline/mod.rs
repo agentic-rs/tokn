@@ -23,6 +23,7 @@
 pub mod ctx;
 pub mod error;
 pub mod outcome;
+pub mod snapshot;
 pub mod stages;
 
 use crate::event::{EventBus, Stage, StageEvent};
@@ -86,25 +87,35 @@ impl PipelineRunner {
     let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
     ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
 
+    // Build the outcome incrementally. Each stage's success mutates the
+    // accumulator before we snapshot+emit, so observers see a growing
+    // snapshot per event. On failure the same accumulator (with `error`
+    // populated) is returned to the caller — no partial state is lost.
+    let mut outcome = PipelineOutcome::success(0);
+
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
       Ok(e) => {
+        let snapshot = Arc::new((&outcome).into());
         ctx.emit_known(StageEvent::Extract {
           client_id: e.client_id.clone(),
           model: e.model.clone(),
           stream: e.stream,
+          snapshot,
         });
         e
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
     if self.options.stop_after == Some(Stage::Extract) {
-      return self.short_circuit(&ctx, None, None, None, None, None);
+      return self.complete(&ctx, outcome);
     }
 
     // ---- Resolve ----
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
+        outcome.resolved = Some(r.clone());
+        let snapshot = Arc::new((&outcome).into());
         ctx.emit_known(StageEvent::Resolve {
           client_id: r.client_id.clone(),
           model: r.model.clone(),
@@ -112,13 +123,14 @@ impl PipelineRunner {
           account_id: r.account_id.clone(),
           provider_id: r.provider_id.clone(),
           upstream_endpoint: r.upstream_endpoint,
+          snapshot,
         });
         r
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
     if self.options.stop_after == Some(Stage::Resolve) {
-      return self.short_circuit(&ctx, Some(resolved), None, None, None, None);
+      return self.complete(&ctx, outcome);
     }
 
     // ---- BuildHeaders ----
@@ -129,13 +141,15 @@ impl PipelineRunner {
       .await
     {
       Ok(h) => {
-        ctx.emit_known(StageEvent::BuildHeaders);
+        outcome.built_headers = Some(h.clone());
+        let snapshot = Arc::new((&outcome).into());
+        ctx.emit_known(StageEvent::BuildHeaders { snapshot });
         h
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
     if self.options.stop_after == Some(Stage::BuildHeaders) {
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), None, None, None);
+      return self.complete(&ctx, outcome);
     }
 
     // ---- ConvertRequest ----
@@ -146,13 +160,15 @@ impl PipelineRunner {
       .await
     {
       Ok(c) => {
-        ctx.emit_known(StageEvent::ConvertRequest);
+        outcome.converted_request = Some(c.clone());
+        let snapshot = Arc::new((&outcome).into());
+        ctx.emit_known(StageEvent::ConvertRequest { snapshot });
         c
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
     if self.options.stop_after == Some(Stage::ConvertRequest) {
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted), None, None);
+      return self.complete(&ctx, outcome);
     }
 
     // ---- Send ----
@@ -163,79 +179,81 @@ impl PipelineRunner {
       .await
     {
       Ok(s) => {
-        ctx.emit_known(StageEvent::Send);
+        // SentResponse is not Clone (single-shot reqwest::Response), so
+        // the accumulator's `sent_response` is populated only if we
+        // short-circuit here; the snapshot meanwhile reflects whatever
+        // is already in `outcome` (resolved + headers + converted req).
+        let snapshot = Arc::new((&outcome).into());
+        ctx.emit_known(StageEvent::Send { snapshot });
         s
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
     if self.options.stop_after == Some(Stage::Send) {
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted), Some(sent), None);
+      outcome.sent_response = Some(sent);
+      return self.complete(&ctx, outcome);
     }
 
     // ---- ConvertResponse ----
     let converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
       Ok(c) => {
-        ctx.emit_known(StageEvent::ConvertResponse);
-        c
+        // Build the snapshot from a temporary view that includes the
+        // converted response (without moving it into `outcome` yet, so
+        // the snapshot's body_json Arc can be shared with the returned
+        // outcome). We populate `outcome.converted_response` first, then
+        // snapshot from `&outcome`.
+        outcome.converted_response = Some(c);
+        let snapshot = Arc::new((&outcome).into());
+        ctx.emit_known(StageEvent::ConvertResponse { snapshot });
+        // unwrap is safe: we just set it.
+        outcome.converted_response.take().expect("just populated")
       }
-      Err(err) => return self.fail(&ctx, err),
+      Err(err) => return self.fail(&ctx, &mut outcome, err),
     };
 
-    ctx.emit_known(StageEvent::Completed {
-      success: true,
-      attempts: ctx.attempt + 1,
-    });
-    PipelineOutcome::success(ctx.attempt + 1)
-      .with_resolved(resolved)
-      .with_built_headers(headers)
-      .with_converted_request(converted)
-      .with_converted_response(converted_response)
+    outcome.success = true;
+    outcome.attempts = ctx.attempt + 1;
+    outcome.converted_response = Some(converted_response);
+    self.complete(&ctx, outcome)
   }
 
-  #[allow(clippy::too_many_arguments)]
-  fn short_circuit(
-    &self,
-    ctx: &PipelineCtx,
-    resolved: Option<Resolved>,
-    headers: Option<BuiltHeaders>,
-    converted: Option<ConvertedRequest>,
-    sent: Option<SentResponse>,
-    converted_response: Option<ConvertedResponse>,
-  ) -> PipelineOutcome {
+  /// Emit [`StageEvent::Completed`] for a successful (or short-circuited)
+  /// run and return the assembled outcome.
+  fn complete(&self, ctx: &PipelineCtx, mut outcome: PipelineOutcome) -> PipelineOutcome {
+    outcome.success = true;
+    outcome.attempts = ctx.attempt + 1;
+    let snapshot = Arc::new((&outcome).into());
     ctx.emit_known(StageEvent::Completed {
       success: true,
-      attempts: ctx.attempt + 1,
+      attempts: outcome.attempts,
+      snapshot,
     });
-    let mut out = PipelineOutcome::success(ctx.attempt + 1);
-    if let Some(r) = resolved {
-      out = out.with_resolved(r);
-    }
-    if let Some(h) = headers {
-      out = out.with_built_headers(h);
-    }
-    if let Some(c) = converted {
-      out = out.with_converted_request(c);
-    }
-    if let Some(s) = sent {
-      out = out.with_sent_response(s);
-    }
-    if let Some(c) = converted_response {
-      out = out.with_converted_response(c);
-    }
-    out
+    outcome
   }
 
-  fn fail(&self, ctx: &PipelineCtx, err: PipelineError) -> PipelineOutcome {
+  /// Record the failure on `outcome`, emit [`StageEvent::Error`] +
+  /// [`StageEvent::Completed`] (sharing one snapshot `Arc`), and return the
+  /// partially-populated outcome to the caller.
+  fn fail(&self, ctx: &PipelineCtx, outcome: &mut PipelineOutcome, err: PipelineError) -> PipelineOutcome {
+    outcome.success = false;
+    outcome.attempts = ctx.attempt + 1;
+    outcome.error = Some(err.clone());
+    let snapshot: Arc<snapshot::OutcomeSnapshot> = Arc::new((&*outcome).into());
     ctx.emit_known(StageEvent::Error {
       stage: err.stage,
       message: err.message.clone(),
       recoverable: err.recoverable,
+      snapshot: snapshot.clone(),
     });
     ctx.emit_known(StageEvent::Completed {
       success: false,
-      attempts: ctx.attempt + 1,
+      attempts: outcome.attempts,
+      snapshot,
     });
-    PipelineOutcome::failure(ctx.attempt + 1, err)
+    // Move the populated outcome out by replacing it with a tombstone;
+    // the caller's `&mut` reference is local to this method's parent
+    // frame and dies immediately on return, so this is sound.
+    std::mem::replace(outcome, PipelineOutcome::failure(0, err))
   }
 }
 
