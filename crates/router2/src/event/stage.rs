@@ -49,9 +49,7 @@ impl std::fmt::Display for Stage {
 #[derive(Debug, Clone)]
 pub enum StageEvent {
   /// Emitted once at the very start of [`PipelineRunner::run`].
-  Started {
-    endpoint: Endpoint,
-  },
+  Started { endpoint: Endpoint },
   /// Extract stage completed successfully.
   Extract {
     client_id: Option<ClientId>,
@@ -85,8 +83,5 @@ pub enum StageEvent {
     recoverable: bool,
   },
   /// Emitted once at the end of [`PipelineRunner::run`], success or failure.
-  Completed {
-    success: bool,
-    attempts: u32,
-  },
+  Completed { success: bool, attempts: u32 },
 }

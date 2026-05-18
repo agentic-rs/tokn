@@ -74,6 +74,8 @@ impl<'de> Deserialize<'de> for ChatEvent {
     if value.as_str() == Some("[DONE]") {
       return Ok(Self::Done);
     }
-    serde_json::from_value(value).map(Self::Chunk).map_err(serde::de::Error::custom)
+    serde_json::from_value(value)
+      .map(Self::Chunk)
+      .map_err(serde::de::Error::custom)
   }
 }

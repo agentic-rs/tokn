@@ -2,7 +2,7 @@ use super::provider::endpoints_for_model;
 use super::OutputFormat;
 use anyhow::Result;
 use clap::Args;
-use llm_core::provider::{Capabilities, Cost, Limits, ModelInfo, Modalities};
+use llm_core::provider::{Capabilities, Cost, Limits, Modalities, ModelInfo};
 use llm_router::accounts::registry::Registry;
 use serde::Serialize;
 use serde_json::Value;
@@ -225,7 +225,10 @@ fn print_override_text(overrides: &ProviderOverrideView) {
 fn print_reports_json(reports: &[ModelReport], all: bool) -> Result<()> {
   if all {
     let models = reports.iter().map(report_json).collect::<Vec<_>>();
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?);
+    println!(
+      "{}",
+      serde_json::to_string_pretty(&serde_json::json!({ "models": models }))?
+    );
   } else if let Some(report) = reports.first() {
     println!("{}", serde_json::to_string_pretty(&report_json(report))?);
   }
@@ -411,7 +414,10 @@ where
   for value in values {
     *counts.entry(value).or_default() += 1;
   }
-  counts.into_iter().max_by_key(|(_, count)| *count).map(|(value, _)| value)
+  counts
+    .into_iter()
+    .max_by_key(|(_, count)| *count)
+    .map(|(value, _)| value)
 }
 
 fn most_common_json(values: impl Iterator<Item = Value>) -> Option<Value> {

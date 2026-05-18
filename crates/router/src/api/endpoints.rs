@@ -1,5 +1,4 @@
 use super::error::ApiError;
-use llm_accounts::routing::route_mode_as_str;
 use super::AppState;
 use crate::pipeline::{
   handle_endpoint, request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser,
@@ -8,6 +7,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
+use llm_accounts::routing::route_mode_as_str;
 use std::time::Instant;
 use tracing::instrument;
 

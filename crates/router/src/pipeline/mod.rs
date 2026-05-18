@@ -751,8 +751,7 @@ mod tests {
   #[test]
   fn build_failure_result_event_from_api_err_preserves_not_implemented_envelope() {
     let api_err = ApiError::not_implemented("messages", "claude-sonnet-4-6");
-    let event =
-      build_failure_result_event_from_api_err("req-3".into(), 0, Instant::now(), &api_err, None);
+    let event = build_failure_result_event_from_api_err("req-3".into(), 0, Instant::now(), &api_err, None);
     let Event::RequestResult {
       inbound_status,
       inbound_resp_body,
@@ -821,7 +820,9 @@ mod tests {
       inbound_headers: llm_headers::HeaderMap::new(),
     };
 
-    let transformed = transformer.transform_input(meta.upstream_endpoint, body.clone()).unwrap();
+    let transformed = transformer
+      .transform_input(meta.upstream_endpoint, body.clone())
+      .unwrap();
     assert_eq!(transformed, body);
   }
 }

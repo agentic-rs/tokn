@@ -15,7 +15,6 @@ use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexCliHeaders {
   // Always present
@@ -146,9 +145,10 @@ impl CodexCliHeaders {
       host: from_inbound_or(inbound, &keys::HOST, || "chatgpt.com".into()),
       accept: from_inbound_or(inbound, &keys::ACCEPT, || "text/event-stream".into()),
       originator: from_inbound_or(inbound, &keys::ORIGINATOR, || "codex_exec".into()),
-      chatgpt_account_id: vars.account_id.clone().unwrap_or_else(|| {
-        from_inbound_or(inbound, &keys::CHATGPT_ACCOUNT_ID, || "<missing>".into())
-      }),
+      chatgpt_account_id: vars
+        .account_id
+        .clone()
+        .unwrap_or_else(|| from_inbound_or(inbound, &keys::CHATGPT_ACCOUNT_ID, || "<missing>".into())),
       version: from_inbound_or(inbound, &keys::VERSION, || "0.130.0".into()),
       content_type: opt_from_inbound(inbound, &keys::CONTENT_TYPE),
       content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),

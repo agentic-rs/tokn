@@ -1,10 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
-use llm_endpoint_core::{
-  drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras,
-};
 pub use llm_endpoint_core::ToolChoice as ChatToolChoice;
+use llm_endpoint_core::{drain_into_extras, peel_lenient, take_optional, take_optional_default, take_required, Extras};
 
 use crate::message::ChatMessage;
 use crate::parameters::{ChatExtraParameters, ChatRequestParameters};
@@ -56,7 +54,16 @@ impl<'de> Deserialize<'de> for ChatRequest {
     let extra_params: ChatExtraParameters = peel_lenient(&mut root, &mut extras);
     drain_into_extras(&mut root, &mut extras);
 
-    Ok(ChatRequest { model, messages, stream, tools, stop, params, extra_params, extras })
+    Ok(ChatRequest {
+      model,
+      messages,
+      stream,
+      tools,
+      stop,
+      params,
+      extra_params,
+      extras,
+    })
   }
 }
 

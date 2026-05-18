@@ -34,10 +34,7 @@ pub fn copilot_request_headers(
   initiator: &str,
 ) -> Result<HeaderMap> {
   let mut m = HeaderMap::new();
-  m.insert(
-    &AUTHORIZATION,
-    HeaderValue::from_string(format!("Bearer {api_token}")),
-  );
+  m.insert(&AUTHORIZATION, HeaderValue::from_string(format!("Bearer {api_token}")));
   m.insert(
     &ACCEPT,
     HeaderValue::from_static(if streaming {
@@ -88,7 +85,10 @@ mod tests {
     assert_eq!(h.get(&name("accept")).unwrap().as_str(), "application/json");
     assert_eq!(h.get(&name("user-agent")).unwrap().as_str(), "GitHubCopilotChat/0.20.0");
     assert_eq!(h.get(&name("editor-version")).unwrap().as_str(), "vscode/1.95.0");
-    assert_eq!(h.get(&name("editor-plugin-version")).unwrap().as_str(), "copilot-chat/0.20.0");
+    assert_eq!(
+      h.get(&name("editor-plugin-version")).unwrap().as_str(),
+      "copilot-chat/0.20.0"
+    );
     assert_eq!(h.get(&name("copilot-integration-id")).unwrap().as_str(), "vscode-chat");
     assert_eq!(h.get(&name("openai-intent")).unwrap().as_str(), "conversation-panel");
     assert_eq!(h.get(&name("x-initiator")).unwrap().as_str(), "user");
@@ -130,7 +130,10 @@ mod tests {
     assert_eq!(h.get(&name("accept")).unwrap().as_str(), "application/json");
     assert_eq!(h.get(&name("user-agent")).unwrap().as_str(), "GitHubCopilotChat/0.20.0");
     assert_eq!(h.get(&name("editor-version")).unwrap().as_str(), "vscode/1.95.0");
-    assert_eq!(h.get(&name("editor-plugin-version")).unwrap().as_str(), "copilot-chat/0.20.0");
+    assert_eq!(
+      h.get(&name("editor-plugin-version")).unwrap().as_str(),
+      "copilot-chat/0.20.0"
+    );
     let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 5, "unexpected extra headers: {names:?}");
   }

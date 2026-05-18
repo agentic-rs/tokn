@@ -259,9 +259,5 @@ pub trait SendStage: Send + Sync {
 
 #[async_trait]
 pub trait ConvertResponseStage: Send + Sync {
-  async fn convert_response(
-    &self,
-    ctx: &PipelineCtx,
-    sent: SentResponse,
-  ) -> Result<ConvertedResponse, PipelineError>;
+  async fn convert_response(&self, ctx: &PipelineCtx, sent: SentResponse) -> Result<ConvertedResponse, PipelineError>;
 }

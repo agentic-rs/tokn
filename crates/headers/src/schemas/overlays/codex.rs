@@ -17,7 +17,6 @@ use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexOverlay {
   #[serde(rename = "OpenAI-Beta")]
@@ -164,10 +163,7 @@ mod tests {
     // session_id was already present — overlay must not clobber it.
     assert_eq!(map.get(&keys::X_SESSION_ID).unwrap().as_str(), "preexisting");
     // chatgpt-account-id absent originally — overlay fills it in.
-    assert_eq!(
-      map.get(&keys::CHATGPT_ACCOUNT_ID).unwrap().as_str(),
-      "acct_abc"
-    );
+    assert_eq!(map.get(&keys::CHATGPT_ACCOUNT_ID).unwrap().as_str(), "acct_abc");
     // None-valued optional not inserted.
     assert!(!map.contains_key(&keys::OPENAI_INTENT));
   }

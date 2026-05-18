@@ -24,7 +24,6 @@ use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CopilotCliHeaders {
   // Transport
@@ -143,11 +142,19 @@ impl HeaderSchema for CopilotCliHeaders {
     put(&mut m, &keys::X_AGENT_TASK_ID, &self.agent_task_id);
     put_opt(&mut m, &keys::X_STAINLESS_RETRY_COUNT, &self.stainless_retry_count);
     put_opt(&mut m, &keys::X_STAINLESS_LANG, &self.stainless_lang);
-    put_opt(&mut m, &keys::X_STAINLESS_PACKAGE_VERSION, &self.stainless_package_version);
+    put_opt(
+      &mut m,
+      &keys::X_STAINLESS_PACKAGE_VERSION,
+      &self.stainless_package_version,
+    );
     put_opt(&mut m, &keys::X_STAINLESS_OS, &self.stainless_os);
     put_opt(&mut m, &keys::X_STAINLESS_ARCH, &self.stainless_arch);
     put_opt(&mut m, &keys::X_STAINLESS_RUNTIME, &self.stainless_runtime);
-    put_opt(&mut m, &keys::X_STAINLESS_RUNTIME_VERSION, &self.stainless_runtime_version);
+    put_opt(
+      &mut m,
+      &keys::X_STAINLESS_RUNTIME_VERSION,
+      &self.stainless_runtime_version,
+    );
     put_opt(&mut m, &keys::CONTENT_LENGTH, &self.content_length);
     put_opt(&mut m, &keys::COOKIE, &self.cookie);
     put_opt(&mut m, &keys::X_REQUEST_ID, &self.request_id);
@@ -198,29 +205,21 @@ impl CopilotCliHeaders {
       authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
       content_type: from_inbound_or(inbound, &keys::CONTENT_TYPE, || "application/json".into()),
       accept: from_inbound_or(inbound, &keys::ACCEPT, || "application/json".into()),
-      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || {
-        "br, gzip, deflate".into()
-      }),
+      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || "br, gzip, deflate".into()),
       accept_language: from_inbound_or(inbound, &keys::ACCEPT_LANGUAGE, || "*".into()),
       sec_fetch_mode: from_inbound_or(inbound, &keys::SEC_FETCH_MODE, || "cors".into()),
       copilot_integration_id: from_inbound_or(inbound, &keys::COPILOT_INTEGRATION_ID, || {
         "copilot-developer-cli".into()
       }),
-      openai_intent: from_inbound_or(inbound, &keys::OPENAI_INTENT, || {
-        "conversation-agent".into()
-      }),
+      openai_intent: from_inbound_or(inbound, &keys::OPENAI_INTENT, || "conversation-agent".into()),
       initiator: from_inbound_or(inbound, &keys::X_INITIATOR, || "user".into()),
-      github_api_version: from_inbound_or(inbound, &keys::X_GITHUB_API_VERSION, || {
-        "2026-01-09".into()
-      }),
+      github_api_version: from_inbound_or(inbound, &keys::X_GITHUB_API_VERSION, || "2026-01-09".into()),
       interaction_id: vars.interaction_id.clone().unwrap_or_else(|| {
         from_inbound_or(inbound, &keys::X_INTERACTION_ID, || {
           "00000000-0000-0000-0000-000000000000".into()
         })
       }),
-      interaction_type: from_inbound_or(inbound, &keys::X_INTERACTION_TYPE, || {
-        "conversation-user".into()
-      }),
+      interaction_type: from_inbound_or(inbound, &keys::X_INTERACTION_TYPE, || "conversation-user".into()),
       client_session_id: vars.session_id.clone().unwrap_or_else(|| {
         from_inbound_or(inbound, &keys::X_CLIENT_SESSION_ID, || {
           "00000000-0000-0000-0000-000000000000".into()

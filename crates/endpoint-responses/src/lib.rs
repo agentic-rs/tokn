@@ -17,9 +17,8 @@ mod extra_keys_impls;
 pub use content::{InputContentPart, OutputContentPart, ReasoningPart};
 pub use event::{ResponsesEvent, ResponsesEventCommon};
 pub use item::{
-  FunctionCallItem, FunctionCallOutputItem, InputItem, InputMessage, InputMessageContent,
-  OutputItem, OutputMessage, ReasoningItem, TaggedFunctionCall, TaggedFunctionCallOutput,
-  TaggedOutputMessage, TaggedReasoning,
+  FunctionCallItem, FunctionCallOutputItem, InputItem, InputMessage, InputMessageContent, OutputItem, OutputMessage,
+  ReasoningItem, TaggedFunctionCall, TaggedFunctionCallOutput, TaggedOutputMessage, TaggedReasoning,
 };
 pub use parameters::{ResponsesExtraParameters, ResponsesRequestParameters};
 pub use request::{ResponsesInput, ResponsesRequest, ResponsesToolChoice, ResponsesToolDef};

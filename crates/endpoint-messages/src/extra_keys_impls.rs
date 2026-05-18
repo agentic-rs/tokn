@@ -108,10 +108,9 @@ impl ExtraKeys for MessagesEvent {
         push_extras(extras, prefix, out);
         delta.extra_keys_into(out, &join_path(prefix, "delta"));
       }
-      E::ContentBlockStop { extras, .. }
-      | E::MessageStop { extras }
-      | E::Ping { extras }
-      | E::Error { extras, .. } => push_extras(extras, prefix, out),
+      E::ContentBlockStop { extras, .. } | E::MessageStop { extras } | E::Ping { extras } | E::Error { extras, .. } => {
+        push_extras(extras, prefix, out)
+      }
       E::MessageDelta { usage, extras, .. } => {
         push_extras(extras, prefix, out);
         usage.extra_keys_into(out, &join_path(prefix, "usage"));

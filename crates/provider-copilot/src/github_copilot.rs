@@ -8,9 +8,9 @@ use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
 use llm_core::pipeline::InputTransformer;
-use parking_lot::RwLock;
 use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use parking_lot::RwLock;
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
@@ -186,10 +186,7 @@ impl Provider for CopilotProvider {
     let token = ctx.bearer_token.ok_or_else(|| error::Error::Profiles {
       message: "missing copilot bearer token for header patch".to_string(),
     })?;
-    headers.insert(
-      &AUTHORIZATION,
-      HeaderValue::from_string(format!("Bearer {token}")),
-    );
+    headers.insert(&AUTHORIZATION, HeaderValue::from_string(format!("Bearer {token}")));
     headers.insert(
       &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -204,10 +201,7 @@ impl Provider for CopilotProvider {
       HeaderValue::from_string(ctx.initiator.to_string()),
     );
     if let Some(encoding) = ctx.content_encoding {
-      headers.insert(
-        &CONTENT_ENCODING,
-        HeaderValue::from_string(encoding.to_string()),
-      );
+      headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
     Ok(())
   }

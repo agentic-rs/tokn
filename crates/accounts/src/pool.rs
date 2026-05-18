@@ -491,10 +491,10 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 #[cfg(test)]
 mod tests {
   use super::*;
+  use async_trait::async_trait;
   use llm_core::provider::{
     AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
   };
-  use async_trait::async_trait;
   use serde_json::Value;
 
   struct MockProvider {

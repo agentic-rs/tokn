@@ -71,7 +71,11 @@ key!(X_INTERACTION_TYPE, "X-Interaction-Type", "x-interaction-type");
 key!(X_CLIENT_SESSION_ID, "X-Client-Session-Id", "x-client-session-id");
 key!(X_AGENT_TASK_ID, "X-Agent-Task-Id", "x-agent-task-id");
 key!(SEC_FETCH_MODE, "Sec-Fetch-Mode", "sec-fetch-mode");
-key!(X_STAINLESS_RETRY_COUNT, "X-Stainless-Retry-Count", "x-stainless-retry-count");
+key!(
+  X_STAINLESS_RETRY_COUNT,
+  "X-Stainless-Retry-Count",
+  "x-stainless-retry-count"
+);
 key!(X_STAINLESS_LANG, "X-Stainless-Lang", "x-stainless-lang");
 key!(
   X_STAINLESS_PACKAGE_VERSION,

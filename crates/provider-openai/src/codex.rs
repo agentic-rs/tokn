@@ -124,10 +124,7 @@ impl Provider for CodexProvider {
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     common::patch_openai_headers(headers, self.credential.expose(), ctx)?;
     if let Some(pid) = self.provider_account_id.as_deref().filter(|s| !s.is_empty()) {
-      headers.insert(
-        &CHATGPT_ACCOUNT_ID,
-        HeaderValue::from_string(pid.to_string()),
-      );
+      headers.insert(&CHATGPT_ACCOUNT_ID, HeaderValue::from_string(pid.to_string()));
     }
     Ok(())
   }
@@ -287,8 +284,16 @@ mod tests {
     let codex = CodexProvider::from_account(Arc::new(a)).unwrap();
     let mut h = HeaderMap::new();
     codex.patch_headers(&mut h, &patch_ctx()).unwrap();
-    assert_eq!(h.get(&llm_headers::HeaderName::new("authorization")).unwrap().as_str(), "Bearer atk-test");
-    assert_eq!(h.get(&llm_headers::HeaderName::new("chatgpt-account-id")).unwrap().as_str(), "acc-77");
+    assert_eq!(
+      h.get(&llm_headers::HeaderName::new("authorization")).unwrap().as_str(),
+      "Bearer atk-test"
+    );
+    assert_eq!(
+      h.get(&llm_headers::HeaderName::new("chatgpt-account-id"))
+        .unwrap()
+        .as_str(),
+      "acc-77"
+    );
   }
 
   #[test]

@@ -19,7 +19,6 @@ use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CopilotOverlay {
   #[serde(rename = "Editor-Version")]
@@ -72,12 +71,8 @@ impl CopilotOverlay {
   pub fn build(_vars: &TemplateVars, inbound: &HeaderMap) -> Self {
     Self {
       editor_version: from_inbound_or(inbound, &keys::EDITOR_VERSION, || "vscode/1.95.0".into()),
-      editor_plugin_version: from_inbound_or(inbound, &keys::EDITOR_PLUGIN_VERSION, || {
-        "copilot-chat/0.23.0".into()
-      }),
-      integration_id: from_inbound_or(inbound, &keys::COPILOT_INTEGRATION_ID, || {
-        "vscode-chat".into()
-      }),
+      editor_plugin_version: from_inbound_or(inbound, &keys::EDITOR_PLUGIN_VERSION, || "copilot-chat/0.23.0".into()),
+      integration_id: from_inbound_or(inbound, &keys::COPILOT_INTEGRATION_ID, || "vscode-chat".into()),
       vision_request: opt_from_inbound(inbound, &keys::COPILOT_VISION_REQUEST),
       initiator: opt_from_inbound(inbound, &keys::X_INITIATOR),
     }
@@ -94,10 +89,7 @@ impl CopilotOverlay {
       keys::EDITOR_PLUGIN_VERSION.clone(),
       self.editor_plugin_version.to_string(),
     );
-    map.replace(
-      keys::COPILOT_INTEGRATION_ID.clone(),
-      self.integration_id.to_string(),
-    );
+    map.replace(keys::COPILOT_INTEGRATION_ID.clone(), self.integration_id.to_string());
     if let Some(v) = &self.vision_request {
       if !map.contains_key(&keys::COPILOT_VISION_REQUEST) {
         map.insert(keys::COPILOT_VISION_REQUEST.clone(), v.to_string());
@@ -183,14 +175,8 @@ mod tests {
     overlay.apply_to(&mut map, &TemplateVars::default());
 
     // Managed fields overridden.
-    assert_eq!(
-      map.get(&keys::EDITOR_VERSION).unwrap().as_str(),
-      "vscode/1.95.0"
-    );
-    assert_eq!(
-      map.get(&keys::COPILOT_INTEGRATION_ID).unwrap().as_str(),
-      "vscode-chat"
-    );
+    assert_eq!(map.get(&keys::EDITOR_VERSION).unwrap().as_str(), "vscode/1.95.0");
+    assert_eq!(map.get(&keys::COPILOT_INTEGRATION_ID).unwrap().as_str(), "vscode-chat");
     assert_eq!(
       map.get(&keys::EDITOR_PLUGIN_VERSION).unwrap().as_str(),
       "copilot-chat/0.23.0"

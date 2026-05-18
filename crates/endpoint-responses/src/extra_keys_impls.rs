@@ -7,9 +7,8 @@ use llm_endpoint_core::{join_path, push_extras, ExtraKeys};
 use crate::content::{InputContentPart, OutputContentPart, ReasoningPart};
 use crate::event::ResponsesEvent;
 use crate::item::{
-  FunctionCallItem, FunctionCallOutputItem, InputItem, InputMessage, InputMessageContent,
-  OutputItem, OutputMessage, ReasoningItem, TaggedFunctionCall, TaggedFunctionCallOutput,
-  TaggedOutputMessage, TaggedReasoning,
+  FunctionCallItem, FunctionCallOutputItem, InputItem, InputMessage, InputMessageContent, OutputItem, OutputMessage,
+  ReasoningItem, TaggedFunctionCall, TaggedFunctionCallOutput, TaggedOutputMessage, TaggedReasoning,
 };
 use crate::request::{ResponsesInput, ResponsesRequest, ResponsesToolDef};
 use crate::response::ResponsesResponse;

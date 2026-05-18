@@ -58,10 +58,7 @@ impl AccountSelector for PoolAccountSelector {
         })
       }
       EndpointAcquire::SessionExpired => Ok(SelectorOutcome::SessionExpired {
-        session_id: extracted
-          .session_id
-          .clone()
-          .unwrap_or_else(|| SmolStr::new("")),
+        session_id: extracted.session_id.clone().unwrap_or_else(|| SmolStr::new("")),
       }),
       EndpointAcquire::None => Ok(SelectorOutcome::NoAccount),
     }

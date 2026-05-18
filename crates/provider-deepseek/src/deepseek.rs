@@ -140,10 +140,7 @@ impl Provider for DeepSeekProvider {
     );
     headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(encoding) = ctx.content_encoding {
-      headers.insert(
-        &CONTENT_ENCODING,
-        HeaderValue::from_string(encoding.to_string()),
-      );
+      headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
     Ok(())
   }

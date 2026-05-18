@@ -2,8 +2,8 @@ use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-mod provider;
 mod model;
+mod provider;
 mod send;
 
 pub use model::ModelArgs;

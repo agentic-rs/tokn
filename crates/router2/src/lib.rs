@@ -25,12 +25,9 @@ pub mod utils;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub use event::{CustomEvent, Event, EventBus, EventPayload, StageEvent, Stage};
+pub use event::{CustomEvent, Event, EventBus, EventPayload, Stage, StageEvent};
 pub use pipeline::{
-  ctx::PipelineCtx,
-  error::PipelineError,
-  outcome::PipelineOutcome,
-  stages as stage_traits,
-  Pipeline, PipelineRunner, RawInbound, RunnerOptions,
+  ctx::PipelineCtx, error::PipelineError, outcome::PipelineOutcome, stages as stage_traits, Pipeline, PipelineRunner,
+  RawInbound, RunnerOptions,
 };
 pub use profile::Profile;

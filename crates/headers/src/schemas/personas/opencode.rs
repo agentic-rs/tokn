@@ -17,7 +17,6 @@ use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-
 /// Inbound headers consistently emitted by the OpenCode CLI persona.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpencodeHeaders {
@@ -108,9 +107,7 @@ impl OpencodeHeaders {
       authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
       host: from_inbound_or(inbound, &keys::HOST, || "api.deepseek.com".into()),
       accept: from_inbound_or(inbound, &keys::ACCEPT, || "*/*".into()),
-      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || {
-        "gzip, deflate, br, zstd".into()
-      }),
+      accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || "gzip, deflate, br, zstd".into()),
       connection: from_inbound_or(inbound, &keys::CONNECTION, || "keep-alive".into()),
       content_type: from_inbound_or(inbound, &keys::CONTENT_TYPE, || "application/json".into()),
       content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),

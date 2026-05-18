@@ -166,10 +166,7 @@ impl Provider for ZaiProvider {
     );
     headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(encoding) = ctx.content_encoding {
-      headers.insert(
-        &CONTENT_ENCODING,
-        HeaderValue::from_string(encoding.to_string()),
-      );
+      headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
     Ok(())
   }
@@ -355,7 +352,9 @@ mod tests {
     });
 
     let once = provider.transform_input(Endpoint::ChatCompletions, body).unwrap();
-    let twice = provider.transform_input(Endpoint::ChatCompletions, once.clone()).unwrap();
+    let twice = provider
+      .transform_input(Endpoint::ChatCompletions, once.clone())
+      .unwrap();
 
     assert_eq!(once, twice);
     assert_eq!(

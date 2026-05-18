@@ -61,7 +61,10 @@ struct Report {
 
 impl Report {
   fn bucket(&mut self, endpoint: &str, direction: &str) -> &mut Bucket {
-    self.buckets.entry((endpoint.to_string(), direction.to_string())).or_default()
+    self
+      .buckets
+      .entry((endpoint.to_string(), direction.to_string()))
+      .or_default()
   }
 }
 
@@ -114,11 +117,7 @@ fn list_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
   Ok(out)
 }
 
-fn scan_db(
-  path: &Path,
-  remaining: &mut BTreeMap<&'static str, usize>,
-  report: &mut Report,
-) -> Result<()> {
+fn scan_db(path: &Path, remaining: &mut BTreeMap<&'static str, usize>, report: &mut Report) -> Result<()> {
   let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
   let has_mode = table_has_column(&conn, "requests", "mode")?;
   for endpoint in ENDPOINTS {
@@ -149,12 +148,7 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
   Ok(false)
 }
 
-fn fetch_rows(
-  conn: &Connection,
-  endpoint: &str,
-  limit: usize,
-  has_mode: bool,
-) -> Result<Vec<(Vec<u8>, Vec<u8>, i64)>> {
+fn fetch_rows(conn: &Connection, endpoint: &str, limit: usize, has_mode: bool) -> Result<Vec<(Vec<u8>, Vec<u8>, i64)>> {
   let where_clause = if has_mode {
     "mode = 'passthrough' AND endpoint = ?1"
   } else {
@@ -170,7 +164,11 @@ fn fetch_rows(
   );
   let mut stmt = conn.prepare(&sql)?;
   let rows = stmt.query_map(rusqlite::params![endpoint, limit as i64], |row| {
-    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?, row.get::<_, i64>(2)?))
+    Ok((
+      row.get::<_, Vec<u8>>(0)?,
+      row.get::<_, Vec<u8>>(1)?,
+      row.get::<_, i64>(2)?,
+    ))
   })?;
   let mut out = Vec::new();
   for r in rows {

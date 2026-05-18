@@ -1,10 +1,10 @@
-use llm_accounts::{AccountHandle, EndpointAcquire};
 use crate::api::error::ApiError;
-use llm_accounts::routing::RouteResolution;
 use crate::api::AppState;
 use crate::pipeline::parse::RequestParser;
 use crate::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use bytes::Bytes;
+use llm_accounts::routing::RouteResolution;
+use llm_accounts::{AccountHandle, EndpointAcquire};
 use llm_config::RouteMode;
 use llm_core::pipeline::{ParsedRequest, RequestMeta, RequestResolver, RequestSender};
 use llm_core::provider::TemplateVars;
@@ -299,11 +299,7 @@ pub fn dry_run_request(
   resolved.decoded_body = decoded_body;
   resolved.content_encoding = content_encoding;
   let prepared = prepare_request(resolved).map_err(|e| ApiError::bad_gateway(e.to_string()))?;
-  let mut headers: llm_headers::HeaderMap = prepared
-    .profile_headers
-    .as_ref()
-    .map(|h| h.into())
-    .unwrap_or_default();
+  let mut headers: llm_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
   let inbound_lh: llm_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
     .account

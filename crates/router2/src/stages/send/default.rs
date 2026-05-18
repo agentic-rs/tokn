@@ -90,9 +90,12 @@ impl SendStage for DefaultSend {
     if status >= 500 {
       let body_text = match resp.text().await {
         Ok(t) => t,
-        Err(e) => return Err(PipelineError::recoverable(Stage::Send, SmolStr::new(format!(
-          "upstream {status}: failed to read body: {e}"
-        )))),
+        Err(e) => {
+          return Err(PipelineError::recoverable(
+            Stage::Send,
+            SmolStr::new(format!("upstream {status}: failed to read body: {e}")),
+          ))
+        }
       };
       return Err(PipelineError::recoverable(
         Stage::Send,
@@ -211,7 +214,13 @@ mod tests {
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let out = send
-      .send(&ctx(), &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
+      .send(
+        &ctx(),
+        &extracted(),
+        &resolved(handle),
+        &BuiltHeaders::default(),
+        &body(),
+      )
       .await
       .expect("send should succeed");
     assert_eq!(out.status, 200);
@@ -225,7 +234,13 @@ mod tests {
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let err = send
-      .send(&ctx(), &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
+      .send(
+        &ctx(),
+        &extracted(),
+        &resolved(handle),
+        &BuiltHeaders::default(),
+        &body(),
+      )
       .await
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
@@ -239,7 +254,13 @@ mod tests {
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let err = send
-      .send(&ctx(), &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
+      .send(
+        &ctx(),
+        &extracted(),
+        &resolved(handle),
+        &BuiltHeaders::default(),
+        &body(),
+      )
       .await
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
@@ -249,13 +270,18 @@ mod tests {
 
   #[tokio::test]
   async fn provider_error_classified_by_kind() {
-    let provider = MockProvider::new("mock").with_chat_error(|| llm_core::provider::Error::Profiles {
-      message: "boom".into(),
-    });
+    let provider =
+      MockProvider::new("mock").with_chat_error(|| llm_core::provider::Error::Profiles { message: "boom".into() });
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let err = send
-      .send(&ctx(), &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
+      .send(
+        &ctx(),
+        &extracted(),
+        &resolved(handle),
+        &BuiltHeaders::default(),
+        &body(),
+      )
       .await
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);

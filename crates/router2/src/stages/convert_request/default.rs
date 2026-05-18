@@ -131,7 +131,11 @@ mod tests {
     }
   }
 
-  fn resolved_with(handle: Arc<llm_accounts::AccountHandle>, upstream_endpoint: Endpoint, upstream_model: &str) -> Resolved {
+  fn resolved_with(
+    handle: Arc<llm_accounts::AccountHandle>,
+    upstream_endpoint: Endpoint,
+    upstream_model: &str,
+  ) -> Resolved {
     Resolved {
       client_id: None,
       model: SmolStr::new("input-model"),
@@ -162,7 +166,11 @@ mod tests {
     let body = serde_json::json!({"model": "input-model", "messages": []});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body, None, raw);
-    let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "upstream-model-7");
+    let res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
+      "upstream-model-7",
+    );
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
     assert_eq!(out.upstream_body["model"], "upstream-model-7");
@@ -206,7 +214,10 @@ mod tests {
       .convert_request(&ctx_at(Endpoint::Responses), &ex, &res)
       .await
       .unwrap();
-    assert_ne!(out.upstream_body, body, "expected cross-endpoint conversion to mutate body");
+    assert_ne!(
+      out.upstream_body, body,
+      "expected cross-endpoint conversion to mutate body"
+    );
     // wire body was re-serialized (not the original raw bytes).
     assert_eq!(out.upstream_wire_body, out.debug_outbound_body);
   }
@@ -221,7 +232,11 @@ mod tests {
     .unwrap();
     let ex = extracted_with(body, Some(ContentEncodingKind::Gzip), compressed);
     // Different upstream model → body mutates → we must re-compress.
-    let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "upstream-model-2");
+    let res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
+      "upstream-model-2",
+    );
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
     assert_eq!(out.content_encoding, Some(ContentEncodingKind::Gzip));
@@ -246,9 +261,7 @@ mod tests {
     struct Boom;
     impl InputTransformer for Boom {
       fn transform_input(&self, _endpoint: Endpoint, _body: Value) -> ProviderResult<Value> {
-        Err(llm_core::provider::error::Error::Profiles {
-          message: "boom".into(),
-        })
+        Err(llm_core::provider::error::Error::Profiles { message: "boom".into() })
       }
     }
     let body = serde_json::json!({"model": "input-model"});
@@ -257,7 +270,10 @@ mod tests {
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Boom));
     let res = resolved_with(handle, Endpoint::ChatCompletions, "input-model");
 
-    let err = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap_err();
+    let err = DefaultConvertRequest
+      .convert_request(&ctx(), &ex, &res)
+      .await
+      .unwrap_err();
     assert_eq!(err.stage, Stage::ConvertRequest);
     assert!(!err.recoverable);
     assert!(err.message.contains("boom"));

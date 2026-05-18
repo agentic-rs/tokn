@@ -8,10 +8,10 @@
 //! [`AccountSelector`] backed by the existing pool (or its successor in a
 //! shared crate).
 
+use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
-use crate::event::Stage;
 use async_trait::async_trait;
 use llm_accounts::AccountHandle;
 use llm_core::provider::Endpoint;

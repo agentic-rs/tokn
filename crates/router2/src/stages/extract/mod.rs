@@ -108,11 +108,9 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 }
 
 fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
-  names.iter().find_map(|name| {
-    header_str(headers, name)
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-  })
+  names
+    .iter()
+    .find_map(|name| header_str(headers, name).map(str::trim).filter(|s| !s.is_empty()))
 }
 
 fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
@@ -229,7 +227,10 @@ mod tests {
   #[tokio::test]
   async fn agent_initiator_when_tools_present() {
     let body = serde_json::json!({"model": "m", "tools": [{"type":"function"}]});
-    let ex = DefaultExtract.extract(&ctx(), raw(HeaderMap::new(), body)).await.unwrap();
+    let ex = DefaultExtract
+      .extract(&ctx(), raw(HeaderMap::new(), body))
+      .await
+      .unwrap();
     assert_eq!(ex.initiator, "agent");
   }
 

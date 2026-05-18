@@ -30,11 +30,11 @@ use crate::profile::Profile;
 use ctx::PipelineCtx;
 use error::PipelineError;
 use outcome::PipelineOutcome;
-pub use stages::{
-  BuildHeadersStage, BuiltHeaders, ConvertRequestStage, ConvertResponseStage, ConvertedRequest,
-  ConvertedResponse, ExtractStage, Extracted, RawInbound, ResolveStage, Resolved, SendStage, SentResponse,
-};
 use smol_str::SmolStr;
+pub use stages::{
+  BuildHeadersStage, BuiltHeaders, ConvertRequestStage, ConvertResponseStage, ConvertedRequest, ConvertedResponse,
+  ExtractStage, Extracted, RawInbound, ResolveStage, Resolved, SendStage, SentResponse,
+};
 use std::sync::Arc;
 
 /// Alias for clarity at call sites — the same type as [`PipelineRunner`].
@@ -52,7 +52,9 @@ pub struct RunnerOptions {
 
 impl RunnerOptions {
   pub fn stop_after(stage: Stage) -> Self {
-    Self { stop_after: Some(stage) }
+    Self {
+      stop_after: Some(stage),
+    }
   }
 }
 
@@ -72,14 +74,15 @@ impl PipelineRunner {
   }
 
   pub fn with_options(profile: Arc<Profile>, events: Arc<EventBus>, options: RunnerOptions) -> Self {
-    Self { profile, events, options }
+    Self {
+      profile,
+      events,
+      options,
+    }
   }
 
   pub async fn run(&self, raw: RawInbound) -> PipelineOutcome {
-    let request_id = raw
-      .request_id
-      .clone()
-      .unwrap_or_else(|| SmolStr::new(uuid_like()));
+    let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
     let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
     ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
 

@@ -7,7 +7,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Lit, Meta, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, Lit, Meta};
 
 /// Derive `llm_endpoint_core::LenientFields` for a struct with named
 /// fields. Each `pub` (or otherwise) field contributes its JSON key
@@ -22,21 +22,15 @@ pub fn derive_lenient_fields(input: TokenStream) -> TokenStream {
     Data::Struct(s) => match &s.fields {
       Fields::Named(named) => &named.named,
       _ => {
-        return syn::Error::new_spanned(
-          name,
-          "LenientFields can only be derived for structs with named fields",
-        )
-        .to_compile_error()
-        .into();
+        return syn::Error::new_spanned(name, "LenientFields can only be derived for structs with named fields")
+          .to_compile_error()
+          .into();
       }
     },
     _ => {
-      return syn::Error::new_spanned(
-        name,
-        "LenientFields can only be derived for structs",
-      )
-      .to_compile_error()
-      .into();
+      return syn::Error::new_spanned(name, "LenientFields can only be derived for structs")
+        .to_compile_error()
+        .into();
     }
   };
 

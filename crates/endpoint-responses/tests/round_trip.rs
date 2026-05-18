@@ -90,7 +90,10 @@ fn lenient_param_type_mismatch_falls_into_extras() {
   let req: ResponsesRequest = serde_json::from_value(body).expect("lenient parse");
   assert!(req.params.temperature.is_none(), "bad temperature should not bind");
   assert_eq!(req.params.top_p, Some(0.9));
-  assert!(req.params.parallel_tool_calls.is_none(), "bad parallel_tool_calls should not bind");
+  assert!(
+    req.params.parallel_tool_calls.is_none(),
+    "bad parallel_tool_calls should not bind"
+  );
   assert!(req.params.background.is_none(), "bad background should not bind");
   assert_eq!(req.params.truncation.as_deref(), Some("auto"));
   assert_eq!(req.extras.get("temperature"), Some(&json!("hot")));

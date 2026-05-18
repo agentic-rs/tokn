@@ -21,10 +21,7 @@ pub fn url(base_url: &str, path: &str) -> String {
 }
 
 pub fn patch_openai_headers(headers: &mut HeaderMap, token: &str, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-  headers.insert(
-    &AUTHORIZATION,
-    HeaderValue::from_string(format!("Bearer {token}")),
-  );
+  headers.insert(&AUTHORIZATION, HeaderValue::from_string(format!("Bearer {token}")));
   headers.insert(
     &ACCEPT,
     HeaderValue::from_static(if ctx.stream {
@@ -35,10 +32,7 @@ pub fn patch_openai_headers(headers: &mut HeaderMap, token: &str, ctx: &HeaderPa
   );
   headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
   if let Some(encoding) = ctx.content_encoding {
-    headers.insert(
-      &CONTENT_ENCODING,
-      HeaderValue::from_string(encoding.to_string()),
-    );
+    headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
   }
   Ok(())
 }

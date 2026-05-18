@@ -106,12 +106,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
       // downstream consumers can match upstream's serialization quirks.
       (upstream_json, raw)
     } else {
-      let translated = llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|e| {
-        PipelineError::permanent(
-          Stage::ConvertResponse,
-          SmolStr::new(format!("response conversion failed: {e}")),
-        )
-      })?;
+      let translated =
+        llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|e| {
+          PipelineError::permanent(
+            Stage::ConvertResponse,
+            SmolStr::new(format!("response conversion failed: {e}")),
+          )
+        })?;
       let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|e| {
         PipelineError::permanent(
           Stage::ConvertResponse,
@@ -171,10 +172,16 @@ mod tests {
       false,
       response(200, r#"{"id":"x","choices":[]}"#, "application/json"),
     );
-    let out = stage.convert_response(&ctx(Endpoint::ChatCompletions), s).await.unwrap();
+    let out = stage
+      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .await
+      .unwrap();
     match out {
       ConvertedResponse::Buffered {
-        status, body_json, body_bytes, ..
+        status,
+        body_json,
+        body_bytes,
+        ..
       } => {
         assert_eq!(status, 200);
         assert_eq!(body_json["id"], "x");
@@ -189,7 +196,10 @@ mod tests {
   async fn buffered_empty_body_yields_null() {
     let stage = DefaultConvertResponse::new();
     let s = sent(Endpoint::ChatCompletions, false, response(502, "", "text/plain"));
-    let out = stage.convert_response(&ctx(Endpoint::ChatCompletions), s).await.unwrap();
+    let out = stage
+      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .await
+      .unwrap();
     match out {
       ConvertedResponse::Buffered {
         status,
@@ -208,7 +218,11 @@ mod tests {
   #[tokio::test]
   async fn buffered_invalid_json_is_permanent() {
     let stage = DefaultConvertResponse::new();
-    let s = sent(Endpoint::ChatCompletions, false, response(200, "not json", "text/plain"));
+    let s = sent(
+      Endpoint::ChatCompletions,
+      false,
+      response(200, "not json", "text/plain"),
+    );
     let err = stage
       .convert_response(&ctx(Endpoint::ChatCompletions), s)
       .await
@@ -227,7 +241,10 @@ mod tests {
       true,
       response(200, body, "text/event-stream"),
     );
-    let out = stage.convert_response(&ctx(Endpoint::ChatCompletions), s).await.unwrap();
+    let out = stage
+      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .await
+      .unwrap();
     match out {
       ConvertedResponse::Stream { status, mut body, .. } => {
         assert_eq!(status, 200);

@@ -636,19 +636,29 @@ mod tests {
     });
 
     let messages = render_chat_messages(&body);
-    assert_eq!(messages.len(), 2, "expected assistant plus tool messages, got {messages:?}");
+    assert_eq!(
+      messages.len(),
+      2,
+      "expected assistant plus tool messages, got {messages:?}"
+    );
 
     let assistant = &messages[0];
     assert_eq!(assistant.get("role").and_then(Value::as_str), Some("assistant"));
     assert_eq!(assistant.get("content").and_then(Value::as_str), Some("answer"));
-    assert_eq!(assistant.get("reasoning_content").and_then(Value::as_str), Some("think"));
+    assert_eq!(
+      assistant.get("reasoning_content").and_then(Value::as_str),
+      Some("think")
+    );
     let tool_calls = assistant
       .get("tool_calls")
       .and_then(Value::as_array)
       .expect("tool_calls present");
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0].get("id").and_then(Value::as_str), Some("call_1"));
-    assert_eq!(tool_calls[0].pointer("/function/name").and_then(Value::as_str), Some("lookup"));
+    assert_eq!(
+      tool_calls[0].pointer("/function/name").and_then(Value::as_str),
+      Some("lookup")
+    );
 
     let tool = &messages[1];
     assert_eq!(tool.get("role").and_then(Value::as_str), Some("tool"));

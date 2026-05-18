@@ -124,12 +124,14 @@ pub fn encode_body_bytes(body: &[u8], encoding: Option<ContentEncodingKind>) -> 
       })?;
       Ok(Bytes::from(out))
     }
-    Some(ContentEncodingKind::Zstd) => zstd::stream::encode_all(body, 0)
-      .map(Bytes::from)
-      .map_err(|source| CodecError::Zstd {
-        direction: "encode",
-        source,
-      }),
+    Some(ContentEncodingKind::Zstd) => {
+      zstd::stream::encode_all(body, 0)
+        .map(Bytes::from)
+        .map_err(|source| CodecError::Zstd {
+          direction: "encode",
+          source,
+        })
+    }
   }
 }
 
@@ -259,7 +261,10 @@ mod tests {
   #[test]
   fn negotiate_prefers_highest_q_then_zstd() {
     let mut headers = HeaderMap::new();
-    headers.insert(ACCEPT_ENCODING.clone(), HeaderValue::from_static("gzip;q=0.8, zstd;q=0.8"));
+    headers.insert(
+      ACCEPT_ENCODING.clone(),
+      HeaderValue::from_static("gzip;q=0.8, zstd;q=0.8"),
+    );
     assert_eq!(negotiate_response_encoding(&headers), Some(ContentEncodingKind::Zstd));
   }
 
@@ -318,7 +323,10 @@ mod tests {
       response_headers.get(CONTENT_ENCODING.clone()).map(|v| v.as_str()),
       Some("gzip")
     );
-    assert_eq!(response_headers.get(VARY_HEADER).map(|v| v.as_str()), Some("accept-encoding"));
+    assert_eq!(
+      response_headers.get(VARY_HEADER).map(|v| v.as_str()),
+      Some("accept-encoding")
+    );
   }
 
   #[test]

@@ -7,9 +7,7 @@
 use crate::keys;
 use crate::map::HeaderMap;
 use crate::schema::HeaderSchema;
-use crate::schemas::{
-  ClaudeCodeHeaders, ClineHeaders, CodexCliHeaders, CopilotCliHeaders, OpencodeHeaders,
-};
+use crate::schemas::{ClaudeCodeHeaders, ClineHeaders, CodexCliHeaders, CopilotCliHeaders, OpencodeHeaders};
 use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
@@ -186,7 +184,10 @@ mod tests {
     ];
     for (ua, expected) in cases {
       let mut m = HeaderMap::new();
-      m.insert(keys::USER_AGENT.clone(), crate::HeaderValue::from_string(ua.to_string()));
+      m.insert(
+        keys::USER_AGENT.clone(),
+        crate::HeaderValue::from_string(ua.to_string()),
+      );
       assert_eq!(detect_persona(&m), expected, "UA {ua}");
     }
   }
@@ -225,10 +226,7 @@ mod tests {
 
   #[test]
   fn build_outbound_for_custom_returns_empty_map() {
-    let out = Persona::Custom(SmolStr::new("anything")).build_outbound(
-      &TemplateVars::default(),
-      &HeaderMap::new(),
-    );
+    let out = Persona::Custom(SmolStr::new("anything")).build_outbound(&TemplateVars::default(), &HeaderMap::new());
     assert_eq!(out.len(), 0);
   }
 }
