@@ -38,9 +38,11 @@ pub fn build_event_bus(
     let db_handler = DbEventHandler::new(DbPaths {
       usage_db: paths.usage_db,
       sessions_db: paths.sessions_db,
-      requests_dir: paths.requests_dir,
+      requests_dir: paths.requests_dir.clone(),
     })?;
     handlers.push(Box::new(db_handler));
+    let router2_handler = llm_persistence::Router2EventHandler::new(paths.requests_dir)?;
+    handlers.push(Box::new(router2_handler));
   }
 
   match crate::logging::resolve_logs_dir(&cfg.logging) {

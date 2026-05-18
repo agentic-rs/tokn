@@ -5,7 +5,7 @@ pub mod router2;
 pub mod sessions;
 pub mod usage;
 
-pub use router2::Router2EventHandler;
+pub use router2::{read_request_row, Router2EventHandler};
 
 use bytes::Bytes;
 use llm_headers::HeaderMap;

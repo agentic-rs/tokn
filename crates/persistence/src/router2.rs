@@ -379,3 +379,75 @@ impl EventHandler for Router2EventHandler {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Readback helper
+// ---------------------------------------------------------------------------
+
+/// Read a single persisted request row by `request_id` from the per-day
+/// `requests/<YYYY-MM-DD>.db` files. Searches today first (UTC), then
+/// yesterday to cover day-boundary races where the row was written just
+/// before midnight and the read happened just after.
+///
+/// Returns `Ok(None)` if no row matches. BLOB columns are decoded to a
+/// UTF-8 string when valid; otherwise they are emitted as a JSON array of
+/// bytes (`[u8, u8, ...]`). Headers/body BLOBs written by the router2
+/// writer are always JSON, so the string branch is the common path.
+pub fn read_request_row(
+  requests_dir: &std::path::Path,
+  request_id: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+  let today = day_key(now_unix());
+  let yesterday = day_key(now_unix() - 86_400);
+  for day in [today, yesterday] {
+    let path = requests_dir.join(format!("{day}.db"));
+    if !path.exists() {
+      continue;
+    }
+    let conn = open_day_db(&path)?;
+    if let Some(row) = select_row(&conn, request_id)? {
+      return Ok(Some(row));
+    }
+  }
+  Ok(None)
+}
+
+fn select_row(
+  conn: &Connection,
+  request_id: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
+  let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ? LIMIT 1")?;
+  let col_count = stmt.column_count();
+  let col_names: Vec<String> = (0..col_count).map(|i| stmt.column_name(i).unwrap_or("").to_string()).collect();
+  let mut rows = stmt.query(params![request_id])?;
+  let Some(row) = rows.next()? else {
+    return Ok(None);
+  };
+  let mut out = serde_json::Map::with_capacity(col_count);
+  for (i, name) in col_names.iter().enumerate() {
+    let val = row.get_ref(i)?;
+    let json = match val {
+      rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+      rusqlite::types::ValueRef::Integer(n) => serde_json::Value::Number(n.into()),
+      rusqlite::types::ValueRef::Real(f) => serde_json::Number::from_f64(f)
+        .map(serde_json::Value::Number)
+        .unwrap_or(serde_json::Value::Null),
+      rusqlite::types::ValueRef::Text(t) => match std::str::from_utf8(t) {
+        Ok(s) => serde_json::Value::String(s.to_string()),
+        Err(_) => serde_json::Value::Array(t.iter().map(|b| serde_json::Value::from(*b)).collect()),
+      },
+      rusqlite::types::ValueRef::Blob(b) => match std::str::from_utf8(b) {
+        // Try to re-parse JSON-shaped BLOBs into their native JSON form so
+        // headers / body columns display structurally instead of as a quoted
+        // string. Falls back to a string if parsing fails.
+        Ok(s) => match serde_json::from_str::<serde_json::Value>(s) {
+          Ok(v) => v,
+          Err(_) => serde_json::Value::String(s.to_string()),
+        },
+        Err(_) => serde_json::Value::Array(b.iter().map(|b| serde_json::Value::from(*b)).collect()),
+      },
+    };
+    out.insert(name.clone(), json);
+  }
+  Ok(Some(out))
+}

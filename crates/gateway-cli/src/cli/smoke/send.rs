@@ -143,11 +143,20 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   filter_accounts(&mut accounts, args.provider.as_deref(), args.account.as_deref())?;
 
   // The legacy AppState still owns the account pool + route resolver + the
-  // legacy `EventBus`. We use it as a config bag only; router2 gets its own
-  // bus so its events stay out of the legacy archive pipeline.
+  // legacy `EventBus`. We reuse that same bus for router2 events too — the
+  // `build_event_bus` handler list already contains `Router2EventHandler`
+  // (when `cfg.db.enabled`), so emitting `Event::Router2(_)` on it persists
+  // the smoke run into `requests/<YYYY-MM-DD>.db`. All legacy handlers
+  // (`DbEventHandler`, progress, archive) match only on legacy `Event::*`
+  // variants and ignore router2 events.
   let (legacy_events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, &accounts, legacy_events.clone())?;
+  let requests_dir = if cfg.db.enabled {
+    Some(cfg.db.resolve_paths()?.requests_dir)
+  } else {
+    None
+  };
 
   let custom_body: Option<Value> = match args.body_file.as_deref() {
     Some(path) => Some(load_body_file(path)?),
@@ -209,7 +218,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   // ---- Build the router2 profile ----
-  let bus = Arc::new(EventBus::new(256));
+  // Reuse the legacy bus so `Router2EventHandler` persists smoke runs.
+  let bus = legacy_events.clone();
   subscribe_event_printer(&bus);
   // Capture per-stage outputs so we can render dry-run / failure reports
   // after `run` returns. The runner no longer carries partial state on
@@ -261,16 +271,26 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   let snapshot = captured.snapshot();
+  let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
+    (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
+      Ok(row) => row,
+      Err(e) => {
+        eprintln!("warning: failed to read persisted request row: {e}");
+        None
+      }
+    },
+    _ => None,
+  };
 
   match result {
     Ok(converted) => {
-      print_live_outcome(converted, &snapshot, args.format, !args.no_redact).await?;
+      print_live_outcome(converted, &snapshot, persisted.as_ref(), args.format, !args.no_redact).await?;
     }
     Err(err) if err.stop && args.dry_run => {
-      print_dry_run_outcome(&snapshot, args.format, !args.no_redact)?;
+      print_dry_run_outcome(&snapshot, persisted.as_ref(), args.format, !args.no_redact)?;
     }
     Err(err) => {
-      print_failure_outcome(&err, &snapshot, args.format, !args.no_redact)?;
+      print_failure_outcome(&err, &snapshot, persisted.as_ref(), args.format, !args.no_redact)?;
       anyhow::bail!("pipeline failed: {}: {}", err.stage, err.message);
     }
   }
@@ -292,6 +312,7 @@ struct CapturedSnapshot {
   built_headers: Option<BuiltHeadersSummary>,
   converted_request: Option<ConvertedRequestSummary>,
   attempts: Option<u32>,
+  request_id: Option<String>,
 }
 
 impl Captured {
@@ -305,6 +326,9 @@ impl Captured {
           Ok(arc) => {
             if let CoreEvent::Router2(event) = &*arc {
               let mut snap = sink.inner.lock().unwrap();
+              if snap.request_id.is_none() {
+                snap.request_id = Some(event.request_id.to_string());
+              }
               match &event.payload {
                 EventPayload::Known(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
                 EventPayload::Known(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
@@ -396,7 +420,12 @@ fn print_event(event: &Event) {
   }
 }
 
-fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: bool) -> Result<()> {
+fn print_dry_run_outcome(
+  snap: &CapturedSnapshot,
+  persisted: Option<&serde_json::Map<String, Value>>,
+  format: OutputFormat,
+  redact: bool,
+) -> Result<()> {
   let resolved = snap.resolved.as_ref();
   let headers = snap.built_headers.as_ref();
   let converted = snap.converted_request.as_ref();
@@ -410,6 +439,7 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
       let report = serde_json::json!({
         "dry_run": true,
         "attempts": snap.attempts.unwrap_or(0),
+        "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
         "account": resolved.map(|r| r.account_id.as_str()),
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
@@ -418,6 +448,7 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
         "headers": headers_json,
         "body": body_json,
         "content_encoding": converted.and_then(|c| c.content_encoding.as_deref()),
+        "persisted": persisted.map(|m| Value::Object(m.clone())).unwrap_or(Value::Null),
       });
       println!("{}", serde_json::to_string_pretty(&report)?);
     }
@@ -426,6 +457,9 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
       println!("--- outcome ---");
       if let Some(n) = snap.attempts {
         println!("attempts: {n}");
+      }
+      if let Some(id) = snap.request_id.as_ref() {
+        println!("request_id: {id}");
       }
       if let Some(r) = resolved {
         println!("account:  {}", r.account_id);
@@ -447,6 +481,7 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);
       }
+      print_persisted_text(persisted);
     }
   }
   Ok(())
@@ -460,6 +495,7 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
 async fn print_live_outcome(
   converted: ConvertedResponse,
   snap: &CapturedSnapshot,
+  persisted: Option<&serde_json::Map<String, Value>>,
   format: OutputFormat,
   redact: bool,
 ) -> Result<()> {
@@ -478,6 +514,7 @@ async fn print_live_outcome(
           "dry_run": false,
           "stream": false,
           "attempts": attempts,
+          "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
           "account": resolved.map(|r| r.account_id.as_str()),
           "provider": resolved.map(|r| r.provider_id.as_str()),
           "model": resolved.map(|r| r.model.as_str()),
@@ -486,6 +523,7 @@ async fn print_live_outcome(
           "status": status,
           "headers": headers_json_value(&headers, redact),
           "body": &*body_json,
+          "persisted": persisted.map(|m| Value::Object(m.clone())).unwrap_or(Value::Null),
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
       }
@@ -493,6 +531,9 @@ async fn print_live_outcome(
         println!();
         println!("--- response ---");
         println!("attempts: {}", attempts);
+        if let Some(id) = snap.request_id.as_ref() {
+          println!("request_id: {id}");
+        }
         if let Some(r) = resolved {
           println!("account:  {}", r.account_id);
           println!("provider: {}", r.provider_id);
@@ -507,6 +548,7 @@ async fn print_live_outcome(
         }
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&*body_json)?);
+        print_persisted_text(persisted);
       }
     },
     ConvertedResponse::Stream {
@@ -553,6 +595,7 @@ async fn print_live_outcome(
       if matches!(format, OutputFormat::Text) {
         println!();
         println!("--- end of stream ({total_bytes} bytes) ---");
+        print_persisted_text(persisted);
       }
     }
   }
@@ -565,6 +608,7 @@ async fn print_live_outcome(
 fn print_failure_outcome(
   err: &PipelineError,
   snap: &CapturedSnapshot,
+  persisted: Option<&serde_json::Map<String, Value>>,
   format: OutputFormat,
   redact: bool,
 ) -> Result<()> {
@@ -581,6 +625,7 @@ fn print_failure_outcome(
       let report = serde_json::json!({
         "success": false,
         "attempts": snap.attempts.unwrap_or(0),
+        "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
         "error": {
           "stage": err.stage.as_str(),
           "message": err.message.as_str(),
@@ -595,6 +640,7 @@ fn print_failure_outcome(
         "headers": headers_json,
         "body": body_json,
         "content_encoding": converted_req.and_then(|c| c.content_encoding.as_deref()),
+        "persisted": persisted.map(|m| Value::Object(m.clone())).unwrap_or(Value::Null),
       });
       println!("{}", serde_json::to_string_pretty(&report)?);
     }
@@ -603,6 +649,9 @@ fn print_failure_outcome(
       println!("--- failure ---");
       if let Some(n) = snap.attempts {
         println!("attempts: {n}");
+      }
+      if let Some(id) = snap.request_id.as_ref() {
+        println!("request_id: {id}");
       }
       println!("stage:    {}", err.stage);
       println!("recoverable: {}", err.recoverable);
@@ -627,9 +676,39 @@ fn print_failure_outcome(
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);
       }
+      print_persisted_text(persisted);
     }
   }
   Ok(())
+}
+
+/// Print the persisted row in a compact, line-per-column form. BLOB columns
+/// containing structured JSON (headers, body) are pretty-printed beneath
+/// their name; scalar columns appear inline. Null columns are skipped to
+/// keep the output focused on what actually got written.
+fn print_persisted_text(persisted: Option<&serde_json::Map<String, Value>>) {
+  let Some(row) = persisted else {
+    return;
+  };
+  println!();
+  println!("--- persisted row ---");
+  for (k, v) in row.iter() {
+    if v.is_null() {
+      continue;
+    }
+    match v {
+      Value::Object(_) | Value::Array(_) => {
+        println!("{k}:");
+        if let Ok(pretty) = serde_json::to_string_pretty(v) {
+          for line in pretty.lines() {
+            println!("  {line}");
+          }
+        }
+      }
+      Value::String(s) => println!("{k}: {s}"),
+      _ => println!("{k}: {v}"),
+    }
+  }
 }
 
 fn headers_json_value(headers: &llm_headers::HeaderMap, redact: bool) -> Value {
