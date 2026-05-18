@@ -219,6 +219,7 @@ mod tests {
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
       body_json: json!({}),
+      content_encoding: None,
     }
   }
 
@@ -230,7 +231,7 @@ mod tests {
       upstream_endpoint: Endpoint::ChatCompletions,
       account_id: "acct-1".into(),
       provider_id: provider_id.into(),
-      account_handle: Arc::new(()) as Arc<dyn std::any::Any + Send + Sync>,
+      account_handle: crate::test_support::mock_handle("acct-1", provider_id),
     }
   }
 

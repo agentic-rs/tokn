@@ -5,20 +5,83 @@
 //! stages (real impls land in PR2 follow-ups). Runs against a synthetic
 //! [`RawInbound`] and asserts the event sequence.
 
+use async_trait::async_trait;
 use bytes::Bytes;
-use llm_core::provider::Endpoint;
+use llm_accounts::AccountHandle;
+use llm_core::account::AccountConfig;
+use llm_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult};
 use llm_headers::{HeaderMap, HeaderName, HeaderValue};
 use llm_router2::event::{EventPayload, Stage, StageEvent};
 use llm_router2::stages::{
   AccountSelector, DefaultExtract, NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
+use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
 
+/// Minimal `Provider` used only to satisfy the new typed
+/// `AccountHandle` requirement on `SelectorOutcome::Selected`.
+struct StubProvider {
+  info: ProviderInfo,
+}
+
+#[async_trait]
+impl Provider for StubProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+  async fn chat(&self, _ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    unreachable!("smoke test never reaches Send")
+  }
+}
+
+fn stub_handle(provider_id: &str, account_id: &str) -> Arc<AccountHandle> {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "stub",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(StubProvider { info })))
+}
+
 struct OkSelector;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl AccountSelector for OkSelector {
   async fn select(
     &self,
@@ -29,14 +92,14 @@ impl AccountSelector for OkSelector {
       provider_id: SmolStr::new("zai-coding-plan"),
       upstream_endpoint: Endpoint::ChatCompletions,
       upstream_model: SmolStr::new("glm-4"),
-      account_handle: Arc::new(()),
+      account_handle: stub_handle("zai-coding-plan", "acct-1"),
     })
   }
 }
 
 struct EmptySelector;
 
-#[async_trait::async_trait]
+#[async_trait]
 impl AccountSelector for EmptySelector {
   async fn select(
     &self,

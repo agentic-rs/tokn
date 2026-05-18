@@ -1,23 +1,22 @@
-//! No-op ConvertRequest stage. Echoes the inbound body unchanged.
+//! ConvertRequest stage implementations.
+//!
+//! Two stage impls live here:
+//!
+//! * [`NoopConvertRequest`] — echoes the inbound body verbatim. Useful
+//!   for tests + transitional Profiles that don't need cross-endpoint
+//!   shape changes.
+//! * [`DefaultConvertRequest`] — the production stage. Rewrites the
+//!   model id, cross-codecs the body between endpoints (chat /
+//!   responses / messages) when the inbound endpoint differs from the
+//!   account's upstream endpoint, runs the provider's
+//!   [`InputTransformer`] (when any), and re-serializes / re-compresses
+//!   the result so [`Send`] can drop it straight onto the wire.
+//!
+//! [`InputTransformer`]: llm_core::pipeline::InputTransformer
+//! [`Send`]: crate::pipeline::stages::SendStage
 
-use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{ConvertRequestStage, ConvertedRequest, Extracted, Resolved};
-use async_trait::async_trait;
+mod default;
+mod noop;
 
-pub struct NoopConvertRequest;
-
-#[async_trait]
-impl ConvertRequestStage for NoopConvertRequest {
-  async fn convert_request(
-    &self,
-    _ctx: &PipelineCtx,
-    extracted: &Extracted,
-    _resolved: &Resolved,
-  ) -> Result<ConvertedRequest, PipelineError> {
-    Ok(ConvertedRequest {
-      upstream_body: extracted.body_json.clone(),
-      upstream_wire_body: extracted.decoded_body.clone(),
-    })
-  }
-}
+pub use default::DefaultConvertRequest;
+pub use noop::NoopConvertRequest;

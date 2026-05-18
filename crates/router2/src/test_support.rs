@@ -1,0 +1,102 @@
+//! Test-only helpers shared across stage unit tests.
+//!
+//! Provides a minimal [`MockProvider`] (and [`mock_handle`] constructor)
+//! so resolve / convert-request / build-headers tests can build a
+//! synthetic [`AccountHandle`] without depending on a real provider
+//! crate. Keeping this in `src/` (gated on `cfg(test)`) makes the
+//! helpers reusable across modules but still excludes them from the
+//! published crate surface.
+
+use async_trait::async_trait;
+use llm_accounts::AccountHandle;
+use llm_core::account::AccountConfig;
+use llm_core::pipeline::InputTransformer;
+use llm_core::provider::{
+  AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx,
+};
+use llm_core::provider::error;
+use serde_json::Value;
+use std::sync::Arc;
+
+pub struct MockProvider {
+  info: ProviderInfo,
+  transformer: Option<Box<dyn InputTransformer>>,
+}
+
+impl MockProvider {
+  pub fn new(id: &str) -> Self {
+    Self::with_default_endpoints(id, &[Endpoint::ChatCompletions])
+  }
+
+  pub fn with_default_endpoints(id: &str, default_endpoints: &'static [Endpoint]) -> Self {
+    Self {
+      info: ProviderInfo {
+        id: id.into(),
+        aliases: &[],
+        display_name: "mock",
+        upstream_url: String::new(),
+        auth_kind: AuthKind::StaticApiKey,
+        default_models: vec![],
+        default_endpoints,
+        model_cache: Arc::new(ModelCache::default()),
+      },
+      transformer: None,
+    }
+  }
+
+  pub fn with_transformer(mut self, t: impl InputTransformer + 'static) -> Self {
+    self.transformer = Some(Box::new(t));
+    self
+  }
+}
+
+#[async_trait]
+impl Provider for MockProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+  fn input_transformer(&self) -> Option<&dyn InputTransformer> {
+    self.transformer.as_deref()
+  }
+  async fn list_models(&self, _http: &reqwest::Client) -> error::Result<Value> {
+    Ok(Value::Null)
+  }
+  async fn chat(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
+    unimplemented!("MockProvider::chat: tests should not invoke Send stage")
+  }
+}
+
+/// Build an [`AccountHandle`] backed by a [`MockProvider`].
+pub fn mock_handle(account_id: &str, provider_id: &str) -> Arc<AccountHandle> {
+  mock_handle_with_provider(account_id, MockProvider::new(provider_id))
+}
+
+pub fn mock_handle_with_provider(account_id: &str, provider: MockProvider) -> Arc<AccountHandle> {
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider.id().to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider)))
+}

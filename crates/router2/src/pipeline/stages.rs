@@ -15,8 +15,10 @@
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
+use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
+use llm_accounts::AccountHandle;
 use llm_core::provider::Endpoint;
 use llm_core::ClientId;
 use llm_headers::{HeaderMap, TemplateVars};
@@ -60,13 +62,14 @@ pub struct Extracted {
   pub raw_body: Bytes,
   pub decoded_body: Bytes,
   pub body_json: Value,
+  /// Content-encoding the client used on the request body, parsed from
+  /// the inbound `Content-Encoding` header. `None` when the body arrived
+  /// uncompressed. ConvertRequest uses this to re-encode the outbound
+  /// payload with the same codec when possible.
+  pub content_encoding: Option<ContentEncodingKind>,
 }
 
 /// Output of [`ResolveStage`]: which account+upstream answers this request.
-///
-/// PR1 keeps the account handle abstract (the `account_handle` field is an
-/// `Arc<dyn Any>` for now). PR2 will replace it with a typed handle once we
-/// extract the account-pool types into a shared crate.
 #[derive(Clone)]
 pub struct Resolved {
   pub client_id: Option<ClientId>,
@@ -75,7 +78,10 @@ pub struct Resolved {
   pub upstream_endpoint: Endpoint,
   pub account_id: SmolStr,
   pub provider_id: SmolStr,
-  pub account_handle: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+  /// Typed handle to the selected account. Holding the [`AccountHandle`]
+  /// directly (instead of an `Arc<dyn Any>`) lets downstream stages call
+  /// `provider.input_transformer()` etc. without a downcast.
+  pub account_handle: std::sync::Arc<AccountHandle>,
 }
 
 impl std::fmt::Debug for Resolved {
@@ -102,11 +108,19 @@ pub struct BuiltHeaders {
   pub vars: TemplateVars,
 }
 
-/// Placeholder output of [`ConvertRequestStage`] (PR2).
+/// Output of [`ConvertRequestStage`]: the upstream-shaped JSON body, the
+/// (re-encoded) bytes we'll actually send on the wire, the
+/// post-encoding-but-pre-compression bytes (handy for logging), and the
+/// `Content-Encoding` value to put on the outbound request (when any).
 #[derive(Debug, Clone)]
 pub struct ConvertedRequest {
   pub upstream_body: Value,
   pub upstream_wire_body: Bytes,
+  /// Uncompressed serialized JSON, mirroring the legacy
+  /// `prepare_request` behaviour where structured logs / tests want to
+  /// inspect the outbound payload without inflating it.
+  pub debug_outbound_body: Bytes,
+  pub content_encoding: Option<ContentEncodingKind>,
 }
 
 /// Placeholder output of [`SendStage`] (PR2).

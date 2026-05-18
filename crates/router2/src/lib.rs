@@ -22,6 +22,9 @@ pub mod profile;
 pub mod stages;
 pub mod utils;
 
+#[cfg(test)]
+pub(crate) mod test_support;
+
 pub use event::{CustomEvent, Event, EventBus, EventPayload, StageEvent, Stage};
 pub use pipeline::{
   ctx::PipelineCtx,

@@ -18,7 +18,11 @@ struct AccountInner {
 }
 
 impl AccountHandle {
-  pub(super) fn new(config: Arc<AccountConfig>, provider: Arc<dyn Provider>) -> Self {
+  /// Construct a fresh handle around the given config + provider. Public
+  /// so router2 stages and tests can synthesize handles without going
+  /// through the full pool boot sequence; production code still goes
+  /// through [`AccountPool`](crate::pool::AccountPool).
+  pub fn new(config: Arc<AccountConfig>, provider: Arc<dyn Provider>) -> Self {
     Self {
       config: ArcSwap::from(config),
       provider,

@@ -13,20 +13,22 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use crate::event::Stage;
 use async_trait::async_trait;
+use llm_accounts::AccountHandle;
 use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
 
 /// Outcome of consulting an account pool for a given extracted request.
 pub enum SelectorOutcome {
-  /// An account was selected. The handle is stored opaquely on [`Resolved`]
-  /// so the back-half stages (PR2) can re-acquire the typed value.
+  /// An account was selected. The handle is typed (not `Arc<dyn Any>`)
+  /// so back-half stages can reach the provider via
+  /// `handle.provider.input_transformer()` without a downcast.
   Selected {
     account_id: SmolStr,
     provider_id: SmolStr,
     upstream_endpoint: Endpoint,
     upstream_model: SmolStr,
-    account_handle: Arc<dyn std::any::Any + Send + Sync>,
+    account_handle: Arc<AccountHandle>,
   },
   /// A session-affinity binding existed but its account is no longer
   /// available; the caller's session has effectively expired.
@@ -89,6 +91,7 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use crate::pipeline::stages::Extracted;
+  use crate::test_support::mock_handle;
   use bytes::Bytes;
   use llm_headers::HeaderMap;
 
@@ -108,7 +111,7 @@ mod tests {
           provider_id: SmolStr::new("zai-coding-plan"),
           upstream_endpoint: Endpoint::ChatCompletions,
           upstream_model: SmolStr::new("glm-4"),
-          account_handle: Arc::new(()),
+          account_handle: mock_handle("acct-1", "zai-coding-plan"),
         },
         SelectorOutcomeKind::None => SelectorOutcome::NoAccount,
       })
@@ -130,6 +133,7 @@ mod tests {
       raw_body: Bytes::new(),
       decoded_body: Bytes::new(),
       body_json: serde_json::Value::Null,
+      content_encoding: None,
     }
   }
 

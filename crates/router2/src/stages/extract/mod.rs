@@ -15,6 +15,7 @@
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ExtractStage, Extracted, RawInbound};
+use crate::utils::codec::request_content_encoding;
 use async_trait::async_trait;
 use llm_core::ClientId;
 use llm_headers::HeaderMap;
@@ -77,6 +78,13 @@ impl ExtractStage for DefaultExtract {
       .filter(|s| !s.is_empty())
       .map(ClientId::from);
 
+    // Parsing failures here are recoverable for the codec layer
+    // (which would have failed loudly at the transport boundary
+    // before we got here) but not for ConvertRequest. We treat a
+    // parse error as `None` so downstream stages just emit an
+    // uncompressed body; the legacy router behaviour was identical.
+    let content_encoding = request_content_encoding(&headers).ok().flatten();
+
     Ok(Extracted {
       endpoint,
       client_id,
@@ -91,6 +99,7 @@ impl ExtractStage for DefaultExtract {
       raw_body,
       decoded_body,
       body_json,
+      content_encoding,
     })
   }
 }
