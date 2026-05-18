@@ -167,7 +167,7 @@ async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::Mutex
       let guard = log.lock().unwrap();
       let done = guard
         .iter()
-        .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::Completed { .. })));
+        .any(|e| matches!(&e.payload, EventPayload::Stage(StageEvent::Completed { .. })));
       if done {
         return guard;
       }
@@ -181,7 +181,7 @@ fn known_kinds(events: &[Event]) -> Vec<&'static str> {
   events
     .iter()
     .map(|e| match &e.payload {
-      EventPayload::Known(k) => match k {
+      EventPayload::Stage(k) => match k {
         StageEvent::Started { .. } => "started",
         StageEvent::Extract(_) => "extract",
         StageEvent::Resolve(_) => "resolve",
@@ -192,6 +192,7 @@ fn known_kinds(events: &[Event]) -> Vec<&'static str> {
         StageEvent::Error { .. } => "error",
         StageEvent::Completed { .. } => "completed",
       },
+      EventPayload::Record(_) => "record",
       EventPayload::Custom(c) => c.kind,
     })
     .collect()
@@ -237,7 +238,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
   let (err_stage, stop_flag) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
+      EventPayload::Stage(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
       _ => None,
     })
     .expect("Error event must be present");
@@ -246,7 +247,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
 
   // Spot-check the Resolve event carries the upstream model and provider.
   let resolve = events.iter().find_map(|e| match &e.payload {
-    EventPayload::Known(StageEvent::Resolve(r)) => Some((
+    EventPayload::Stage(StageEvent::Resolve(r)) => Some((
       r.upstream_model.clone(),
       r.provider_id.clone(),
       r.account_id.clone(),
@@ -289,7 +290,7 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
   let (stage, recoverable, stop) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error {
+      EventPayload::Stage(StageEvent::Error {
         stage,
         recoverable,
         stop,
@@ -304,7 +305,7 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
 
   // The terminal Completed event must report success=false.
   let success = events.iter().find_map(|e| match &e.payload {
-    EventPayload::Known(StageEvent::Completed { success, .. }) => Some(*success),
+    EventPayload::Stage(StageEvent::Completed { success, .. }) => Some(*success),
     _ => None,
   });
   assert_eq!(success, Some(false));
@@ -442,7 +443,11 @@ async fn full_pipeline_buffered_happy_path() {
     .expect("happy-path pipeline must succeed");
 
   // Full happy-path event sequence: every stage fires exactly once,
-  // followed by the terminal Completed marker.
+  // followed by the terminal Completed marker. The `record` entries are
+  // wire-truth captures — the mock provider bypasses
+  // `llm_core::util::http::send`, so `Record::UpstreamReq` is skipped
+  // and only `Record::UpstreamResp` (from Send) and
+  // `Record::UpstreamBody` (from ConvertResponse) appear.
   let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
@@ -453,7 +458,9 @@ async fn full_pipeline_buffered_happy_path() {
       "resolve",
       "build_headers",
       "convert_request",
+      "record",
       "send",
+      "record",
       "convert_response",
       "completed",
     ]
@@ -463,7 +470,7 @@ async fn full_pipeline_buffered_happy_path() {
   let (success, attempts) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Completed { success, attempts }) => Some((*success, *attempts)),
+      EventPayload::Stage(StageEvent::Completed { success, attempts }) => Some((*success, *attempts)),
       _ => None,
     })
     .expect("Completed event must be present");
@@ -587,7 +594,11 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
 
   // Subscribers fold prior per-stage events to recover the partial state
   // — the runner does not carry it on the return value any more. Every
-  // earlier stage must have fired exactly once before the Error.
+  // earlier stage must have fired exactly once before the Error. The
+  // single `record` is `Record::UpstreamResp` (status+headers from the
+  // 401) — the mock bypasses `util::http::send` so `Record::UpstreamReq`
+  // is skipped, and the error returns before ConvertResponse runs so
+  // there is no `Record::UpstreamBody` either.
   let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
@@ -598,6 +609,7 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
       "resolve",
       "build_headers",
       "convert_request",
+      "record",
       "error",
       "completed",
     ]
@@ -606,13 +618,13 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   // Spot-check that each pre-Send stage's event carries its full output.
   let resolved_seen = events
     .iter()
-    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::Resolve(_))));
+    .any(|e| matches!(&e.payload, EventPayload::Stage(StageEvent::Resolve(_))));
   let headers_seen = events
     .iter()
-    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::BuildHeaders(_))));
+    .any(|e| matches!(&e.payload, EventPayload::Stage(StageEvent::BuildHeaders(_))));
   let req_seen = events
     .iter()
-    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::ConvertRequest(_))));
+    .any(|e| matches!(&e.payload, EventPayload::Stage(StageEvent::ConvertRequest(_))));
   assert!(resolved_seen, "Resolve event must precede the Send failure");
   assert!(headers_seen, "BuildHeaders event must precede the Send failure");
   assert!(req_seen, "ConvertRequest event must precede the Send failure");
@@ -622,14 +634,14 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   let (err_stage, err_stop) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
+      EventPayload::Stage(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
       _ => None,
     })
     .expect("Error event must be present");
   assert_eq!(err_stage, Stage::Send);
   assert!(!err_stop);
   let completed_success = events.iter().find_map(|e| match &e.payload {
-    EventPayload::Known(StageEvent::Completed { success, .. }) => Some(*success),
+    EventPayload::Stage(StageEvent::Completed { success, .. }) => Some(*success),
     _ => None,
   });
   assert_eq!(completed_success, Some(false));

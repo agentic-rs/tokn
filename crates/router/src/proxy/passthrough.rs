@@ -179,7 +179,7 @@ mod tests {
   #[tokio::test]
   async fn transport_failure_response_uses_sanitized_message() {
     let err = reqwest::Client::new()
-      .get("http://127.0.0.1:1/backend-api/codex/responses?secret=1")
+      .get("http://[::1]:1/backend-api/codex/responses?secret=1")
       .send()
       .await
       .unwrap_err();
@@ -198,6 +198,6 @@ mod tests {
     assert!(message.contains("chatgpt.com"));
     assert!(!message.contains("/backend-api/codex/responses"));
     assert!(!message.contains("?secret=1"));
-    assert!(!message.contains("http://127.0.0.1"));
+    assert!(!message.contains("http://[::1]"));
   }
 }

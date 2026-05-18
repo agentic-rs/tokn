@@ -19,7 +19,7 @@
 use crate::requests::open_day_db;
 use crate::{headers_json, Result};
 use llm_core::event::{Event, EventHandler};
-use llm_core::router2_event::{Router2EventPayload, Stage, StageEvent};
+use llm_core::router2_event::{RecordEvent, Router2EventPayload, Stage, StageEvent};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -302,6 +302,64 @@ impl Router2RequestsWriter {
     }
     Ok(())
   }
+
+  /// Wire-truth upstream-request record. Overwrites the intent-time values
+  /// written by `on_build_headers` / `on_convert_request` with what
+  /// actually went on the wire (post auth injection, post Host /
+  /// Content-Length strip, post body-bytes finalization). Also fills the
+  /// previously-empty `outbound_req_method` and `outbound_req_url`
+  /// columns that no stage event populated before `Record::UpstreamReq`
+  /// existed.
+  pub fn on_upstream_req(
+    &mut self,
+    request_id: &str,
+    attempt: u32,
+    method: &str,
+    url: &str,
+    headers: &llm_headers::HeaderMap,
+    body: &bytes::Bytes,
+  ) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let hdr_json = headers_json(headers);
+    let Some(conn) = self.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "router2 UpstreamReq without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET
+         outbound_req_method = ?2,
+         outbound_req_url = ?3,
+         outbound_req_headers = ?4,
+         outbound_req_body = ?5
+       WHERE request_id = ?1",
+      params![id, method, url, hdr_json.as_ref(), body.as_ref()],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "router2 UpstreamReq UPDATE matched no row");
+    }
+    Ok(())
+  }
+
+  /// Wire-truth upstream-response body. Written by ConvertResponse for
+  /// buffered flows; streaming responses are not captured here (the live
+  /// SSE byte stream is single-shot and can't be cheaply tee'd, matching
+  /// legacy behavior). The `Send` stage already wrote status + response
+  /// headers, so this update touches only the body column.
+  pub fn on_upstream_body(&mut self, request_id: &str, attempt: u32, body: &bytes::Bytes) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let Some(conn) = self.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "router2 UpstreamBody without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET outbound_resp_body = ?2 WHERE request_id = ?1",
+      params![id, body.as_ref()],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "router2 UpstreamBody UPDATE matched no row");
+    }
+    Ok(())
+  }
 }
 
 /// `EventHandler` that persists router2 stage events into the requests DB.
@@ -327,52 +385,65 @@ impl EventHandler for Router2EventHandler {
     };
     let request_id = r2.request_id.as_str();
     let attempt = r2.attempt;
-    let stage = match &r2.payload {
-      Router2EventPayload::Known(stage) => stage,
+    let result = match &r2.payload {
       Router2EventPayload::Custom(_) => return,
-    };
-    let result = match stage {
-      StageEvent::Started { endpoint } => self
-        .writer
-        .on_started(request_id, attempt, now_unix(), endpoint.as_str()),
-      StageEvent::Extract(s) => self.writer.on_extract(
-        request_id,
-        attempt,
-        s.model.as_str(),
-        s.stream,
-        s.session_id.as_deref(),
-        s.initiator.as_str(),
-        &s.headers,
-        &s.raw_body,
-      ),
-      StageEvent::Resolve(s) => self.writer.on_resolve(
-        request_id,
-        attempt,
-        s.account_id.as_str(),
-        s.provider_id.as_str(),
-        s.upstream_endpoint.as_str(),
-      ),
-      StageEvent::BuildHeaders(s) => self.writer.on_build_headers(request_id, attempt, &s.headers),
-      StageEvent::ConvertRequest(s) => {
+      Router2EventPayload::Stage(stage) => match stage {
+        StageEvent::Started { endpoint } => self
+          .writer
+          .on_started(request_id, attempt, now_unix(), endpoint.as_str()),
+        StageEvent::Extract(s) => self.writer.on_extract(
+          request_id,
+          attempt,
+          s.model.as_str(),
+          s.stream,
+          s.session_id.as_deref(),
+          s.initiator.as_str(),
+          &s.headers,
+          &s.raw_body,
+        ),
+        StageEvent::Resolve(s) => self.writer.on_resolve(
+          request_id,
+          attempt,
+          s.account_id.as_str(),
+          s.provider_id.as_str(),
+          s.upstream_endpoint.as_str(),
+        ),
+        StageEvent::BuildHeaders(s) => self.writer.on_build_headers(request_id, attempt, &s.headers),
+        StageEvent::ConvertRequest(s) => {
+          self
+            .writer
+            .on_convert_request(request_id, attempt, &s.upstream_wire_body)
+        }
+        StageEvent::Send(s) => self
+          .writer
+          .on_send(request_id, attempt, now_unix(), s.status, &s.headers),
+        StageEvent::ConvertResponse(s) => {
+          let body_bytes = s
+            .body
+            .as_ref()
+            .map(|v| bytes::Bytes::from(serde_json::to_vec(v.as_ref()).unwrap_or_default()))
+            .unwrap_or_default();
+          self
+            .writer
+            .on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
+        }
+        StageEvent::Error { stage, message, .. } => self.writer.on_error(request_id, attempt, *stage, message.as_str()),
+        StageEvent::Completed { .. } => self.writer.on_completed(request_id, attempt, now_unix()),
+      },
+      // Wire-truth records emitted by Send / ConvertResponse. `UpstreamResp`
+      // duplicates `StageEvent::Send` (status + headers come from the same
+      // `reqwest::Response::headers()`) and so is intentionally a no-op
+      // here — we keep the event for downstream consumers (debug printers,
+      // observers) that want a single source of wire-truth events.
+      Router2EventPayload::Record(RecordEvent::UpstreamReq { method, url, headers, body }) => {
         self
           .writer
-          .on_convert_request(request_id, attempt, &s.upstream_wire_body)
+          .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body)
       }
-      StageEvent::Send(s) => self
-        .writer
-        .on_send(request_id, attempt, now_unix(), s.status, &s.headers),
-      StageEvent::ConvertResponse(s) => {
-        let body_bytes = s
-          .body
-          .as_ref()
-          .map(|v| bytes::Bytes::from(serde_json::to_vec(v.as_ref()).unwrap_or_default()))
-          .unwrap_or_default();
-        self
-          .writer
-          .on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
+      Router2EventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
+      Router2EventPayload::Record(RecordEvent::UpstreamBody { body }) => {
+        self.writer.on_upstream_body(request_id, attempt, body)
       }
-      StageEvent::Error { stage, message, .. } => self.writer.on_error(request_id, attempt, *stage, message.as_str()),
-      StageEvent::Completed { .. } => self.writer.on_completed(request_id, attempt, now_unix()),
     };
     if let Err(e) = result {
       tracing::warn!(error = %e, request_id, attempt, "router2 persistence write failed");

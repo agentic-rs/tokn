@@ -26,7 +26,7 @@ fn r2(request_id: &str, attempt: u32, payload: StageEvent) -> Event {
   Event::Router2(Router2Event {
     request_id: SmolStr::new(request_id),
     attempt,
-    payload: Router2EventPayload::Known(payload),
+    payload: Router2EventPayload::Stage(payload),
   })
 }
 

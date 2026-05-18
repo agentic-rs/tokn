@@ -330,10 +330,10 @@ impl Captured {
                 snap.request_id = Some(event.request_id.to_string());
               }
               match &event.payload {
-                EventPayload::Known(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
-                EventPayload::Known(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
-                EventPayload::Known(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
-                EventPayload::Known(StageEvent::Completed { attempts, .. }) => snap.attempts = Some(*attempts),
+                EventPayload::Stage(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
+                EventPayload::Stage(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
+                EventPayload::Stage(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
+                EventPayload::Stage(StageEvent::Completed { attempts, .. }) => snap.attempts = Some(*attempts),
                 _ => {}
               }
             }
@@ -370,36 +370,36 @@ fn subscribe_event_printer(bus: &EventBus) {
 
 fn print_event(event: &Event) {
   match &event.payload {
-    EventPayload::Known(StageEvent::Started { endpoint }) => {
+    EventPayload::Stage(StageEvent::Started { endpoint }) => {
       println!("[started]          endpoint={endpoint}");
     }
-    EventPayload::Known(StageEvent::Extract(e)) => {
+    EventPayload::Stage(StageEvent::Extract(e)) => {
       let cid = e.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
         "[extract]          model={} stream={} client_id={cid}",
         e.model, e.stream
       );
     }
-    EventPayload::Known(StageEvent::Resolve(r)) => {
+    EventPayload::Stage(StageEvent::Resolve(r)) => {
       let cid = r.client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!(
         "[resolve]          model={} -> {} account={} provider={} upstream_endpoint={} client_id={cid}",
         r.model, r.upstream_model, r.account_id, r.provider_id, r.upstream_endpoint
       );
     }
-    EventPayload::Known(StageEvent::BuildHeaders(_)) => {
+    EventPayload::Stage(StageEvent::BuildHeaders(_)) => {
       println!("[build_headers]    ok");
     }
-    EventPayload::Known(StageEvent::ConvertRequest(_)) => {
+    EventPayload::Stage(StageEvent::ConvertRequest(_)) => {
       println!("[convert_request]  ok");
     }
-    EventPayload::Known(StageEvent::Send(_)) => {
+    EventPayload::Stage(StageEvent::Send(_)) => {
       println!("[send]             ok");
     }
-    EventPayload::Known(StageEvent::ConvertResponse(_)) => {
+    EventPayload::Stage(StageEvent::ConvertResponse(_)) => {
       println!("[convert_response] ok");
     }
-    EventPayload::Known(StageEvent::Error {
+    EventPayload::Stage(StageEvent::Error {
       stage,
       message,
       recoverable,
@@ -411,8 +411,26 @@ fn print_event(event: &Event) {
         println!("[error]            stage={stage} recoverable={recoverable} message={message}");
       }
     }
-    EventPayload::Known(StageEvent::Completed { success, attempts }) => {
+    EventPayload::Stage(StageEvent::Completed { success, attempts }) => {
       println!("[completed]        success={success} attempts={attempts}");
+    }
+    EventPayload::Record(r) => {
+      use llm_core::router2_event::RecordEvent;
+      match r {
+        RecordEvent::UpstreamReq { method, url, headers, body } => {
+          println!(
+            "[record:upstream_req] {method} {url} headers={} body_bytes={}",
+            headers.len(),
+            body.len()
+          );
+        }
+        RecordEvent::UpstreamResp { status, headers } => {
+          println!("[record:upstream_resp] status={status} headers={}", headers.len());
+        }
+        RecordEvent::UpstreamBody { body } => {
+          println!("[record:upstream_body] bytes={}", body.len());
+        }
+      }
     }
     EventPayload::Custom(c) => {
       println!("[custom]           kind={}", c.kind);

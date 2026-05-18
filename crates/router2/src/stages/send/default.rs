@@ -19,10 +19,11 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
-use llm_core::provider::{Endpoint, RequestCtx};
+use llm_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
+use llm_core::router2_event::RecordEvent;
 use llm_headers::HeaderMap;
 use smol_str::SmolStr;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 pub struct DefaultSend {
   http: reqwest::Client,
@@ -44,7 +45,7 @@ impl SendStage for DefaultSend {
   ))]
   async fn send(
     &self,
-    _ctx: &PipelineCtx,
+    ctx: &PipelineCtx,
     extracted: &Extracted,
     resolved: &Resolved,
     headers: &BuiltHeaders,
@@ -57,6 +58,13 @@ impl SendStage for DefaultSend {
     // adjacent context — empty is fine because we already populated
     // `vars` in BuildHeaders.
     let inbound_headers = HeaderMap::new();
+    // Wire-truth capture slot. Providers populate this from inside
+    // `llm_core::util::http::send` immediately before reqwest dispatch,
+    // so the snapshot reflects the actual on-wire request (post auth
+    // injection, post Host/Content-Length strip). We later forward it
+    // as `Record::UpstreamReq` / `Record::UpstreamResp` events so the
+    // persistence handler can write wire-accurate values into the row.
+    let capture = new_outbound_capture();
     let req_ctx = RequestCtx {
       endpoint: resolved.upstream_endpoint,
       http: &self.http,
@@ -68,21 +76,51 @@ impl SendStage for DefaultSend {
       inbound_headers: &inbound_headers,
       behave_as: None,
       profile_headers: Some(headers.headers.clone()),
-      outbound: None,
+      outbound: Some(capture.clone()),
       vars: headers.vars.clone(),
     };
 
     let provider = resolved.account_handle.provider.clone();
-    let resp = match resolved.upstream_endpoint {
+    let resp_result = match resolved.upstream_endpoint {
       Endpoint::ChatCompletions => provider.chat(req_ctx).await,
       Endpoint::Responses => provider.responses(req_ctx).await,
       Endpoint::Messages => provider.messages(req_ctx).await,
+    };
+
+    // Emit the request-side record regardless of outcome — even on a
+    // transport failure the capture may have been populated before the
+    // wire call actually failed, and persisting it helps diagnose.
+    // Providers that never call `util::http::send` leave the slot empty,
+    // in which case we simply skip the event.
+    if let Some(snap) = capture.get() {
+      let method = snap.method.clone().unwrap_or_else(|| "POST".to_string());
+      let url = snap.url.clone().unwrap_or_default();
+      ctx.emit_record(RecordEvent::UpstreamReq {
+        method: SmolStr::new(method),
+        url: SmolStr::new(url),
+        headers: snap.req_headers.clone(),
+        body: snap.req_body.clone(),
+      });
+    } else {
+      warn!(
+        provider = %resolved.provider_id,
+        "outbound capture not populated; provider may not route through util::http::send"
+      );
     }
-    .map_err(classify_provider_error)?;
+
+    let resp = resp_result.map_err(classify_provider_error)?;
 
     let status = resp.status().as_u16();
     let resp_headers = HeaderMap::from(resp.headers());
     debug!(%status, "upstream responded");
+
+    // Response-side record: status + headers as soon as they arrive.
+    // The body lives in `resp` and is consumed by ConvertResponse;
+    // `Record::UpstreamBody` is emitted from there for buffered flows.
+    ctx.emit_record(RecordEvent::UpstreamResp {
+      status,
+      headers: resp_headers.clone(),
+    });
 
     // Status-based classification: 5xx is recoverable (transient
     // upstream issue), 4xx is permanent (won't change on retry). 2xx/3xx

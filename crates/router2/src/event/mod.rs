@@ -10,6 +10,6 @@ pub mod stage;
 
 pub use llm_core::event::EventBus;
 pub use llm_core::router2_event::{
-  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, CustomEvent, ExtractedSummary,
+  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, CustomEvent, ExtractedSummary, RecordEvent,
   ResolvedSummary, Router2Event as Event, Router2EventPayload as EventPayload, SentSummary, Stage, StageEvent,
 };

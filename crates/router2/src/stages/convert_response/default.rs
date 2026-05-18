@@ -83,6 +83,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
       )
     })?;
 
+    // Wire-truth record: the upstream response body exactly as drained,
+    // post-decompression (reqwest decodes gzip/br/deflate/zstd before
+    // handing bytes to us). Streaming responses skip this — the live SSE
+    // byte stream is single-shot and can't be cheaply tee'd, matching
+    // legacy behavior (no `outbound_resp_body` for streaming).
+    ctx.emit_record(llm_core::router2_event::RecordEvent::UpstreamBody { body: raw.clone() });
+
     // If the body is empty (e.g. some error responses), short-circuit
     // with a Null JSON value rather than failing — matches the legacy
     // buffered path's tolerance for blank upstream bodies.

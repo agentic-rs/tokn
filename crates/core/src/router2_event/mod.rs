@@ -5,15 +5,20 @@
 //! variant without inverting the dep graph (router2 already depends on
 //! llm-core).
 //!
-//! Two payload shapes are supported:
+//! Three payload shapes are supported as peers under
+//! [`Router2EventPayload`]:
 //!
-//! * [`StageEvent`] — a closed enum of stage-observation variants the runner
-//!   emits at well-defined points. New variants are added as the pipeline
-//!   grows; subscribers `match` on them.
-//! * [`CustomEvent`] — an `Any`-typed escape hatch for middleware / decorator
-//!   stages (e.g. retry, cache) to publish their own structured records
-//!   without modifying [`StageEvent`]. The payload is shared via `Arc` so
-//!   subscribers can cheaply clone and downcast.
+//! * [`StageEvent`] — a closed enum of lifecycle/observation variants
+//!   the runner emits at well-defined points (Started, per-stage
+//!   summaries, Error, Completed). Subscribers `match` on them.
+//! * [`RecordEvent`] — wire-truth captures from the actual outbound
+//!   HTTP call (request line + headers + body, response status +
+//!   headers, response body). Split from `StageEvent` so subscribers
+//!   that only care about one axis don't pay a match-arm tax for the
+//!   other.
+//! * [`CustomEvent`] — an `Any`-typed escape hatch for middleware /
+//!   decorator stages (e.g. retry, cache) to publish their own
+//!   structured records without modifying either of the closed enums.
 //!
 //! The event bus itself is `llm_core::event::EventBus` (a tokio broadcast
 //! channel); router2 publishes `llm_core::event::Event::Router2(Router2Event
@@ -21,8 +26,10 @@
 //!
 //! [`Router2(Router2Event)`]: crate::event::Event::Router2
 
+pub mod record;
 pub mod stage;
 
+pub use record::RecordEvent;
 pub use stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
@@ -41,10 +48,18 @@ pub struct Router2Event {
   pub payload: Router2EventPayload,
 }
 
-/// Either a typed pipeline event or an arbitrary user-defined record.
+/// One of three payload shapes carried on a [`Router2Event`].
+///
+/// - [`Stage`](Router2EventPayload::Stage) — closed-set lifecycle /
+///   per-stage observation events.
+/// - [`Record`](Router2EventPayload::Record) — wire-truth captures from
+///   the actual outbound HTTP call.
+/// - [`Custom`](Router2EventPayload::Custom) — `Any`-typed escape hatch
+///   for middleware / decorator stages.
 #[derive(Clone, Debug)]
 pub enum Router2EventPayload {
-  Known(StageEvent),
+  Stage(StageEvent),
+  Record(RecordEvent),
   Custom(CustomEvent),
 }
 

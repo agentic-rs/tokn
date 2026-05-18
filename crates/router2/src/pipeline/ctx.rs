@@ -8,7 +8,7 @@
 //! values between stages — but the ctx is the right home for cross-cutting
 //! state we add later (timings, cancellation tokens, etc.).
 
-use crate::event::{CustomEvent, Event, EventBus, EventPayload, StageEvent};
+use crate::event::{CustomEvent, Event, EventBus, EventPayload, RecordEvent, StageEvent};
 use llm_core::event::Event as CoreEvent;
 use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
@@ -39,11 +39,23 @@ impl PipelineCtx {
   }
 
   /// Publish a [`StageEvent`] tagged with the current request id and attempt.
-  pub fn emit_known(&self, payload: StageEvent) {
+  pub fn emit_stage(&self, payload: StageEvent) {
     self.events.emit(CoreEvent::Router2(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      payload: EventPayload::Known(payload),
+      payload: EventPayload::Stage(payload),
+    }));
+  }
+
+  /// Publish a wire-truth [`RecordEvent`] tagged with the current request
+  /// id and attempt. Used by Send / ConvertResponse to surface what
+  /// reqwest actually put on the wire (vs the intent values carried on
+  /// per-stage summaries).
+  pub fn emit_record(&self, payload: RecordEvent) {
+    self.events.emit(CoreEvent::Router2(Event {
+      request_id: self.request_id.clone(),
+      attempt: self.attempt,
+      payload: EventPayload::Record(payload),
     }));
   }
 

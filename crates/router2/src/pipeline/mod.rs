@@ -69,12 +69,12 @@ impl PipelineRunner {
   pub async fn run(&self, raw: RawInbound) -> Result<ConvertedResponse, PipelineError> {
     let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
     let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
-    ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
+    ctx.emit_stage(StageEvent::Started { endpoint: raw.endpoint });
 
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
       Ok(e) => {
-        ctx.emit_known(StageEvent::Extract((&e).into()));
+        ctx.emit_stage(StageEvent::Extract((&e).into()));
         e
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -83,7 +83,7 @@ impl PipelineRunner {
     // ---- Resolve ----
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
-        ctx.emit_known(StageEvent::Resolve((&r).into()));
+        ctx.emit_stage(StageEvent::Resolve((&r).into()));
         r
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -97,7 +97,7 @@ impl PipelineRunner {
       .await
     {
       Ok(h) => {
-        ctx.emit_known(StageEvent::BuildHeaders((&h).into()));
+        ctx.emit_stage(StageEvent::BuildHeaders((&h).into()));
         h
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -111,7 +111,7 @@ impl PipelineRunner {
       .await
     {
       Ok(c) => {
-        ctx.emit_known(StageEvent::ConvertRequest((&c).into()));
+        ctx.emit_stage(StageEvent::ConvertRequest((&c).into()));
         c
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -128,7 +128,7 @@ impl PipelineRunner {
         // SentResponse owns a single-shot reqwest::Response; emit its
         // cloneable subset for observers and pass the full struct on to
         // ConvertResponse.
-        ctx.emit_known(StageEvent::Send((&s).into()));
+        ctx.emit_stage(StageEvent::Send((&s).into()));
         s
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -139,13 +139,13 @@ impl PipelineRunner {
       Ok(c) => {
         // Build the summary before moving `c` to the caller — body (when
         // buffered) is shared via the same Arc<Value>.
-        ctx.emit_known(StageEvent::ConvertResponse((&c).into()));
+        ctx.emit_stage(StageEvent::ConvertResponse((&c).into()));
         c
       }
       Err(err) => return Err(self.fail(&ctx, err)),
     };
 
-    ctx.emit_known(StageEvent::Completed {
+    ctx.emit_stage(StageEvent::Completed {
       success: true,
       attempts: ctx.attempt + 1,
     });
@@ -158,13 +158,13 @@ impl PipelineRunner {
   /// Subscribers that need to distinguish a stop from a real failure read
   /// the preceding `Error` event's `stop` flag.
   fn fail(&self, ctx: &PipelineCtx, err: PipelineError) -> PipelineError {
-    ctx.emit_known(StageEvent::Error {
+    ctx.emit_stage(StageEvent::Error {
       stage: err.stage,
       message: err.message.clone(),
       recoverable: err.recoverable,
       stop: err.stop,
     });
-    ctx.emit_known(StageEvent::Completed {
+    ctx.emit_stage(StageEvent::Completed {
       success: false,
       attempts: ctx.attempt + 1,
     });
