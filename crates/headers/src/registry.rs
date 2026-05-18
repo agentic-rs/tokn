@@ -150,13 +150,13 @@ mod tests {
       HeaderName::new("X-Session-Id"),
       HeaderValue::from_string("from-persona".into()),
     );
-    persona_map.insert(HeaderName::new("X-Persona-Only"), HeaderValue::from_string("p".into()));
+    persona_map.insert("X-Persona-Only", HeaderValue::from_string("p".into()));
     let mut overlay_map = HeaderMap::new();
     overlay_map.insert(
       HeaderName::new("x-session-id"),
       HeaderValue::from_string("from-overlay".into()),
     );
-    overlay_map.insert(HeaderName::new("X-Overlay-Only"), HeaderValue::from_string("o".into()));
+    overlay_map.insert("X-Overlay-Only", HeaderValue::from_string("o".into()));
 
     let composed = ResolvedSchema::compose(persona_map, Some(overlay_map));
     assert_eq!(composed.get(&keys::X_SESSION_ID).unwrap().as_str(), "from-overlay");
@@ -167,7 +167,7 @@ mod tests {
   #[test]
   fn compose_without_overlay_is_identity() {
     let mut persona_map = HeaderMap::new();
-    persona_map.insert(HeaderName::new("A"), HeaderValue::from_string("1".into()));
+    persona_map.insert("A", HeaderValue::from_string("1".into()));
     let composed = ResolvedSchema::compose(persona_map.clone(), None);
     assert_eq!(composed, persona_map);
   }

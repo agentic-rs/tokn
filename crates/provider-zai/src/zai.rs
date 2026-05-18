@@ -26,9 +26,7 @@ use reqwest::Method;
 use serde_json::Value;
 use tracing::{debug, instrument, warn};
 
-use crate::{
-  error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ZAI_PROVIDERS,
-};
+use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -272,6 +270,7 @@ mod tests {
   use super::*;
   use crate::config::Account as AcctCfg;
   use crate::provider::{new_outbound_capture, Endpoint, RequestCtx, ZAI_PROVIDERS};
+  use crate::TemplateVars;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   fn acct(provider: &str, key: Option<&str>) -> AcctCfg {

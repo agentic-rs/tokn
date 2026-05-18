@@ -229,9 +229,9 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::USER_AGENT.clone(), "codex_exec/9.9.9");
-    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer abc");
-    inbound.insert(keys::OPENAI_BETA.clone(), "responses=v1");
+    inbound.insert(&keys::USER_AGENT, "codex_exec/9.9.9");
+    inbound.insert(&keys::AUTHORIZATION, "Bearer abc");
+    inbound.insert(&keys::OPENAI_BETA, "responses=v1");
     let h = CodexCliHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "codex_exec/9.9.9");
     assert_eq!(h.authorization.as_str(), "Bearer abc");

@@ -85,8 +85,8 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::USER_AGENT.clone(), "cline/9.9");
-    inbound.insert(keys::X_BEHAVE_AS.clone(), "agent");
+    inbound.insert(&keys::USER_AGENT, "cline/9.9");
+    inbound.insert(&keys::X_BEHAVE_AS, "agent");
     let h = ClineHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "cline/9.9");
     assert_eq!(h.behave_as.as_deref(), Some("agent"));

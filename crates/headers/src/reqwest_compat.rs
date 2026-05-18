@@ -9,7 +9,6 @@
 //! practice).
 
 use crate::map::HeaderMap;
-use crate::name::HeaderName;
 use crate::value::HeaderValue;
 use reqwest::header::{HeaderMap as ReqMap, HeaderName as ReqName, HeaderValue as ReqValue};
 
@@ -34,7 +33,7 @@ impl From<&ReqMap> for HeaderMap {
     let mut out = HeaderMap::with_capacity(value.len());
     for (name, val) in value {
       let Ok(s) = val.to_str() else { continue };
-      out.insert(HeaderName::new(name.as_str()), HeaderValue::from_string(s.to_string()));
+      out.insert(name.as_str(), HeaderValue::from_string(s.to_string()));
     }
     out
   }
@@ -43,14 +42,12 @@ impl From<&ReqMap> for HeaderMap {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::name::HeaderName;
-
   #[test]
   fn round_trip_preserves_values_and_count() {
     let mut m = HeaderMap::new();
-    m.insert(HeaderName::new("Authorization"), "Bearer abc");
-    m.insert(HeaderName::new("Content-Type"), "application/json");
-    m.insert(HeaderName::new("X-Session-Id"), "ses_42");
+    m.insert("Authorization", "Bearer abc");
+    m.insert("Content-Type", "application/json");
+    m.insert("X-Session-Id", "ses_42");
     let r: ReqMap = m.clone().into();
     assert_eq!(r.len(), 3);
     assert_eq!(r.get("authorization").unwrap().to_str().unwrap(), "Bearer abc");
@@ -62,8 +59,8 @@ mod tests {
   #[test]
   fn duplicates_round_trip() {
     let mut m = HeaderMap::new();
-    m.insert(HeaderName::new("Set-Cookie"), "a=1");
-    m.insert(HeaderName::new("Set-Cookie"), "b=2");
+    m.append("Set-Cookie", "a=1");
+    m.append("Set-Cookie", "b=2");
     let r: ReqMap = m.into();
     let all: Vec<_> = r.get_all("set-cookie").iter().map(|v| v.to_str().unwrap()).collect();
     assert_eq!(all, vec!["a=1", "b=2"]);

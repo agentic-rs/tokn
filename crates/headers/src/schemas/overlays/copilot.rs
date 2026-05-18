@@ -84,20 +84,17 @@ impl CopilotOverlay {
   /// (`Copilot-Vision-Request`, `X-Initiator`) are filled in only when the
   /// overlay has a value AND the header is not already present on the map.
   pub fn apply_to(&self, map: &mut HeaderMap, _vars: &TemplateVars) {
-    map.replace(keys::EDITOR_VERSION.clone(), self.editor_version.to_string());
-    map.replace(
-      keys::EDITOR_PLUGIN_VERSION.clone(),
-      self.editor_plugin_version.to_string(),
-    );
-    map.replace(keys::COPILOT_INTEGRATION_ID.clone(), self.integration_id.to_string());
+    map.insert(&keys::EDITOR_VERSION, self.editor_version.to_string());
+    map.insert(&keys::EDITOR_PLUGIN_VERSION, self.editor_plugin_version.to_string());
+    map.insert(&keys::COPILOT_INTEGRATION_ID, self.integration_id.to_string());
     if let Some(v) = &self.vision_request {
       if !map.contains_key(&keys::COPILOT_VISION_REQUEST) {
-        map.insert(keys::COPILOT_VISION_REQUEST.clone(), v.to_string());
+        map.insert(&keys::COPILOT_VISION_REQUEST, v.to_string());
       }
     }
     if let Some(v) = &self.initiator {
       if !map.contains_key(&keys::X_INITIATOR) {
-        map.insert(keys::X_INITIATOR.clone(), v.to_string());
+        map.insert(&keys::X_INITIATOR, v.to_string());
       }
     }
   }
@@ -138,8 +135,8 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::EDITOR_VERSION.clone(), "vscode/1.99.0");
-    inbound.insert(keys::COPILOT_VISION_REQUEST.clone(), "true");
+    inbound.insert(&keys::EDITOR_VERSION, "vscode/1.99.0");
+    inbound.insert(&keys::COPILOT_VISION_REQUEST, "true");
     let h = CopilotOverlay::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.editor_version.as_str(), "vscode/1.99.0");
     assert_eq!(h.vision_request.as_deref(), Some("true"));
@@ -161,9 +158,9 @@ mod tests {
   fn apply_to_overrides_managed_fields_and_skips_optionals_when_none() {
     // Start from an outbound map dumped from a CopilotCli persona-ish request.
     let mut map = HeaderMap::new();
-    map.insert(keys::EDITOR_VERSION.clone(), "stale/0.0.0");
-    map.insert(keys::COPILOT_INTEGRATION_ID.clone(), "old-integration");
-    map.insert(keys::X_INITIATOR.clone(), "preexisting");
+    map.insert(&keys::EDITOR_VERSION, "stale/0.0.0");
+    map.insert(&keys::COPILOT_INTEGRATION_ID, "old-integration");
+    map.insert(&keys::X_INITIATOR, "preexisting");
 
     let overlay = CopilotOverlay {
       editor_version: "vscode/1.95.0".into(),

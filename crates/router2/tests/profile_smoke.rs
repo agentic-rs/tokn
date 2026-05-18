@@ -16,7 +16,7 @@ use llm_core::account::AccountConfig;
 use llm_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
-use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use llm_headers::{HeaderMap, HeaderValue};
 use llm_router2::event::{EventPayload, Stage, StageEvent};
 use llm_router2::pipeline::stages::ConvertedResponse;
 use llm_router2::stages::{
@@ -133,7 +133,7 @@ fn raw_chat(model: &str) -> RawInbound {
   let body = serde_json::json!({"model": model, "messages": []});
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
   let mut headers = HeaderMap::new();
-  headers.insert(HeaderName::new("x-behave-as"), HeaderValue::from_static("codex"));
+  headers.insert("x-behave-as", HeaderValue::from_static("codex"));
   RawInbound {
     endpoint: Endpoint::ChatCompletions,
     headers,

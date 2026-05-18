@@ -192,14 +192,14 @@ mod tests {
   use crate::pipeline::stages::Extracted;
   use bytes::Bytes;
   use llm_core::provider::Endpoint;
-  use llm_headers::{keys, HeaderName, HeaderValue};
+  use llm_headers::{keys, HeaderValue};
   use serde_json::json;
   use std::sync::Arc;
 
   fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
     let mut m = HeaderMap::new();
     for (k, v) in pairs {
-      m.insert(HeaderName::new(*k), HeaderValue::from_string((*v).to_string()));
+      m.insert(*k, HeaderValue::from_string((*v).to_string()));
     }
     m
   }

@@ -80,20 +80,20 @@ impl CodexOverlay {
   /// in only when the overlay has a value AND the header is not already
   /// present on the map.
   pub fn apply_to(&self, map: &mut HeaderMap, _vars: &TemplateVars) {
-    map.replace(keys::OPENAI_BETA.clone(), self.openai_beta.to_string());
+    map.insert(&keys::OPENAI_BETA, self.openai_beta.to_string());
     if let Some(v) = &self.openai_intent {
       if !map.contains_key(&keys::OPENAI_INTENT) {
-        map.insert(keys::OPENAI_INTENT.clone(), v.to_string());
+        map.insert(&keys::OPENAI_INTENT, v.to_string());
       }
     }
     if let Some(v) = &self.chatgpt_account_id {
       if !map.contains_key(&keys::CHATGPT_ACCOUNT_ID) {
-        map.insert(keys::CHATGPT_ACCOUNT_ID.clone(), v.to_string());
+        map.insert(&keys::CHATGPT_ACCOUNT_ID, v.to_string());
       }
     }
     if let Some(v) = &self.session_id {
       if !map.contains_key(&keys::X_SESSION_ID) {
-        map.insert(keys::X_SESSION_ID.clone(), v.to_string());
+        map.insert(&keys::X_SESSION_ID, v.to_string());
       }
     }
   }
@@ -126,8 +126,8 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::OPENAI_BETA.clone(), "responses=v2");
-    inbound.insert(keys::OPENAI_INTENT.clone(), "assistants");
+    inbound.insert(&keys::OPENAI_BETA, "responses=v2");
+    inbound.insert(&keys::OPENAI_INTENT, "assistants");
     let h = CodexOverlay::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.openai_beta.as_str(), "responses=v2");
     assert_eq!(h.openai_intent.as_deref(), Some("assistants"));
@@ -148,8 +148,8 @@ mod tests {
   #[test]
   fn apply_to_overrides_managed_fields_and_skips_optionals_when_none() {
     let mut map = HeaderMap::new();
-    map.insert(keys::OPENAI_BETA.clone(), "stale=v0");
-    map.insert(keys::X_SESSION_ID.clone(), "preexisting");
+    map.insert(&keys::OPENAI_BETA, "stale=v0");
+    map.insert(&keys::X_SESSION_ID, "preexisting");
 
     let overlay = CodexOverlay {
       openai_beta: "responses=v1".into(),

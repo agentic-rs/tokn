@@ -186,9 +186,9 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::USER_AGENT.clone(), "custom-ua/9.9");
-    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer secret");
-    inbound.insert(keys::CONTENT_LENGTH.clone(), "1234");
+    inbound.insert(&keys::USER_AGENT, "custom-ua/9.9");
+    inbound.insert(&keys::AUTHORIZATION, "Bearer secret");
+    inbound.insert(&keys::CONTENT_LENGTH, "1234");
     let h = OpencodeHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "custom-ua/9.9");
     assert_eq!(h.authorization.as_str(), "Bearer secret");

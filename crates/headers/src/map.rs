@@ -84,15 +84,21 @@ impl HeaderMap {
     }
   }
 
-  /// Append `(name, value)`. Allows duplicate names.
-  pub fn insert(&mut self, name: impl Into<HeaderName>, value: impl Into<HeaderValue>) {
+  /// Append `(name, value)` to the map. Allows duplicate names — use this
+  /// only for headers that are semantically multi-valued (`Set-Cookie`,
+  /// `Via`, etc.). For the common case of "set this header to this value",
+  /// use [`Self::insert`].
+  pub fn append(&mut self, name: impl Into<HeaderName>, value: impl Into<HeaderValue>) {
     self.entries.push((name.into(), value.into()));
   }
 
-  /// Replace any existing entries for `name` with a single new entry. The
-  /// new entry is appended at the position of the first existing match (if any),
-  /// otherwise at the end. All other duplicate matches are removed.
-  pub fn replace(&mut self, name: impl Into<HeaderName>, value: impl Into<HeaderValue>) {
+  /// Set `name` to `value`, replacing any existing entries with the same
+  /// name. Matches `http::HeaderMap::insert` / `reqwest::HeaderMap::insert`
+  /// semantics: a single entry with this name will exist after the call.
+  ///
+  /// The new entry is placed at the position of the first existing match
+  /// (preserving header order when overwriting), otherwise appended.
+  pub fn insert(&mut self, name: impl Into<HeaderName>, value: impl Into<HeaderValue>) {
     let name = name.into();
     let value = value.into();
     let mut first = None;
@@ -286,7 +292,7 @@ impl<'de> Visitor<'de> for HeaderMapVisitor {
     while let Some(name) = access.next_key::<HeaderName>()? {
       let values = access.next_value_seed(StringOrSeqSeed)?;
       for v in values {
-        out.insert(name.clone(), HeaderValue::from_string(v));
+        out.append(name.clone(), HeaderValue::from_string(v));
       }
     }
     Ok(out)
@@ -347,21 +353,30 @@ mod tests {
   #[test]
   fn duplicates_preserved() {
     let mut m = HeaderMap::new();
-    m.insert(name("Set-Cookie"), "a=1");
-    m.insert(name("Set-Cookie"), "b=2");
+    m.append(name("Set-Cookie"), "a=1");
+    m.append(name("Set-Cookie"), "b=2");
     let all: Vec<_> = m.get_all(&name("set-cookie")).map(|v| v.as_str().to_string()).collect();
     assert_eq!(all, vec!["a=1", "b=2"]);
     assert_eq!(m.len(), 2);
   }
 
   #[test]
-  fn replace_removes_duplicates_keeps_position() {
+  fn insert_overrides_existing_value() {
+    let mut m = HeaderMap::new();
+    m.insert(name("Authorization"), "Bearer old");
+    m.insert(name("authorization"), "Bearer new");
+    assert_eq!(m.len(), 1);
+    assert_eq!(m.get(&name("authorization")).map(|v| v.as_str()), Some("Bearer new"));
+  }
+
+  #[test]
+  fn insert_removes_duplicates_keeps_position() {
     let mut m = HeaderMap::new();
     m.insert(name("A"), "1");
-    m.insert(name("Set-Cookie"), "old1");
+    m.append(name("Set-Cookie"), "old1");
     m.insert(name("B"), "2");
-    m.insert(name("Set-Cookie"), "old2");
-    m.replace(name("set-cookie"), "new");
+    m.append(name("Set-Cookie"), "old2");
+    m.insert(name("set-cookie"), "new");
     let collected: Vec<_> = m
       .iter()
       .map(|(n, v)| (n.original().to_string(), v.as_str().to_string()))
@@ -379,8 +394,8 @@ mod tests {
   #[test]
   fn remove_returns_count() {
     let mut m = HeaderMap::new();
-    m.insert(name("X"), "1");
-    m.insert(name("X"), "2");
+    m.append(name("X"), "1");
+    m.append(name("X"), "2");
     m.insert(name("Y"), "3");
     assert_eq!(m.remove(&name("x")), 2);
     assert_eq!(m.len(), 1);
@@ -389,9 +404,9 @@ mod tests {
   #[test]
   fn extend_keeps_duplicates() {
     let mut a = HeaderMap::new();
-    a.insert(name("X"), "1");
+    a.append(name("X"), "1");
     let mut b = HeaderMap::new();
-    b.insert(name("X"), "2");
+    b.append(name("X"), "2");
     a.extend(b);
     assert_eq!(a.len(), 2);
   }
@@ -424,8 +439,8 @@ mod tests {
   fn serde_round_trip_preserves_case_and_duplicates() {
     let mut m = HeaderMap::new();
     m.insert(name("Authorization"), "Bearer x");
-    m.insert(name("Set-Cookie"), "a=1");
-    m.insert(name("Set-Cookie"), "b=2");
+    m.append(name("Set-Cookie"), "a=1");
+    m.append(name("Set-Cookie"), "b=2");
     m.insert(name("Content-Type"), "application/json");
     let json = serde_json::to_string(&m).unwrap();
     assert!(json.contains("\"Authorization\":\"Bearer x\""), "got {json}");

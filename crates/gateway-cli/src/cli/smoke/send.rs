@@ -572,16 +572,25 @@ fn headers_json_value(headers: &llm_headers::HeaderMap, redact: bool) -> Value {
   let mut map = serde_json::Map::new();
   for (name, value) in headers.iter() {
     let v = value.as_str();
-    map.insert(
-      name.as_str().to_string(),
-      Value::String(redact_header(name.as_str(), v, redact)),
-    );
+    let key = name.as_str().to_string();
+    let value = Value::String(redact_header(name.as_str(), v, redact));
+    match map.get_mut(&key) {
+      Some(Value::Array(values)) => values.push(value),
+      Some(_) => unreachable!("header json values are always arrays"),
+      None => {
+        map.insert(key, Value::Array(vec![value]));
+      }
+    }
   }
   Value::Object(map)
 }
 
 fn redact_header(name: &str, value: &str, redact: bool) -> String {
-  if !redact {
+  // Preserve diagnostic sentinels: empty values and the `<missing>`
+  // placeholder emitted by persona builders are not secrets, they are
+  // signals that the upstream stage failed to populate something. Hiding
+  // them defeats the entire point of dumping headers when debugging.
+  if !redact || value.is_empty() || value == "<missing>" {
     return value.to_string();
   }
   match name.to_ascii_lowercase().as_str() {
@@ -698,5 +707,28 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use llm_headers::HeaderMap;
+
+  #[test]
+  fn headers_json_value_preserves_multi_values_in_order() {
+    let mut headers = HeaderMap::new();
+    headers.append("set-cookie", "a=1");
+    headers.append("x-test", "first");
+    headers.append("set-cookie", "b=2");
+
+    let json = headers_json_value(&headers, false);
+    assert_eq!(
+      json,
+      serde_json::json!({
+        "set-cookie": ["a=1", "b=2"],
+        "x-test": ["first"],
+      })
+    );
   }
 }

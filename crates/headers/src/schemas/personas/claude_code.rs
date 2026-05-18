@@ -108,8 +108,8 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::USER_AGENT.clone(), "claude-cli/2.0");
-    inbound.insert(keys::ANTHROPIC_VERSION.clone(), "2023-06-01");
+    inbound.insert(&keys::USER_AGENT, "claude-cli/2.0");
+    inbound.insert(&keys::ANTHROPIC_VERSION, "2023-06-01");
     let h = ClaudeCodeHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "claude-cli/2.0");
     assert_eq!(h.anthropic_version.as_deref(), Some("2023-06-01"));

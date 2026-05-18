@@ -334,9 +334,9 @@ mod tests {
   #[test]
   fn build_passes_through_inbound() {
     let mut inbound = HeaderMap::new();
-    inbound.insert(keys::USER_AGENT.clone(), "copilot/2.0");
-    inbound.insert(keys::AUTHORIZATION.clone(), "Bearer gho_abc");
-    inbound.insert(keys::X_STAINLESS_LANG.clone(), "js");
+    inbound.insert(&keys::USER_AGENT, "copilot/2.0");
+    inbound.insert(&keys::AUTHORIZATION, "Bearer gho_abc");
+    inbound.insert(&keys::X_STAINLESS_LANG, "js");
     let h = CopilotCliHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "copilot/2.0");
     assert_eq!(h.authorization.as_str(), "Bearer gho_abc");

@@ -29,7 +29,7 @@ fn load_cells() -> Vec<(String, HeaderMap)> {
     let mut map = HeaderMap::with_capacity(obj.len());
     for (n, v) in obj {
       let s = v.as_str().expect("header value is a string");
-      map.insert(HeaderName::new(n.as_str()), HeaderValue::from_string(s.to_string()));
+      map.insert(n.as_str(), HeaderValue::from_string(s.to_string()));
     }
     out.push((key, map));
   }

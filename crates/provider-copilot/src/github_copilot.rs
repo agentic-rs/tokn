@@ -18,7 +18,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tracing::{debug, instrument};
 
 use crate::{
-  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result,
   ID_GITHUB_COPILOT,
 };
 
@@ -348,6 +348,7 @@ impl CopilotProvider {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::TemplateVars;
   use llm_core::account::AccountTier;
 
   fn acct(refresh: Option<&str>) -> AccountConfig {
