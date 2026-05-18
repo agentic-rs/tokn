@@ -16,7 +16,7 @@
 //!     `migration --rollback` can restore the pre-sequence state. No
 //!     backup is taken when there is nothing to do.
 //!
-//! See `scripts/migrations/<db>/{000_bootstrap,NNN_name}.sql` for the
+//! See `crates/persistence/migrations/<db>/{000_bootstrap,NNN_name}.sql` for the
 //! authoritative schema definitions.
 
 use rusqlite::{params, Connection};

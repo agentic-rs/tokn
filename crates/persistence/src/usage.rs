@@ -2,27 +2,27 @@ use super::{migrate, CallRecord, Result};
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-const BOOTSTRAP: &str = include_str!("../../../../scripts/migrations/usage/000_bootstrap.sql");
+const BOOTSTRAP: &str = include_str!("../migrations/usage/000_bootstrap.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
     name: "initial",
-    sql: include_str!("../../../../scripts/migrations/usage/001_initial.sql"),
+    sql: include_str!("../migrations/usage/001_initial.sql"),
   },
   migrate::Migration {
     version: 2,
     name: "add_correlation_ids",
-    sql: include_str!("../../../../scripts/migrations/usage/002_add_correlation_ids.sql"),
+    sql: include_str!("../migrations/usage/002_add_correlation_ids.sql"),
   },
   migrate::Migration {
     version: 3,
     name: "lifecycle_columns",
-    sql: include_str!("../../../../scripts/migrations/usage/003_lifecycle_columns.sql"),
+    sql: include_str!("../migrations/usage/003_lifecycle_columns.sql"),
   },
   migrate::Migration {
     version: 4,
     name: "add_usage_breakdown",
-    sql: include_str!("../../../../scripts/migrations/usage/004_add_usage_breakdown.sql"),
+    sql: include_str!("../migrations/usage/004_add_usage_breakdown.sql"),
   },
 ];
 
@@ -154,7 +154,7 @@ pub struct RowSummary {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::db::{HttpSnapshot, SessionSource, Usage};
+  use crate::{HttpSnapshot, SessionSource, Usage};
   use llm_core::db::CallRecord;
 
   #[test]

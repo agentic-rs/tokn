@@ -1,0 +1,29 @@
+[package]
+name = "llm-persistence"
+version = "0.1.0"
+edition = "2021"
+description = "Persistence layer (sqlite writers, migrations, archival) for the llm-router workspace"
+license = "MIT OR Apache-2.0"
+readme = "../../README.md"
+
+[features]
+default = ["lzma"]
+lzma = ["dep:lzma-rust2"]
+
+[dependencies]
+llm-core = { workspace = true }
+llm-headers = { workspace = true }
+bytes = { workspace = true }
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+snafu = { workspace = true }
+time = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+zstd = { workspace = true }
+lzma-rust2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+parking_lot = { workspace = true }
+uuid = { workspace = true }

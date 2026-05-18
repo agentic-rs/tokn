@@ -8,7 +8,7 @@ readme = "../../README.md"
 
 [features]
 default = ["lzma"]
-lzma = ["dep:lzma-rust2"]
+lzma = ["llm-persistence/lzma"]
 
 [[bin]]
 name = "llm-gateway"
@@ -21,6 +21,7 @@ llm-catalogue = { workspace = true }
 llm-convert = { workspace = true }
 llm-router = { workspace = true }
 llm-router2 = { workspace = true }
+llm-persistence = { workspace = true }
 llm-provider-copilot = { workspace = true }
 llm-provider-deepseek = { workspace = true }
 llm-provider-openai = { workspace = true }
@@ -49,7 +50,6 @@ rpassword = { workspace = true }
 rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sha2 = { workspace = true }
 snafu = { workspace = true }
 time = { workspace = true }
 tokio = { workspace = true }
@@ -61,5 +61,3 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-lzma-rust2 = { workspace = true, optional = true }
-zstd = { workspace = true }

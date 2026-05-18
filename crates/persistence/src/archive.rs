@@ -11,14 +11,14 @@ const RETENTION_DAYS: i64 = 7;
 const SCAN_INTERVAL: StdDuration = StdDuration::from_secs(6 * 60 * 60);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ArchiveStats {
+pub struct ArchiveStats {
   pub archived: usize,
   pub skipped_existing: usize,
   pub failed: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArchiveFormat {
+pub enum ArchiveFormat {
   Zstd,
   Xz,
 }
@@ -68,7 +68,7 @@ impl Default for ArchiveFormat {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum ArchiveEvent {
+pub enum ArchiveEvent {
   ScanStarted {
     dir: PathBuf,
   },
@@ -111,25 +111,25 @@ enum ArchiveBusMessage {
   Shutdown(oneshot::Sender<()>),
 }
 
-pub(crate) trait ArchiveEmitter: Send + Sync {
+pub trait ArchiveEmitter: Send + Sync {
   fn emit(&self, event: ArchiveEvent);
 }
 
 #[derive(Clone)]
-pub(crate) struct ArchiveEventBus {
+pub struct ArchiveEventBus {
   tx: mpsc::Sender<ArchiveBusMessage>,
 }
 
-pub(crate) struct ArchiveEventReceiver {
+pub struct ArchiveEventReceiver {
   rx: mpsc::Receiver<ArchiveBusMessage>,
 }
 
-pub(crate) trait ArchiveEventHandler: Send + 'static {
+pub trait ArchiveEventHandler: Send + 'static {
   fn handle(&mut self, event: &ArchiveEvent);
   fn flush(&mut self) {}
 }
 
-pub(crate) struct ArchiveRuntime {
+pub struct ArchiveRuntime {
   bus: ArchiveEventBus,
   worker: tokio::task::JoinHandle<()>,
   cancelled: Arc<AtomicBool>,
@@ -137,12 +137,12 @@ pub(crate) struct ArchiveRuntime {
 }
 
 impl ArchiveEventBus {
-  pub(crate) fn new(capacity: usize) -> (Self, ArchiveEventReceiver) {
+  pub fn new(capacity: usize) -> (Self, ArchiveEventReceiver) {
     let (tx, rx) = mpsc::channel(capacity.max(1));
     (Self { tx }, ArchiveEventReceiver { rx })
   }
 
-  pub(crate) async fn shutdown(&self) {
+  pub async fn shutdown(&self) {
     let (tx, rx) = oneshot::channel();
     let _ = self.tx.send(ArchiveBusMessage::Shutdown(tx)).await;
     let _ = rx.await;
@@ -166,7 +166,7 @@ impl ArchiveEventReceiver {
 }
 
 impl ArchiveRuntime {
-  pub(crate) async fn shutdown(self) {
+  pub async fn shutdown(self) {
     self.cancelled.store(true, Ordering::Relaxed);
     if let Err(err) = self.worker.await {
       if !err.is_cancelled() {
@@ -177,7 +177,7 @@ impl ArchiveRuntime {
   }
 }
 
-pub(crate) fn spawn_archive_event_loop(
+pub fn spawn_archive_event_loop(
   mut receiver: ArchiveEventReceiver,
   mut handlers: Vec<Box<dyn ArchiveEventHandler>>,
 ) -> std::thread::JoinHandle<()> {
@@ -208,7 +208,7 @@ pub(crate) fn spawn_archive_event_loop(
   })
 }
 
-pub(crate) fn start_request_archive_worker(
+pub fn start_request_archive_worker(
   requests_dir: PathBuf,
   archive_extension: Option<&str>,
   handlers: Vec<Box<dyn ArchiveEventHandler>>,
@@ -280,7 +280,7 @@ async fn wait_cancelled(cancelled: Arc<AtomicBool>) {
 }
 
 #[cfg(test)]
-pub(crate) fn archive_requests_once(
+pub fn archive_requests_once(
   dir: &Path,
   today: Date,
   retention_days: i64,
