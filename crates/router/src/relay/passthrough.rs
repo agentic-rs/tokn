@@ -65,14 +65,14 @@ pub(crate) async fn passthrough_buffered_response(
   s.events.emit(event);
 
   // Passthrough is single-attempt; emit the terminal RequestCompleted here.
-  s.events.emit(llm_core::event::Event::RequestCompleted {
+  s.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Completed {
     request_id: ctx.request_id.clone(),
     success: status.is_success(),
     total_attempts: ctx.attempt + 1,
     final_status: Some(status.as_u16()),
     total_latency_ms: ctx.started.elapsed().as_millis() as u64,
     error: None,
-  });
+  }));
 
   let response_body =
     maybe_compress_buffered_response(&ctx.downstream_headers, &mut downstream_headers, resp_body.clone())

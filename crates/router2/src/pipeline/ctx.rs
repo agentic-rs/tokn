@@ -9,6 +9,7 @@
 //! state we add later (timings, cancellation tokens, etc.).
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, StageEvent};
+use llm_core::event::Event as CoreEvent;
 use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -39,19 +40,19 @@ impl PipelineCtx {
 
   /// Publish a [`StageEvent`] tagged with the current request id and attempt.
   pub fn emit_known(&self, payload: StageEvent) {
-    self.events.emit(Event {
+    self.events.emit(CoreEvent::Router2(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
       payload: EventPayload::Known(payload),
-    });
+    }));
   }
 
   /// Publish a [`CustomEvent`] from inside a stage or decorator.
   pub fn emit_custom(&self, kind: &'static str, value: impl std::any::Any + Send + Sync) {
-    self.events.emit(Event {
+    self.events.emit(CoreEvent::Router2(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
       payload: EventPayload::Custom(CustomEvent::new(kind, value)),
-    });
+    }));
   }
 }

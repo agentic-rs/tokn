@@ -7,12 +7,13 @@ use axum::Router;
 use llm_auth::AuthStore;
 use llm_config::RouteMode;
 use llm_core::account::AccountConfig;
-use llm_core::event::{EventBus, EventHandler, EventReceiver};
+use llm_core::event::{EventBus, EventHandler};
 use std::future::Future;
 use std::io::IsTerminal;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 /// Build the event bus and its handlers. The DB event handler is included
 /// when usage recording is enabled. A TTY progress handler is attached
@@ -21,12 +22,13 @@ pub fn build_event_bus(
   cfg: &Config,
 ) -> Result<(
   Arc<EventBus>,
-  EventReceiver,
+  broadcast::Receiver<Arc<llm_core::event::Event>>,
   Vec<Box<dyn EventHandler>>,
   Option<ArchiveRuntime>,
 )> {
   let capacity = cfg.db.write_queue_capacity.max(256);
-  let (bus, receiver) = EventBus::new(capacity);
+  let bus = EventBus::new(capacity);
+  let receiver = bus.subscribe();
   let mut handlers: Vec<Box<dyn EventHandler>> = Vec::new();
   let mut archive_handlers: Vec<Box<dyn ArchiveEventHandler>> = Vec::new();
   let tty_progress = std::io::stdout().is_terminal();

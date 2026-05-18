@@ -154,7 +154,7 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-test", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
+    PipelineCtx::new("req-test", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
   }
 
   fn raw(headers: HeaderMap, body: Value) -> RawInbound {

@@ -143,7 +143,7 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx(endpoint: Endpoint) -> PipelineCtx {
-    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new()))
+    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))
   }
 
   fn response(status: u16, body: &'static str, content_type: &'static str) -> reqwest::Response {

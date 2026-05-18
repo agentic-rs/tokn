@@ -26,12 +26,14 @@ use clap::Args;
 use futures_util::StreamExt;
 use llm_config::RouteMode;
 use llm_router::api::AppState;
-use llm_router2::pipeline::stages::{BuiltHeaders, ConvertedRequest, ConvertedResponse, Resolved};
+use llm_router2::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
+use llm_router2::pipeline::stages::ConvertedResponse;
 use llm_router2::stages::{
   DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
   PoolResolve,
 };
 use llm_router2::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
+use llm_core::event::Event as CoreEvent;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -207,7 +209,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }
 
   // ---- Build the router2 profile ----
-  let bus = Arc::new(EventBus::new());
+  let bus = Arc::new(EventBus::new(256));
   subscribe_event_printer(&bus);
   // Capture per-stage outputs so we can render dry-run / failure reports
   // after `run` returns. The runner no longer carries partial state on
@@ -286,9 +288,9 @@ struct Captured {
 
 #[derive(Default, Clone)]
 struct CapturedSnapshot {
-  resolved: Option<Resolved>,
-  built_headers: Option<BuiltHeaders>,
-  converted_request: Option<ConvertedRequest>,
+  resolved: Option<ResolvedSummary>,
+  built_headers: Option<BuiltHeadersSummary>,
+  converted_request: Option<ConvertedRequestSummary>,
   attempts: Option<u32>,
 }
 
@@ -296,14 +298,25 @@ impl Captured {
   fn install(bus: &EventBus) -> Arc<Self> {
     let cap = Arc::new(Captured::default());
     let sink = cap.clone();
-    bus.subscribe(move |event: &Event| {
-      let mut snap = sink.inner.lock().unwrap();
-      match &event.payload {
-        EventPayload::Known(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
-        EventPayload::Known(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
-        EventPayload::Known(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
-        EventPayload::Known(StageEvent::Completed { attempts, .. }) => snap.attempts = Some(*attempts),
-        _ => {}
+    let mut rx = bus.subscribe();
+    tokio::spawn(async move {
+      loop {
+        match rx.recv().await {
+          Ok(arc) => {
+            if let CoreEvent::Router2(event) = &*arc {
+              let mut snap = sink.inner.lock().unwrap();
+              match &event.payload {
+                EventPayload::Known(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
+                EventPayload::Known(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
+                EventPayload::Known(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
+                EventPayload::Known(StageEvent::Completed { attempts, .. }) => snap.attempts = Some(*attempts),
+                _ => {}
+              }
+            }
+          }
+          Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+          Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+        }
       }
     });
     cap
@@ -315,8 +328,19 @@ impl Captured {
 }
 
 fn subscribe_event_printer(bus: &EventBus) {
-  bus.subscribe(|event: &Event| {
-    print_event(event);
+  let mut rx = bus.subscribe();
+  tokio::spawn(async move {
+    loop {
+      match rx.recv().await {
+        Ok(arc) => {
+          if let CoreEvent::Router2(event) = &*arc {
+            print_event(event);
+          }
+        }
+        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+      }
+    }
   });
 }
 
@@ -393,7 +417,7 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
         "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
         "headers": headers_json,
         "body": body_json,
-        "content_encoding": converted.and_then(|c| c.content_encoding.map(|e| e.as_str())),
+        "content_encoding": converted.and_then(|c| c.content_encoding.as_deref()),
       });
       println!("{}", serde_json::to_string_pretty(&report)?);
     }
@@ -417,8 +441,8 @@ fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: 
         }
       }
       if let Some(c) = converted {
-        if let Some(enc) = c.content_encoding {
-          println!("content-encoding: {}", enc.as_str());
+        if let Some(enc) = &c.content_encoding {
+          println!("content-encoding: {}", enc);
         }
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);
@@ -570,7 +594,7 @@ fn print_failure_outcome(
         "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
         "headers": headers_json,
         "body": body_json,
-        "content_encoding": converted_req.and_then(|c| c.content_encoding.map(|e| e.as_str())),
+        "content_encoding": converted_req.and_then(|c| c.content_encoding.as_deref()),
       });
       println!("{}", serde_json::to_string_pretty(&report)?);
     }
@@ -597,8 +621,8 @@ fn print_failure_outcome(
         }
       }
       if let Some(c) = converted_req {
-        if let Some(enc) = c.content_encoding {
-          println!("content-encoding: {}", enc.as_str());
+        if let Some(enc) = &c.content_encoding {
+          println!("content-encoding: {}", enc);
         }
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&*c.upstream_body)?);

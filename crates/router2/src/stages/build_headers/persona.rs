@@ -235,7 +235,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-bh", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
+    PipelineCtx::new("req-bh", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
   }
 
   #[tokio::test]

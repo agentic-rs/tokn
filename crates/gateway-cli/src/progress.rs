@@ -12,7 +12,7 @@ use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_core::db::Usage;
-use llm_core::event::{Event, EventHandler};
+use llm_core::event::{Event, EventHandler, RequestEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -336,9 +336,9 @@ impl Default for ProgressEventHandler {
 impl EventHandler for ProgressEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestStarted {
+      Event::Request(RequestEvent::Started {
         request_id, endpoint, ..
-      } => {
+      }) => {
         // Insert above the footer.
         let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
         bar.set_style(self.style.clone());
@@ -352,7 +352,7 @@ impl EventHandler for ProgressEventHandler {
         self.refresh(request_id);
         self.refresh_footer();
       }
-      Event::RequestParsed {
+      Event::Request(RequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -360,7 +360,7 @@ impl EventHandler for ProgressEventHandler {
         model,
         inbound_body,
         ..
-      } => {
+      }) => {
         if let Some(state) = self.bars.get_mut(request_id) {
           state.request.provider = provider_id.clone();
           state.request.model = model.clone();
@@ -370,9 +370,9 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::RequestRetry {
+      Event::Request(RequestEvent::Retry {
         request_id, attempt, ..
-      } => {
+      }) => {
         if let Some(state) = self.bars.get_mut(request_id) {
           // attempt N just failed; next try will be attempt+1.
           state.request.attempt = attempt + 1;
@@ -393,12 +393,12 @@ impl EventHandler for ProgressEventHandler {
         }
         self.refresh(request_id);
       }
-      Event::RequestResult {
+      Event::Request(RequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
         ..
-      } => {
+      }) => {
         if let Some(state) = self.bars.get_mut(request_id) {
           let body_len = inbound_resp_body.len() as u64;
           if body_len > state.request.recv_bytes {
@@ -407,14 +407,14 @@ impl EventHandler for ProgressEventHandler {
           state.request.usage = usage.clone();
         }
       }
-      Event::RequestCompleted {
+      Event::Request(RequestEvent::Completed {
         request_id,
         success,
         total_attempts,
         final_status,
         total_latency_ms,
         error,
-      } => {
+      }) => {
         if let Some(state) = self.bars.remove(request_id) {
           let final_msg = state.request.render_completed(
             request_id,
@@ -692,15 +692,15 @@ impl ProgressLogEventHandler {
 impl EventHandler for ProgressLogEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestStarted {
+      Event::Request(RequestEvent::Started {
         request_id, endpoint, ..
-      } => {
+      }) => {
         self
           .requests
           .insert(request_id.clone(), RequestState::new(endpoint_label(endpoint, None)));
         self.in_flight = self.in_flight.saturating_add(1);
       }
-      Event::RequestParsed {
+      Event::Request(RequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -708,7 +708,7 @@ impl EventHandler for ProgressLogEventHandler {
         model,
         inbound_body,
         ..
-      } => {
+      }) => {
         if let Some(state) = self.requests.get_mut(request_id) {
           state.provider = provider_id.clone();
           state.model = model.clone();
@@ -717,9 +717,9 @@ impl EventHandler for ProgressLogEventHandler {
           state.sent_bytes = inbound_body.len() as u64;
         }
       }
-      Event::RequestRetry {
+      Event::Request(RequestEvent::Retry {
         request_id, attempt, ..
-      } => {
+      }) => {
         if let Some(state) = self.requests.get_mut(request_id) {
           state.attempt = attempt + 1;
           state.recv_bytes = 0;
@@ -736,12 +736,12 @@ impl EventHandler for ProgressLogEventHandler {
           state.merge_usage(usage);
         }
       }
-      Event::RequestResult {
+      Event::Request(RequestEvent::Result {
         request_id,
         inbound_resp_body,
         usage,
         ..
-      } => {
+      }) => {
         if let Some(state) = self.requests.get_mut(request_id) {
           let body_len = inbound_resp_body.len() as u64;
           if body_len > state.recv_bytes {
@@ -750,14 +750,14 @@ impl EventHandler for ProgressLogEventHandler {
           state.usage = usage.clone();
         }
       }
-      Event::RequestCompleted {
+      Event::Request(RequestEvent::Completed {
         request_id,
         success,
         total_attempts,
         final_status,
         total_latency_ms,
         error,
-      } => {
+      }) => {
         if let Some(state) = self.requests.remove(request_id) {
           let line = state.render_completed(
             request_id,

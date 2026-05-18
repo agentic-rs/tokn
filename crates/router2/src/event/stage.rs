@@ -1,133 +1,86 @@
-//! Closed set of pipeline-observation events emitted by [`PipelineRunner`].
-//!
-//! Each per-stage variant carries the **stage's own output** directly. The
-//! cheap-to-clone stage outputs (`Extracted` wrapped in `Arc`, `Resolved`,
-//! `BuiltHeaders`, `ConvertedRequest`) are embedded as tuple-variant
-//! payloads so subscribers read them with one destructure.
-//!
-//! `Send` and `ConvertResponse` cannot embed their full outputs — the
-//! upstream `reqwest::Response` and SSE `BoxStream` are single-shot — so
-//! they expose the cloneable subset (status, headers, ...) via dedicated
-//! struct variants.
-//!
-//! Terminal events (`Error`, `Completed`) carry only their own minimal
-//! fields. Subscribers that need accumulated state fold prior per-stage
-//! events themselves — the runner no longer maintains a parallel snapshot
-//! and `PipelineRunner::run` returns only the final `ConvertedResponse` (or
-//! the originating `PipelineError`).
-//!
-//! [`PipelineRunner`]: crate::pipeline::PipelineRunner
+//! Conversions from router2's full stage-output structs into the cloneable
+//! `*Summary` types defined in `llm_core::router2_event`. The runner uses
+//! these `From` impls at emit time so subscribers receive llm-core types
+//! while stages keep operating on the richer router2-internal structs.
 
-use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
-use llm_core::provider::Endpoint;
-use llm_headers::HeaderMap;
-use serde_json::Value;
-use smol_str::SmolStr;
-use std::sync::Arc;
+use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, ConvertedResponse, Extracted, Resolved, SentResponse};
+use llm_core::router2_event::{
+  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
+  SentSummary,
+};
 
-/// Identifies which pipeline stage produced an event. Used both as a tag on
-/// success variants (implicit via the variant name) and as a field on
-/// [`StageEvent::Error`] so subscribers can filter without pattern-matching
-/// on N error variants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Stage {
-  Extract,
-  Resolve,
-  BuildHeaders,
-  ConvertRequest,
-  Send,
-  ConvertResponse,
-}
-
-impl Stage {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      Stage::Extract => "extract",
-      Stage::Resolve => "resolve",
-      Stage::BuildHeaders => "build_headers",
-      Stage::ConvertRequest => "convert_request",
-      Stage::Send => "send",
-      Stage::ConvertResponse => "convert_response",
+impl From<&Extracted> for ExtractedSummary {
+  fn from(e: &Extracted) -> Self {
+    Self {
+      client_id: e.client_id.clone(),
+      model: e.model.clone(),
+      stream: e.stream,
+      session_id: e.session_id.clone(),
+      project_id: e.project_id.clone(),
+      initiator: e.initiator.clone(),
+      header_initiator: e.header_initiator.clone(),
+      route_mode_hint: e.route_mode_hint.clone(),
+      headers: e.headers.clone(),
+      raw_body: e.raw_body.clone(),
+      decoded_body: e.decoded_body.clone(),
+      body_json: e.body_json.clone(),
     }
   }
 }
 
-impl std::fmt::Display for Stage {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.write_str(self.as_str())
+impl From<&Resolved> for ResolvedSummary {
+  fn from(r: &Resolved) -> Self {
+    Self {
+      client_id: r.client_id.clone(),
+      model: r.model.clone(),
+      upstream_model: r.upstream_model.clone(),
+      upstream_endpoint: r.upstream_endpoint,
+      account_id: r.account_id.clone(),
+      provider_id: r.provider_id.clone(),
+    }
   }
 }
 
-/// Cloneable subset of [`SentResponse`](crate::pipeline::stages::SentResponse).
-/// The full struct can't be cloned (it owns a single-shot `reqwest::Response`),
-/// so the `Send` event carries this summary instead.
-#[derive(Debug, Clone)]
-pub struct SentSummary {
-  pub status: u16,
-  pub headers: HeaderMap,
-  pub upstream_endpoint: Endpoint,
-  /// Mirrors the inbound `stream` flag — true iff the client asked for SSE.
-  pub stream: bool,
+impl From<&BuiltHeaders> for BuiltHeadersSummary {
+  fn from(h: &BuiltHeaders) -> Self {
+    Self {
+      headers: h.headers.clone(),
+      vars: h.vars.clone(),
+    }
+  }
 }
 
-/// Cloneable subset of [`ConvertedResponse`](crate::pipeline::stages::ConvertedResponse).
-/// `Buffered` shares the response's `Arc<Value>` body; `Stream` leaves
-/// `body` as `None` because the live SSE byte stream is single-shot.
-#[derive(Debug, Clone)]
-pub struct ConvertedResponseSummary {
-  pub status: u16,
-  pub headers: HeaderMap,
-  /// `Some` for buffered responses; `None` for streaming responses.
-  pub body: Option<Arc<Value>>,
+impl From<&ConvertedRequest> for ConvertedRequestSummary {
+  fn from(c: &ConvertedRequest) -> Self {
+    Self {
+      upstream_body: c.upstream_body.clone(),
+      upstream_wire_body: c.upstream_wire_body.clone(),
+      debug_outbound_body: c.debug_outbound_body.clone(),
+      content_encoding: c.content_encoding.map(|e| smol_str::SmolStr::new(e.as_str())),
+    }
+  }
 }
 
-#[derive(Debug, Clone)]
-pub enum StageEvent {
-  /// Emitted once at the very start of [`PipelineRunner::run`], before any
-  /// stage has produced output.
-  ///
-  /// [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
-  Started { endpoint: Endpoint },
-  /// Extract stage completed successfully. Carries the full
-  /// [`Extracted`] payload (wrapped in `Arc` so subscribers share the
-  /// same body bytes / JSON without extra clones).
-  Extract(Arc<Extracted>),
-  /// Resolve stage completed successfully.
-  Resolve(Resolved),
-  /// BuildHeaders stage completed successfully.
-  BuildHeaders(BuiltHeaders),
-  /// ConvertRequest stage completed successfully.
-  ConvertRequest(ConvertedRequest),
-  /// Send stage completed successfully. The full
-  /// [`SentResponse`](crate::pipeline::stages::SentResponse) is consumed by
-  /// the next stage; observers receive the cloneable [`SentSummary`].
-  Send(SentSummary),
-  /// ConvertResponse stage completed successfully. Buffered bodies are
-  /// shared via `Arc<Value>`; streaming bodies are not included on the
-  /// event (the live byte stream is single-shot).
-  ConvertResponse(ConvertedResponseSummary),
-  /// Any stage failure (or deliberate stop). `recoverable` and `stop` are
-  /// propagated verbatim from the [`PipelineError`] returned by the stage.
-  /// Subscribers that need partial state fold prior per-stage events
-  /// themselves; the event payload does not embed accumulated outputs.
-  ///
-  /// When `stop == true` the stage chose to halt the pipeline rather than
-  /// failing (e.g. a dry-run Send stub); callers should render whatever
-  /// they captured from prior events as a successful early termination.
-  ///
-  /// [`PipelineError`]: crate::pipeline::error::PipelineError
-  Error {
-    stage: Stage,
-    message: SmolStr,
-    recoverable: bool,
-    stop: bool,
-  },
-  /// Emitted once at the end of [`PipelineRunner::run`]. `success` is
-  /// `true` only when the pipeline produced a `ConvertedResponse`; both
-  /// real failures and deliberate stops set it to `false`. Subscribers
-  /// that care about the distinction read the preceding `Error` event's
-  /// `stop` flag.
-  ///
-  /// [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
-  Completed { success: bool, attempts: u32 },
+impl From<&SentResponse> for SentSummary {
+  fn from(s: &SentResponse) -> Self {
+    Self {
+      status: s.status,
+      headers: s.headers.clone(),
+      upstream_endpoint: s.upstream_endpoint,
+      stream: s.stream,
+    }
+  }
+}
+
+impl From<&ConvertedResponse> for ConvertedResponseSummary {
+  fn from(c: &ConvertedResponse) -> Self {
+    Self {
+      status: c.status(),
+      headers: c.headers().clone(),
+      body: match c {
+        ConvertedResponse::Buffered { body_json, .. } => Some(body_json.clone()),
+        ConvertedResponse::Stream { .. } => None,
+      },
+    }
+  }
 }

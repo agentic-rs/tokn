@@ -1,14 +1,63 @@
 use crate::db::{MessageRecord, SessionSource, Usage};
+use crate::router2_event::Router2Event;
 use bytes::Bytes;
 use llm_headers::HeaderMap;
-use tokio::sync::{mpsc, oneshot};
+use std::sync::{Arc, Mutex};
+use tokio::sync::{broadcast, oneshot};
 
-/// Events emitted by the router during request processing and account management.
+/// Top-level event flowing on the in-process broadcast bus.
+///
+/// Subdomain enums group related variants so consumers can `match` on the
+/// domain (lifecycle, account, session, router2) without listing every
+/// variant at the top level. Telemetry (`StreamProgress`) and control
+/// (`Shutdown`) stay at the top level — they're not lifecycle records.
+///
+/// Note: `Event` is **not** `Clone`. The bus broadcasts `Arc<Event>` so
+/// every subscriber sees the same allocation without copying the payload.
+/// If a subscriber needs to retain a subdomain payload it can clone the
+/// inner enum (e.g. `Router2Event`) which still derives `Clone`.
 #[derive(Debug)]
 pub enum Event {
-  // --- Request lifecycle ---
+  /// Inbound request lifecycle events.
+  Request(RequestEvent),
+  /// Account / pool lifecycle events.
+  Account(AccountEvent),
+  /// Session lifecycle events.
+  Session(SessionEvent),
+  /// Router2 pipeline stage events (relocated to `llm_core::router2_event`).
+  /// Embedded here so subscribers can observe router2 stages on the same
+  /// in-process bus that already carries the lifecycle events.
+  Router2(Router2Event),
+
+  // --- Control ---
+  /// Request graceful shutdown; sender receives `()` when drain is complete.
+  ///
+  /// Wrapped in `Mutex<Option<...>>` because `oneshot::Sender` is move-only
+  /// and the variant must be observable from `&Event` (we hand subscribers
+  /// `&*Arc<Event>`). The consumer that handles shutdown takes the sender
+  /// out of the slot and signals; other subscribers see the variant but
+  /// find the slot already drained. The outer `Arc<Event>` provides the
+  /// sharing — no additional `Arc` is needed inside.
+  Shutdown(Mutex<Option<oneshot::Sender<()>>>),
+
+  // --- Streaming progress (telemetry, not lifecycle) ---
+  /// Periodic progress update from an active streaming response.
+  StreamProgress {
+    request_id: String,
+    model: String,
+    endpoint: String,
+    usage: Usage,
+    bytes_streamed: u64,
+    chunks: u64,
+  },
+}
+
+/// Inbound request lifecycle. Each variant corresponds to a well-defined
+/// point in the gateway's per-request state machine.
+#[derive(Debug)]
+pub enum RequestEvent {
   /// Request accepted. Emitted before body decode/parse begins.
-  RequestStarted {
+  Started {
     request_id: String,
     ts: i64,
     endpoint: String,
@@ -20,7 +69,7 @@ pub enum Event {
   },
 
   /// Request headers parsed/classified (before body parse).
-  RequestHeaders {
+  Headers {
     request_id: String,
     ts: i64,
     endpoint_hint: Option<String>,
@@ -35,7 +84,7 @@ pub enum Event {
   },
 
   /// Request routed to an account, about to send upstream.
-  RequestParsed {
+  Parsed {
     request_id: String,
     /// Retry attempt number (0 = first attempt).
     attempt: u32,
@@ -56,7 +105,7 @@ pub enum Event {
   /// Carries the outbound request snapshot (method/url/headers/body) because
   /// in routed mode it only becomes known after the upstream send completes.
   /// Proxy passthrough also fills these for consistency.
-  RequestResponded {
+  Responded {
     request_id: String,
     /// Retry attempt number (0 = first attempt).
     attempt: u32,
@@ -79,7 +128,7 @@ pub enum Event {
   /// Per-attempt result with full response data.
   /// Emitted once per attempt (including retries).
   /// `request_id` is the base ID; `attempt` distinguishes retries.
-  RequestResult {
+  Result {
     request_id: String,
     /// Retry attempt number (0 = first attempt).
     attempt: u32,
@@ -101,7 +150,7 @@ pub enum Event {
 
   /// Overall request completed (terminal outcome for the whole request).
   /// Emitted exactly once per request, after all attempts.
-  RequestCompleted {
+  Completed {
     request_id: String,
     /// Whether the request ultimately succeeded.
     success: bool,
@@ -116,94 +165,79 @@ pub enum Event {
   },
 
   /// A single attempt failed and will be retried.
-  RequestRetry {
+  Retry {
     request_id: String,
     /// The attempt number that just failed.
     attempt: u32,
     error: String,
   },
+}
 
-  // --- Account / pool ---
+/// Account / pool lifecycle events.
+#[derive(Debug, Clone)]
+pub enum AccountEvent {
   /// An account was marked as failed and placed in cooldown.
-  AccountCooldown {
+  Cooldown {
     account: String,
     provider: String,
     cooldown_secs: u64,
   },
-
   /// An account recovered from cooldown.
-  AccountRecovered { account: String, provider: String },
-
-  /// A session was bound to an account.
-  SessionCreated { session_id: String, account: String },
-
-  /// A session expired or was evicted.
-  SessionExpired { session_id: String },
-
+  Recovered { account: String, provider: String },
   /// An upstream auth token was refreshed.
   TokenRefreshed { account: String, provider: String },
-
-  // --- Control ---
-  /// Request graceful shutdown; sender receives `()` when drain is complete.
-  Shutdown(oneshot::Sender<()>),
-
-  // --- Streaming progress ---
-  /// Periodic progress update from an active streaming response.
-  StreamProgress {
-    request_id: String,
-    model: String,
-    endpoint: String,
-    usage: Usage,
-    bytes_streamed: u64,
-    chunks: u64,
-  },
 }
 
-/// Non-blocking event emitter. Cloneable, stored in AppState.
+/// Session lifecycle events.
+#[derive(Debug, Clone)]
+pub enum SessionEvent {
+  /// A session was bound to an account.
+  Created { session_id: String, account: String },
+  /// A session expired or was evicted.
+  Expired { session_id: String },
+}
+
+/// Non-blocking event emitter backed by a tokio broadcast channel.
+///
+/// Cloneable; subscribers obtain independent [`broadcast::Receiver`]s via
+/// [`EventBus::subscribe`]. The channel carries `Arc<Event>` so every
+/// subscriber sees the same allocation without copying the payload.
+/// Emitting with no live subscribers is a no-op (the underlying `send`
+/// returns `Err`, which we swallow).
 #[derive(Clone)]
 pub struct EventBus {
-  tx: mpsc::Sender<Event>,
+  tx: broadcast::Sender<Arc<Event>>,
 }
 
 impl EventBus {
-  /// Create a new event bus with the given bounded channel capacity.
-  /// Returns the bus (producer side) and the receiver (consumer side).
-  pub fn new(capacity: usize) -> (Self, EventReceiver) {
-    let (tx, rx) = mpsc::channel(capacity.max(1));
-    (Self { tx }, EventReceiver { rx })
+  /// Create a new event bus with the given per-receiver channel capacity.
+  /// Slow receivers that fall more than `capacity` events behind will see
+  /// `RecvError::Lagged` on their next `recv()`.
+  pub fn new(capacity: usize) -> Self {
+    let (tx, _) = broadcast::channel(capacity.max(1));
+    Self { tx }
   }
 
-  /// Emit an event without blocking. Drops the event if the channel is full.
+  /// Subscribe to events. The returned receiver only sees events emitted
+  /// *after* it was created.
+  pub fn subscribe(&self) -> broadcast::Receiver<Arc<Event>> {
+    self.tx.subscribe()
+  }
+
+  /// Emit an event without blocking. The event is wrapped in an `Arc` so
+  /// subscribers share a single allocation. No-op if there are no
+  /// subscribers.
   pub fn emit(&self, event: Event) {
-    match self.tx.try_send(event) {
-      Ok(()) => {}
-      Err(mpsc::error::TrySendError::Full(_)) => {
-        tracing::warn!("event bus full, dropping event");
-      }
-      Err(mpsc::error::TrySendError::Closed(_)) => {
-        tracing::warn!("event bus closed, dropping event");
-      }
-    }
+    // broadcast::Sender::send returns Err only when there are no active
+    // receivers; treat that as "nobody listening" and drop quietly.
+    let _ = self.tx.send(Arc::new(event));
   }
 
   /// Gracefully shut down the event bus, waiting for the consumer to drain.
   pub async fn shutdown(&self) {
     let (tx, rx) = oneshot::channel();
-    // Best-effort; if the bus is full or closed, we just proceed.
-    let _ = self.tx.send(Event::Shutdown(tx)).await;
+    let _ = self.tx.send(Arc::new(Event::Shutdown(Mutex::new(Some(tx)))));
     let _ = rx.await;
-  }
-}
-
-/// Consumer side of the event bus. Passed to the background handler thread.
-pub struct EventReceiver {
-  rx: mpsc::Receiver<Event>,
-}
-
-impl EventReceiver {
-  /// Blocking receive. Intended for use in a dedicated OS thread.
-  pub fn blocking_recv(&mut self) -> Option<Event> {
-    self.rx.blocking_recv()
   }
 }
 
@@ -219,32 +253,46 @@ pub trait EventHandler: Send + 'static {
 /// A no-op event bus for contexts where events are not needed (e.g. tests).
 impl EventBus {
   pub fn noop() -> Self {
-    let (bus, _rx) = Self::new(1);
-    bus
+    Self::new(1)
   }
 }
 
-/// Spawn a background OS thread that consumes events and dispatches to handlers.
+/// Spawn a background OS thread that consumes events and dispatches to
+/// handlers sequentially. The thread owns a single broadcast receiver; all
+/// handlers see every event in arrival order.
+///
+/// Slow handlers can push the receiver into a `Lagged` state — when that
+/// happens we log a warning and continue draining.
 pub fn spawn_event_loop(
-  mut receiver: EventReceiver,
+  mut receiver: broadcast::Receiver<Arc<Event>>,
   mut handlers: Vec<Box<dyn EventHandler>>,
 ) -> std::thread::JoinHandle<()> {
   std::thread::spawn(move || {
     let mut flushed = false;
-    while let Some(event) = receiver.blocking_recv() {
-      if let Event::Shutdown(done) = event {
-        for handler in &mut handlers {
-          handler.flush();
+    loop {
+      match receiver.blocking_recv() {
+        Ok(event) => {
+          if let Event::Shutdown(slot) = &*event {
+            for handler in &mut handlers {
+              handler.flush();
+            }
+            flushed = true;
+            if let Some(done) = slot.lock().unwrap().take() {
+              let _ = done.send(());
+            }
+            break;
+          }
+          for handler in &mut handlers {
+            handler.handle(&event);
+          }
         }
-        flushed = true;
-        let _ = done.send(());
-        break;
-      }
-      for handler in &mut handlers {
-        handler.handle(&event);
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+          tracing::warn!("event loop lagged behind by {n} events");
+          continue;
+        }
+        Err(broadcast::error::RecvError::Closed) => break,
       }
     }
-    // Channel closed without shutdown event — flush anyway
     if !flushed {
       for handler in &mut handlers {
         handler.flush();

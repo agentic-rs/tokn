@@ -328,7 +328,7 @@ mod tests {
   fn build_state_allows_empty_accounts_in_passthrough_mode() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
-    let (bus, _rx) = EventBus::new(16);
+    let bus = EventBus::new(16);
 
     let state = build_state(&cfg, &[], Arc::new(bus)).expect("passthrough mode should allow empty accounts");
     assert_eq!(state.pool.len(), 0);
@@ -338,7 +338,7 @@ mod tests {
   fn build_state_rejects_empty_accounts_in_non_passthrough_mode() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Route;
-    let (bus, _rx) = EventBus::new(16);
+    let bus = EventBus::new(16);
 
     let res = build_state(&cfg, &[], Arc::new(bus));
     assert!(res.is_err(), "non-passthrough mode should require accounts");

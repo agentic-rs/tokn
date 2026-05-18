@@ -122,11 +122,24 @@ impl AccountSelector for EmptySelector {
 }
 
 fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
-  let bus = Arc::new(EventBus::new());
+  let bus = Arc::new(EventBus::new(256));
   let log: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
   {
     let log = log.clone();
-    bus.subscribe(move |ev| log.lock().unwrap().push(ev.clone()));
+    let mut rx = bus.subscribe();
+    tokio::spawn(async move {
+      loop {
+        match rx.recv().await {
+          Ok(arc) => {
+            if let llm_core::event::Event::Router2(ev) = &*arc {
+              log.lock().unwrap().push(ev.clone());
+            }
+          }
+          Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+          Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+        }
+      }
+    });
   }
   (bus, log)
 }
@@ -144,6 +157,24 @@ fn raw_chat(model: &str) -> RawInbound {
     body_json: body,
     request_id: Some(SmolStr::new("req-smoke-1")),
   }
+}
+
+async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::MutexGuard<'_, Vec<Event>> {
+  // Subscribers run on a spawned tokio task; yield until a `Completed`
+  // event is observed (every pipeline run ends with one).
+  for _ in 0..1000 {
+    {
+      let guard = log.lock().unwrap();
+      let done = guard
+        .iter()
+        .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::Completed { .. })));
+      if done {
+        return guard;
+      }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+  }
+  panic!("timed out waiting for Completed event");
 }
 
 fn known_kinds(events: &[Event]) -> Vec<&'static str> {
@@ -186,7 +217,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
   assert!(err.stop, "expected a stop error, got {err:?}");
   assert_eq!(err.stage, Stage::Send);
 
-  let events = log.lock().unwrap();
+  let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
     kinds,
@@ -250,7 +281,7 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
   assert!(!err.recoverable);
   assert!(!err.stop, "no-account is a real failure, not a stop");
 
-  let events = log.lock().unwrap();
+  let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(kinds, ["started", "extract", "error", "completed"]);
 
@@ -412,7 +443,7 @@ async fn full_pipeline_buffered_happy_path() {
 
   // Full happy-path event sequence: every stage fires exactly once,
   // followed by the terminal Completed marker.
-  let events = log.lock().unwrap();
+  let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
     kinds,
@@ -557,7 +588,7 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   // Subscribers fold prior per-stage events to recover the partial state
   // — the runner does not carry it on the return value any more. Every
   // earlier stage must have fired exactly once before the Error.
-  let events = log.lock().unwrap();
+  let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
     kinds,

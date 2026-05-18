@@ -107,7 +107,7 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx_at(endpoint: Endpoint) -> PipelineCtx {
-    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new()))
+    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))
   }
 
   fn ctx() -> PipelineCtx {

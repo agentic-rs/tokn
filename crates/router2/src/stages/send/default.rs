@@ -155,7 +155,7 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-send", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
+    PipelineCtx::new("req-send", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
   }
 
   fn extracted() -> Extracted {

@@ -77,7 +77,7 @@ fn write_record(usage: &mut usage::UsageDb, sessions: &mut Option<sessions::Sess
 
 // --- Event bus integration ---
 
-use llm_core::event::{Event, EventHandler};
+use llm_core::event::{Event, EventHandler, RequestEvent};
 use std::collections::HashMap;
 
 /// Partial request data accumulated from lifecycle events before completion.
@@ -146,7 +146,7 @@ impl DbEventHandler {
 impl EventHandler for DbEventHandler {
   fn handle(&mut self, event: &Event) {
     match event {
-      Event::RequestStarted {
+      Event::Request(RequestEvent::Started {
         request_id,
         ts,
         endpoint,
@@ -155,7 +155,7 @@ impl EventHandler for DbEventHandler {
         local_addr,
         method,
         url,
-      } => {
+      }) => {
         let inbound_req = HttpSnapshot {
           method: Some(method.clone()),
           url: url.clone(),
@@ -211,7 +211,7 @@ impl EventHandler for DbEventHandler {
           },
         );
       }
-      Event::RequestHeaders {
+      Event::Request(RequestEvent::Headers {
         request_id,
         ts,
         endpoint_hint,
@@ -223,7 +223,7 @@ impl EventHandler for DbEventHandler {
         mode,
         route_mode_hint: _,
         inbound_headers,
-      } => {
+      }) => {
         let endpoint = endpoint_hint.clone().or_else(|| path.clone()).unwrap_or_default();
         let pending_start = self.pending.get(&(request_id.clone(), 0)).cloned();
         let method = pending_start.as_ref().and_then(|p| p.method.as_deref());
@@ -296,7 +296,7 @@ impl EventHandler for DbEventHandler {
         }
         pending.inbound_req_headers = inbound_headers.clone();
       }
-      Event::RequestParsed {
+      Event::Request(RequestEvent::Parsed {
         request_id,
         attempt,
         account_id,
@@ -306,7 +306,7 @@ impl EventHandler for DbEventHandler {
         initiator,
         behave_as,
         inbound_body,
-      } => {
+      }) => {
         // For retry attempts, clone from the base (attempt 0) entry
         let key = (request_id.clone(), *attempt);
         if *attempt > 0 && !self.pending.contains_key(&key) {
@@ -344,7 +344,7 @@ impl EventHandler for DbEventHandler {
           }
         }
       }
-      Event::RequestResponded {
+      Event::Request(RequestEvent::Responded {
         request_id,
         attempt,
         outbound_status,
@@ -354,7 +354,7 @@ impl EventHandler for DbEventHandler {
         outbound_req_url,
         outbound_req_headers,
         outbound_req_body,
-      } => {
+      }) => {
         let key = (request_id.clone(), *attempt);
         if let Some(p) = self.pending.get_mut(&key) {
           p.latency_header_ms = Some(*latency_ms);
@@ -388,7 +388,7 @@ impl EventHandler for DbEventHandler {
           }
         }
       }
-      Event::RequestResult {
+      Event::Request(RequestEvent::Result {
         request_id,
         attempt,
         session_source,
@@ -400,7 +400,7 @@ impl EventHandler for DbEventHandler {
         inbound_resp_body,
         outbound_resp_body,
         messages,
-      } => {
+      }) => {
         let key = (request_id.clone(), *attempt);
         let composite_id = if *attempt == 0 {
           request_id.clone()
@@ -515,13 +515,13 @@ impl EventHandler for DbEventHandler {
         }
         write_record(&mut self.usage, &mut self.sessions, &record);
       }
-      Event::RequestCompleted {
+      Event::Request(RequestEvent::Completed {
         request_id,
         success,
         final_status,
         error,
         ..
-      } => {
+      }) => {
         if !success {
           let key = (request_id.clone(), 0);
           if let Some(p) = self.pending.get(&key).cloned().filter(|p| !p.result_written) {
@@ -591,7 +591,7 @@ impl EventHandler for DbEventHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::event::{Event, EventHandler};
+  use llm_core::event::{Event, EventHandler, RequestEvent};
   use llm_headers::HeaderMap;
   use rusqlite::{params, Connection};
 
@@ -614,7 +614,7 @@ mod tests {
   }
 
   fn started(req_id: &str, ts: i64) -> Event {
-    Event::RequestStarted {
+    Event::Request(RequestEvent::Started {
       request_id: req_id.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -623,11 +623,11 @@ mod tests {
       local_addr: Some("127.0.0.1:4141".into()),
       method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
-    }
+    })
   }
 
   fn started_without_peer(req_id: &str, ts: i64) -> Event {
-    Event::RequestStarted {
+    Event::Request(RequestEvent::Started {
       request_id: req_id.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -636,11 +636,11 @@ mod tests {
       local_addr: None,
       method: "POST".into(),
       url: Some("https://example.test/v1/responses".into()),
-    }
+    })
   }
 
   fn parsed(req_id: &str, attempt: u32) -> Event {
-    Event::RequestParsed {
+    Event::Request(RequestEvent::Parsed {
       request_id: req_id.into(),
       attempt,
       account_id: "acct".into(),
@@ -650,11 +650,11 @@ mod tests {
       initiator: "user".into(),
       behave_as: Some("architect".into()),
       inbound_body: bytes::Bytes::new(),
-    }
+    })
   }
 
   fn headers(req_id: &str, ts: i64) -> Event {
-    Event::RequestHeaders {
+    Event::Request(RequestEvent::Headers {
       request_id: req_id.into(),
       ts,
       endpoint_hint: Some("responses".into()),
@@ -666,11 +666,11 @@ mod tests {
       mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: HeaderMap::new(),
-    }
+    })
   }
 
   fn result(req_id: &str, attempt: u32, status: u16, error: Option<&str>) -> Event {
-    Event::RequestResult {
+    Event::Request(RequestEvent::Result {
       request_id: req_id.into(),
       attempt,
       session_source: SessionSource::Header,
@@ -682,11 +682,11 @@ mod tests {
       inbound_resp_body: bytes::Bytes::new(),
       outbound_resp_body: None,
       messages: vec![],
-    }
+    })
   }
 
   fn responded(req_id: &str, attempt: u32, latency_ms: u64) -> Event {
-    Event::RequestResponded {
+    Event::Request(RequestEvent::Responded {
       request_id: req_id.into(),
       attempt,
       outbound_status: 200,
@@ -696,7 +696,7 @@ mod tests {
       outbound_req_url: None,
       outbound_req_headers: None,
       outbound_req_body: None,
-    }
+    })
   }
 
   fn completed(
@@ -706,14 +706,14 @@ mod tests {
     final_status: Option<u16>,
     error: Option<&str>,
   ) -> Event {
-    Event::RequestCompleted {
+    Event::Request(RequestEvent::Completed {
       request_id: req_id.into(),
       success,
       total_attempts,
       final_status,
       total_latency_ms: 100,
       error: error.map(str::to_string),
-    }
+    })
   }
 
   /// Open all `*.db` files in requests dir and return selected request row fields.
@@ -954,7 +954,7 @@ mod tests {
     let req = "req-headers";
     let ts = 1_700_000_000;
     let mut event = headers(req, ts);
-    if let Event::RequestHeaders { inbound_headers, .. } = &mut event {
+    if let Event::Request(RequestEvent::Headers { inbound_headers, .. }) = &mut event {
       inbound_headers.insert("x-test", "1");
     }
 
@@ -1073,11 +1073,11 @@ mod tests {
     h.handle(&started(req, ts));
     // Attempt 0: fails
     h.handle(&parsed(req, 0));
-    h.handle(&Event::RequestRetry {
+    h.handle(&Event::Request(RequestEvent::Retry {
       request_id: req.into(),
       attempt: 0,
       error: "upstream 500".into(),
-    });
+    }));
     h.handle(&result(req, 0, 500, Some("upstream 500")));
     // Attempt 1: succeeds
     h.handle(&parsed(req, 1));
@@ -1110,11 +1110,11 @@ mod tests {
     h.handle(&started(req, ts));
     for attempt in 0..3u32 {
       h.handle(&parsed(req, attempt));
-      h.handle(&Event::RequestRetry {
+      h.handle(&Event::Request(RequestEvent::Retry {
         request_id: req.into(),
         attempt,
         error: format!("err-{attempt}"),
-      });
+      }));
       h.handle(&result(req, attempt, 500, Some(&format!("err-{attempt}"))));
     }
     h.handle(&completed(req, false, 3, None, Some("all attempts failed")));
@@ -1197,7 +1197,7 @@ mod tests {
     let ts: i64 = 1_700_000_000;
 
     // --- 1. RequestStarted ---------------------------------------------------
-    let started = Event::RequestStarted {
+    let started = Event::Request(RequestEvent::Started {
       request_id: req.into(),
       ts,
       endpoint: "chat_completions".into(),
@@ -1206,7 +1206,7 @@ mod tests {
       local_addr: Some("127.0.0.1:4141".into()),
       method: "POST".into(),
       url: Some("https://upstream.test/v1/responses".into()),
-    };
+    });
     h.handle(&started);
     {
       let row = fetch_row_map(&dir, req);
@@ -1241,7 +1241,7 @@ mod tests {
     // --- 2. RequestHeaders ---------------------------------------------------
     let mut inbound_headers = HeaderMap::new();
     inbound_headers.insert("x-request-id", "abc-123");
-    let headers_event = Event::RequestHeaders {
+    let headers_event = Event::Request(RequestEvent::Headers {
       request_id: req.into(),
       ts,
       endpoint_hint: Some("responses".into()),
@@ -1253,7 +1253,7 @@ mod tests {
       mode: Some("route".into()),
       route_mode_hint: Some("route".into()),
       inbound_headers: inbound_headers.clone(),
-    };
+    });
     h.handle(&headers_event);
     {
       let row = fetch_row_map(&dir, req);
@@ -1280,7 +1280,7 @@ mod tests {
     }
 
     // --- 3. RequestParsed ----------------------------------------------------
-    let parsed_event = Event::RequestParsed {
+    let parsed_event = Event::Request(RequestEvent::Parsed {
       request_id: req.into(),
       attempt: 0,
       account_id: "acct-full".into(),
@@ -1290,7 +1290,7 @@ mod tests {
       initiator: "user".into(),
       behave_as: Some("architect".into()),
       inbound_body: bytes::Bytes::from_static(b"{\"hello\":\"world\"}"),
-    };
+    });
     h.handle(&parsed_event);
     {
       let row = fetch_row_map(&dir, req);
@@ -1316,7 +1316,7 @@ mod tests {
     outbound_resp_headers.insert("x-upstream", "yes");
     let mut outbound_req_headers = HeaderMap::new();
     outbound_req_headers.insert("x-custom", "yes");
-    let responded_event = Event::RequestResponded {
+    let responded_event = Event::Request(RequestEvent::Responded {
       request_id: req.into(),
       attempt: 0,
       outbound_status: 201,
@@ -1326,7 +1326,7 @@ mod tests {
       outbound_req_url: Some("https://upstream.test/v1/chat".into()),
       outbound_req_headers: Some(outbound_req_headers.clone()),
       outbound_req_body: Some(bytes::Bytes::from_static(b"{\"out\":true}")),
-    };
+    });
     h.handle(&responded_event);
     {
       let row = fetch_row_map(&dir, req);
@@ -1357,7 +1357,7 @@ mod tests {
         reasoning: Some(4),
       },
     };
-    let result_event = Event::RequestResult {
+    let result_event = Event::Request(RequestEvent::Result {
       request_id: req.into(),
       attempt: 0,
       session_source: SessionSource::Header,
@@ -1369,7 +1369,7 @@ mod tests {
       inbound_resp_body: bytes::Bytes::from_static(b"{\"ok\":true}"),
       outbound_resp_body: Some(bytes::Bytes::from_static(b"{\"upstream\":\"body\"}")),
       messages: vec![],
-    };
+    });
     h.handle(&result_event);
     {
       let row = fetch_row_map(&dir, req);
@@ -1402,14 +1402,14 @@ mod tests {
     }
 
     // --- 6. RequestCompleted (success) --------------------------------------
-    let completed_event = Event::RequestCompleted {
+    let completed_event = Event::Request(RequestEvent::Completed {
       request_id: req.into(),
       success: true,
       total_attempts: 1,
       final_status: Some(200),
       total_latency_ms: 200,
       error: None,
-    };
+    });
     h.handle(&completed_event);
     {
       // Row should remain intact; RequestCompleted only cleans up pending state

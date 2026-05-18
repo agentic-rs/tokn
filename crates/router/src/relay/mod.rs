@@ -33,7 +33,7 @@ mod tests {
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
-  use llm_core::event::{Event, EventBus, EventHandler};
+  use llm_core::event::{Event, EventBus, EventHandler, RequestEvent};
   use reqwest::ResponseBuilderExt;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
@@ -61,7 +61,7 @@ mod tests {
   impl EventHandler for CollectingHandler {
     fn handle(&mut self, event: &Event) {
       match event {
-        Event::RequestStarted {
+        Event::Request(RequestEvent::Started {
           request_id,
           ts,
           endpoint,
@@ -69,7 +69,7 @@ mod tests {
           method,
           url,
           ..
-        } => {
+        }) => {
           self.pending.insert(
             (request_id.clone(), 0),
             CallRecord {
@@ -105,7 +105,7 @@ mod tests {
             },
           );
         }
-        Event::RequestParsed {
+        Event::Request(RequestEvent::Parsed {
           request_id,
           attempt,
           account_id,
@@ -115,7 +115,7 @@ mod tests {
           initiator,
           behave_as,
           inbound_body,
-        } => {
+        }) => {
           // Retry attempts: clone from base entry (attempt 0)
           let key = (request_id.clone(), *attempt);
           if *attempt > 0 && !self.pending.contains_key(&key) {
@@ -139,7 +139,7 @@ mod tests {
             }
           }
         }
-        Event::RequestResult {
+        Event::Request(RequestEvent::Result {
           request_id,
           attempt,
           session_source,
@@ -151,7 +151,7 @@ mod tests {
           inbound_resp_body,
           outbound_resp_body,
           messages,
-        } => {
+        }) => {
           let key = (request_id.clone(), *attempt);
           let composite_id = if *attempt == 0 {
             request_id.clone()
@@ -206,7 +206,7 @@ mod tests {
           r.messages = messages.clone();
           self.records.lock().unwrap().push(r);
         }
-        Event::RequestResponded {
+        Event::Request(RequestEvent::Responded {
           request_id,
           attempt,
           latency_ms,
@@ -216,7 +216,7 @@ mod tests {
           outbound_req_url,
           outbound_req_headers,
           outbound_req_body,
-        } => {
+        }) => {
           let key = (request_id.clone(), *attempt);
           if let Some(r) = self.pending.get_mut(&key) {
             r.latency_header_ms = Some(*latency_ms);
@@ -247,7 +247,11 @@ mod tests {
   fn test_event_bus() -> (Arc<EventBus>, Records) {
     let records: Records = Arc::new(Mutex::new(Vec::new()));
     let handler = CollectingHandler::new(records.clone());
-    let (bus, receiver) = EventBus::new(64);
+    let (bus, receiver) = {
+      let bus = EventBus::new(64);
+      let rx = bus.subscribe();
+      (bus, rx)
+    };
     llm_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
     (Arc::new(bus), records)
   }
@@ -386,11 +390,11 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response_body(Some(&resp_body))
     .build();
-    if let llm_core::event::Event::RequestResult {
+    if let llm_core::event::Event::Request(llm_core::event::RequestEvent::Result {
       session_source,
       messages,
       ..
-    } = &event
+    }) = &event
     {
       assert_eq!(*session_source, SessionSource::Auto);
       assert!(messages
@@ -418,12 +422,12 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    if let llm_core::event::Event::RequestResult {
+    if let llm_core::event::Event::Request(llm_core::event::RequestEvent::Result {
       session_source,
       request_id,
       request_error,
       ..
-    } = &event
+    }) = &event
     {
       assert_eq!(*session_source, SessionSource::Header);
       assert_eq!(request_id, "request-123");
@@ -493,7 +497,7 @@ mod tests {
     assert_eq!(ctx.request_id, request_id);
 
     // Emit lifecycle events as caller would
-    state.events.emit(llm_core::event::Event::RequestStarted {
+    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Started {
       request_id: ctx.request_id.clone(),
       ts: 0,
       endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
@@ -502,8 +506,8 @@ mod tests {
       local_addr: Some("127.0.0.1:4141".into()),
       method: "POST".into(),
       url: Some("https://api.openai.com/v1/chat/completions".into()),
-    });
-    state.events.emit(llm_core::event::Event::RequestParsed {
+    }));
+    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Parsed {
       request_id: ctx.request_id.clone(),
       attempt: 0,
       account_id: "passthrough".to_string(),
@@ -513,8 +517,8 @@ mod tests {
       initiator: "user".to_string(),
       behave_as: None,
       inbound_body: req_body.clone(),
-    });
-    state.events.emit(llm_core::event::Event::RequestResponded {
+    }));
+    state.events.emit(llm_core::event::Event::Request(llm_core::event::RequestEvent::Responded {
       request_id: ctx.request_id.clone(),
       attempt: 0,
       outbound_status: 200,
@@ -524,7 +528,7 @@ mod tests {
       outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
       outbound_req_headers: Some((&req_headers).into()),
       outbound_req_body: Some(req_body.clone()),
-    });
+    }));
 
     // Set up a mock upstream server
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

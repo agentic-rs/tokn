@@ -33,7 +33,7 @@ pub mod ctx;
 pub mod error;
 pub mod stages;
 
-use crate::event::{ConvertedResponseSummary, EventBus, SentSummary, StageEvent};
+use crate::event::{EventBus, StageEvent};
 use crate::profile::Profile;
 use ctx::PipelineCtx;
 use error::PipelineError;
@@ -74,11 +74,8 @@ impl PipelineRunner {
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
       Ok(e) => {
-        // Wrap once in an Arc so both the event and downstream stage
-        // calls share the same value without cloning the body.
-        let arc = Arc::new(e);
-        ctx.emit_known(StageEvent::Extract(arc.clone()));
-        arc
+        ctx.emit_known(StageEvent::Extract((&e).into()));
+        e
       }
       Err(err) => return Err(self.fail(&ctx, err)),
     };
@@ -86,7 +83,7 @@ impl PipelineRunner {
     // ---- Resolve ----
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
-        ctx.emit_known(StageEvent::Resolve(r.clone()));
+        ctx.emit_known(StageEvent::Resolve((&r).into()));
         r
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -100,7 +97,7 @@ impl PipelineRunner {
       .await
     {
       Ok(h) => {
-        ctx.emit_known(StageEvent::BuildHeaders(h.clone()));
+        ctx.emit_known(StageEvent::BuildHeaders((&h).into()));
         h
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -114,7 +111,7 @@ impl PipelineRunner {
       .await
     {
       Ok(c) => {
-        ctx.emit_known(StageEvent::ConvertRequest(c.clone()));
+        ctx.emit_known(StageEvent::ConvertRequest((&c).into()));
         c
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -131,12 +128,7 @@ impl PipelineRunner {
         // SentResponse owns a single-shot reqwest::Response; emit its
         // cloneable subset for observers and pass the full struct on to
         // ConvertResponse.
-        ctx.emit_known(StageEvent::Send(SentSummary {
-          status: s.status,
-          headers: s.headers.clone(),
-          upstream_endpoint: s.upstream_endpoint,
-          stream: s.stream,
-        }));
+        ctx.emit_known(StageEvent::Send((&s).into()));
         s
       }
       Err(err) => return Err(self.fail(&ctx, err)),
@@ -147,15 +139,7 @@ impl PipelineRunner {
       Ok(c) => {
         // Build the summary before moving `c` to the caller — body (when
         // buffered) is shared via the same Arc<Value>.
-        let summary = ConvertedResponseSummary {
-          status: c.status(),
-          headers: c.headers().clone(),
-          body: match &c {
-            ConvertedResponse::Buffered { body_json, .. } => Some(body_json.clone()),
-            ConvertedResponse::Stream { .. } => None,
-          },
-        };
-        ctx.emit_known(StageEvent::ConvertResponse(summary));
+        ctx.emit_known(StageEvent::ConvertResponse((&c).into()));
         c
       }
       Err(err) => return Err(self.fail(&ctx, err)),

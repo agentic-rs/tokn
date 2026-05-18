@@ -1,7 +1,7 @@
 use crate::db::{MessageRecord, PartRecord, SessionSource, Usage};
 use crate::provider::Endpoint;
 use bytes::Bytes;
-use llm_core::event::Event;
+use llm_core::event::{Event, RequestEvent};
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Instant;
@@ -109,7 +109,7 @@ impl CompletedEventBuilder {
       SessionSource::Auto
     };
 
-    Event::RequestResult {
+    Event::Request(RequestEvent::Result {
       request_id: self.request_id,
       attempt: self.attempt,
       session_source,
@@ -121,7 +121,7 @@ impl CompletedEventBuilder {
       inbound_resp_body: clip_body(&self.inbound_resp_body, self.max),
       outbound_resp_body: self.outbound_resp_body.map(|b| clip_body(&b, self.max)),
       messages,
-    }
+    })
   }
 }
 
