@@ -16,11 +16,19 @@ use llm_core::provider::{
 };
 use llm_core::provider::error;
 use serde_json::Value;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// One-shot canned response or error returned by [`MockProvider::chat`].
+/// Stored behind a [`Mutex`] because the trait method takes `&self`.
+enum ChatScript {
+  Response(reqwest::Response),
+  Error(Box<dyn FnOnce() -> error::Error + Send + Sync>),
+}
 
 pub struct MockProvider {
   info: ProviderInfo,
   transformer: Option<Box<dyn InputTransformer>>,
+  chat_script: Mutex<Option<ChatScript>>,
 }
 
 impl MockProvider {
@@ -41,11 +49,27 @@ impl MockProvider {
         model_cache: Arc::new(ModelCache::default()),
       },
       transformer: None,
+      chat_script: Mutex::new(None),
     }
   }
 
   pub fn with_transformer(mut self, t: impl InputTransformer + 'static) -> Self {
     self.transformer = Some(Box::new(t));
+    self
+  }
+
+  /// Arm the next [`Provider::chat`] call to return `resp`.
+  pub fn with_chat_response(self, resp: reqwest::Response) -> Self {
+    *self.chat_script.lock().unwrap() = Some(ChatScript::Response(resp));
+    self
+  }
+
+  /// Arm the next [`Provider::chat`] call to return the error built by `f`.
+  pub fn with_chat_error<F>(self, f: F) -> Self
+  where
+    F: FnOnce() -> error::Error + Send + Sync + 'static,
+  {
+    *self.chat_script.lock().unwrap() = Some(ChatScript::Error(Box::new(f)));
     self
   }
 }
@@ -65,7 +89,11 @@ impl Provider for MockProvider {
     Ok(Value::Null)
   }
   async fn chat(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
-    unimplemented!("MockProvider::chat: tests should not invoke Send stage")
+    match self.chat_script.lock().unwrap().take() {
+      Some(ChatScript::Response(r)) => Ok(r),
+      Some(ChatScript::Error(f)) => Err(f()),
+      None => unimplemented!("MockProvider::chat: no script armed; call with_chat_response/with_chat_error"),
+    }
   }
 }
 

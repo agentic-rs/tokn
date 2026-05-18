@@ -1,19 +1,19 @@
-//! `gateway smoke send` — drives the router2 pipeline front-half end-to-end.
+//! `gateway smoke send` — drives the router2 pipeline end-to-end.
 //!
-//! PR3a scope:
-//! - Builds a router2 [`Profile::without_send`] from the live `AppState`
-//!   (account pool + route resolver). The four real stages are
-//!   [`DefaultExtract`], [`PoolResolve`] backed by a [`PoolAccountSelector`],
-//!   [`PersonaBuildHeaders::with_opencode_default`], and
-//!   [`DefaultConvertRequest`].
-//! - Subscribes a printer to the [`EventBus`] so every `StageEvent` is
-//!   surfaced as a single labeled line on stdout. The legacy axum dispatch
-//!   path is gone; the runner is the single source of truth.
-//! - Prints the outbound preview (headers + body) from
+//! Two modes:
+//!
+//! * `--dry-run` builds a [`Profile::without_send`] and stops after
+//!   `ConvertRequest`, printing the outbound preview (headers + body) from
 //!   [`PipelineOutcome::built_headers`] + [`PipelineOutcome::converted_request`].
-//! - The real network call (Send + ConvertResponse) is **not** wired yet —
-//!   that lands in PR3b. Until then a non-`--dry-run` invocation exits with a
-//!   "not yet implemented" error after the front-half completes.
+//!   Useful for inspecting what would be sent without touching the network.
+//! * Default (live) mode builds a [`Profile::full`] with [`DefaultSend`] and
+//!   [`DefaultConvertResponse`] and contacts the upstream provider. The
+//!   response is either printed as a buffered JSON payload or streamed
+//!   chunk-by-chunk to stdout (curl `-N` style).
+//!
+//! In both modes every [`StageEvent`] is mirrored to stdout via a
+//! subscriber on the router2 [`EventBus`], so the user can see the pipeline
+//! progress in real time.
 
 use super::OutputFormat;
 use crate::cli::config_cmd::RouteModeArg;
@@ -22,17 +22,21 @@ use crate::provider::Endpoint;
 use anyhow::{anyhow, Result};
 use bytes::Bytes;
 use clap::Args;
+use futures_util::StreamExt;
 use llm_config::RouteMode;
 use llm_router::api::AppState;
+use llm_router2::pipeline::stages::ConvertedResponse;
 use llm_router2::stages::{
-  DefaultConvertRequest, DefaultExtract, PersonaBuildHeaders, PoolAccountSelector, PoolResolve,
+  DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
+  PoolResolve,
 };
 use llm_router2::{
-  Event, EventBus, EventPayload, PipelineRunner, Profile, RawInbound, RunnerOptions, Stage, StageEvent,
+  Event, EventBus, EventPayload, PipelineOutcome, PipelineRunner, Profile, RawInbound, RunnerOptions, Stage, StageEvent,
 };
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
 pub enum EndpointArg {
@@ -73,15 +77,14 @@ pub struct SendArgs {
   #[arg(long, value_enum, default_value_t = EndpointArg::ChatCompletions)]
   pub endpoint: EndpointArg,
 
-  /// Request streaming SSE response. Currently informational only — the
-  /// router2 front-half does not start a stream; PR3b will wire this through
-  /// the real Send stage.
+  /// Request streaming SSE response. The response is forwarded chunk-by-
+  /// chunk to stdout as it arrives from upstream.
   #[arg(long)]
   pub stream: bool,
 
   /// Build and print outbound headers/body without contacting upstream.
-  /// In PR3a this is the only supported mode; omitting it is reserved for
-  /// PR3b.
+  /// Equivalent to running the pipeline up to (and including)
+  /// `ConvertRequest` and stopping; nothing is sent.
   #[arg(long)]
   pub dry_run: bool,
 
@@ -173,12 +176,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
       }
       v
     }
-    None => build_request_body(
-      endpoint,
-      &model,
-      args.message.as_deref().unwrap_or(""),
-      args.stream,
-    ),
+    None => build_request_body(endpoint, &model, args.message.as_deref().unwrap_or(""), args.stream),
   };
   let body_bytes = Bytes::from(serde_json::to_vec(&body_value)?);
   let headers = build_inbound_headers(&args.headers)?;
@@ -201,18 +199,33 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   subscribe_event_printer(&bus);
 
   let selector = Arc::new(PoolAccountSelector::new(state.pool.clone(), state.route.clone()));
-  let profile = Arc::new(Profile::without_send(
-    "gateway-smoke",
-    Arc::new(DefaultExtract),
-    Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
-    Arc::new(DefaultConvertRequest),
-  ));
-  let runner = PipelineRunner::with_options(
-    profile,
-    bus.clone(),
-    RunnerOptions::stop_after(Stage::ConvertRequest),
-  );
+  let extract = Arc::new(DefaultExtract);
+  let resolve = Arc::new(PoolResolve::new(selector));
+  let build_headers = Arc::new(PersonaBuildHeaders::with_opencode_default());
+  let convert_request = Arc::new(DefaultConvertRequest);
+
+  let (profile, options) = if args.dry_run {
+    let profile = Arc::new(Profile::without_send(
+      "gateway-smoke",
+      extract,
+      resolve,
+      build_headers,
+      convert_request,
+    ));
+    (profile, RunnerOptions::stop_after(Stage::ConvertRequest))
+  } else {
+    let profile = Arc::new(Profile::full(
+      "gateway-smoke",
+      extract,
+      resolve,
+      build_headers,
+      convert_request,
+      Arc::new(DefaultSend::new(state.http.clone())),
+      Arc::new(DefaultConvertResponse::new()),
+    ));
+    (profile, RunnerOptions::default())
+  };
+  let runner = PipelineRunner::with_options(profile, bus.clone(), options);
 
   let raw = RawInbound {
     endpoint,
@@ -240,12 +253,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     anyhow::bail!("pipeline failed: {err}");
   }
 
-  print_outcome(&outcome, args.format)?;
-
-  if !args.dry_run {
-    anyhow::bail!(
-      "real upstream send is not implemented yet (PR3b); rerun with --dry-run to inspect the outbound preview"
-    );
+  if args.dry_run {
+    print_dry_run_outcome(&outcome, args.format)?;
+  } else {
+    print_live_outcome(outcome, args.format).await?;
   }
 
   Ok(())
@@ -262,7 +273,11 @@ fn print_event(event: &Event) {
     EventPayload::Known(StageEvent::Started { endpoint }) => {
       println!("[started]          endpoint={endpoint}");
     }
-    EventPayload::Known(StageEvent::Extract { client_id, model, stream }) => {
+    EventPayload::Known(StageEvent::Extract {
+      client_id,
+      model,
+      stream,
+    }) => {
       let cid = client_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
       println!("[extract]          model={model} stream={stream} client_id={cid}");
     }
@@ -307,19 +322,15 @@ fn print_event(event: &Event) {
   }
 }
 
-fn print_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat) -> Result<()> {
+fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat) -> Result<()> {
   let resolved = outcome.resolved.as_ref();
   let headers = outcome.built_headers.as_ref();
   let converted = outcome.converted_request.as_ref();
 
   match format {
     OutputFormat::Json => {
-      let headers_json = headers
-        .map(|h| headers_json_value(&h.headers))
-        .unwrap_or(Value::Null);
-      let body_json = converted
-        .map(|c| c.upstream_body.clone())
-        .unwrap_or(Value::Null);
+      let headers_json = headers.map(|h| headers_json_value(&h.headers)).unwrap_or(Value::Null);
+      let body_json = converted.map(|c| c.upstream_body.clone()).unwrap_or(Value::Null);
       let report = serde_json::json!({
         "dry_run": true,
         "attempts": outcome.attempts,
@@ -357,6 +368,113 @@ fn print_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat) -
         }
         println!("body:");
         println!("{}", serde_json::to_string_pretty(&c.upstream_body)?);
+      }
+    }
+  }
+  Ok(())
+}
+
+/// Render the result of a live (non-dry-run) pipeline run. For buffered
+/// responses we print a JSON report (`OutputFormat::Json`) or a friendly
+/// text preview; for streaming responses we forward the SSE byte chunks
+/// to stdout as they arrive (curl `-N` semantics) and finish with a
+/// concise summary.
+async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: OutputFormat) -> Result<()> {
+  let PipelineOutcome {
+    attempts,
+    resolved,
+    converted_response,
+    ..
+  } = outcome;
+  let converted = converted_response.ok_or_else(|| anyhow!("pipeline succeeded but produced no response"))?;
+
+  match converted {
+    ConvertedResponse::Buffered {
+      status,
+      headers,
+      body_json,
+      ..
+    } => match format {
+      OutputFormat::Json => {
+        let report = serde_json::json!({
+          "dry_run": false,
+          "stream": false,
+          "attempts": attempts,
+          "account": resolved.as_ref().map(|r| r.account_id.as_str()),
+          "provider": resolved.as_ref().map(|r| r.provider_id.as_str()),
+          "model": resolved.as_ref().map(|r| r.model.as_str()),
+          "upstream_model": resolved.as_ref().map(|r| r.upstream_model.as_str()),
+          "upstream_endpoint": resolved.as_ref().map(|r| r.upstream_endpoint.to_string()),
+          "status": status,
+          "headers": headers_json_value(&headers),
+          "body": body_json,
+        });
+        println!("{}", serde_json::to_string_pretty(&report)?);
+      }
+      OutputFormat::Text => {
+        println!();
+        println!("--- response ---");
+        println!("attempts: {}", attempts);
+        if let Some(r) = &resolved {
+          println!("account:  {}", r.account_id);
+          println!("provider: {}", r.provider_id);
+          println!("model:    {} -> {}", r.model, r.upstream_model);
+          println!("upstream: {}", r.upstream_endpoint);
+        }
+        println!("status:   {}", status);
+        println!("headers:");
+        for (name, value) in headers.iter() {
+          let v = value.as_str();
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v));
+        }
+        println!("body:");
+        println!("{}", serde_json::to_string_pretty(&body_json)?);
+      }
+    },
+    ConvertedResponse::Stream {
+      status,
+      headers,
+      mut body,
+    } => {
+      // For text format, print a short header banner first so the user sees
+      // metadata before the stream body. For json format we still stream
+      // the raw SSE bytes (already endpoint-translated, if applicable) —
+      // wrapping that in a JSON envelope would require buffering, which
+      // defeats the point of streaming. Tooling that wants structured
+      // output should use `--dry-run` or buffered mode.
+      if matches!(format, OutputFormat::Text) {
+        println!();
+        println!("--- response (stream) ---");
+        println!("attempts: {}", attempts);
+        if let Some(r) = &resolved {
+          println!("account:  {}", r.account_id);
+          println!("provider: {}", r.provider_id);
+          println!("model:    {} -> {}", r.model, r.upstream_model);
+          println!("upstream: {}", r.upstream_endpoint);
+        }
+        println!("status:   {}", status);
+        println!("headers:");
+        for (name, value) in headers.iter() {
+          let v = value.as_str();
+          println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v));
+        }
+        println!("body:");
+      }
+
+      let mut stdout = tokio::io::stdout();
+      let mut total_bytes: usize = 0;
+      while let Some(chunk) = body.next().await {
+        let bytes = chunk.map_err(|e| anyhow!("stream read failed: {e}"))?;
+        total_bytes += bytes.len();
+        stdout
+          .write_all(&bytes)
+          .await
+          .map_err(|e| anyhow!("stdout write failed: {e}"))?;
+        stdout.flush().await.ok();
+      }
+      if matches!(format, OutputFormat::Text) {
+        println!();
+        println!("--- end of stream ({total_bytes} bytes) ---");
       }
     }
   }

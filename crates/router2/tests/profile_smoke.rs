@@ -4,16 +4,24 @@
 //! [`AccountSelector`], and the [`NoopBuildHeaders`]/[`NoopConvertRequest`]
 //! stages (real impls land in PR2 follow-ups). Runs against a synthetic
 //! [`RawInbound`] and asserts the event sequence.
+//!
+//! The PR3b full-pipeline test (`full_pipeline_buffered_happy_path`)
+//! additionally exercises the real `DefaultSend` + `DefaultConvertResponse`
+//! against a canned `reqwest::Response`.
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use llm_accounts::AccountHandle;
 use llm_core::account::AccountConfig;
-use llm_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult};
+use llm_core::provider::{
+  AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
+};
 use llm_headers::{HeaderMap, HeaderName, HeaderValue};
 use llm_router2::event::{EventPayload, Stage, StageEvent};
+use llm_router2::pipeline::stages::ConvertedResponse;
 use llm_router2::stages::{
-  AccountSelector, DefaultExtract, NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
+  AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
+  NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
 use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RunnerOptions};
 use serde_json::Value;
@@ -85,6 +93,7 @@ struct OkSelector;
 impl AccountSelector for OkSelector {
   async fn select(
     &self,
+    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
     _ex: &llm_router2::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
@@ -103,6 +112,7 @@ struct EmptySelector;
 impl AccountSelector for EmptySelector {
   async fn select(
     &self,
+    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
     _ex: &llm_router2::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::NoAccount)
@@ -174,7 +184,14 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
   let kinds = known_kinds(&events);
   assert_eq!(
     kinds,
-    ["started", "extract", "resolve", "build_headers", "convert_request", "completed"]
+    [
+      "started",
+      "extract",
+      "resolve",
+      "build_headers",
+      "convert_request",
+      "completed"
+    ]
   );
 
   // Spot-check the Resolve event carries the upstream model and provider.
@@ -185,7 +202,12 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
       account_id,
       client_id,
       ..
-    }) => Some((upstream_model.clone(), provider_id.clone(), account_id.clone(), client_id.clone())),
+    }) => Some((
+      upstream_model.clone(),
+      provider_id.clone(),
+      account_id.clone(),
+      client_id.clone(),
+    )),
     _ => None,
   });
   let (upstream, provider, account, client) = resolve.expect("Resolve event must be present");
@@ -221,9 +243,7 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
   let (stage, recoverable) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error {
-        stage, recoverable, ..
-      }) => Some((*stage, *recoverable)),
+      EventPayload::Known(StageEvent::Error { stage, recoverable, .. }) => Some((*stage, *recoverable)),
       _ => None,
     })
     .expect("Error event must be present");
@@ -236,4 +256,167 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
     _ => None,
   });
   assert_eq!(success, Some(false));
+}
+
+// ---------- PR3b: full-pipeline (all six default stages) ----------
+
+/// Stub provider whose `chat` returns a single pre-armed `reqwest::Response`.
+/// The trait method takes `&self`, so the response sits behind a `Mutex`.
+struct RespondingProvider {
+  info: ProviderInfo,
+  resp: Mutex<Option<reqwest::Response>>,
+}
+
+#[async_trait]
+impl Provider for RespondingProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+  async fn chat(&self, _ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    Ok(
+      self
+        .resp
+        .lock()
+        .unwrap()
+        .take()
+        .expect("RespondingProvider::chat: no canned response armed"),
+    )
+  }
+}
+
+fn responding_handle(provider_id: &str, account_id: &str, resp: reqwest::Response) -> Arc<AccountHandle> {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "responding",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  let provider = RespondingProvider {
+    info,
+    resp: Mutex::new(Some(resp)),
+  };
+  Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider)))
+}
+
+struct CannedSelector {
+  handle: Arc<AccountHandle>,
+}
+
+#[async_trait]
+impl AccountSelector for CannedSelector {
+  async fn select(
+    &self,
+    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
+    _ex: &llm_router2::stage_traits::Extracted,
+  ) -> Result<SelectorOutcome, PipelineError> {
+    Ok(SelectorOutcome::Selected {
+      account_id: SmolStr::new(self.handle.config.load().id.clone()),
+      provider_id: SmolStr::new("zai-coding-plan"),
+      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_model: SmolStr::new("glm-4"),
+      account_handle: self.handle.clone(),
+    })
+  }
+}
+
+fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
+  let resp = http::Response::builder()
+    .status(status)
+    .header("content-type", "application/json")
+    .body(body)
+    .unwrap();
+  reqwest::Response::from(resp)
+}
+
+#[tokio::test]
+async fn full_pipeline_buffered_happy_path() {
+  let (bus, log) = capture_bus();
+
+  // Canned upstream payload: a tiny chat-completions response.
+  let resp = ok_response(
+    200,
+    r#"{"id":"resp-1","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
+  );
+  let handle = responding_handle("zai-coding-plan", "acct-1", resp);
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-full",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  let outcome = runner.run(raw_chat("glm-4")).await;
+  assert!(outcome.success, "outcome: {outcome:?}");
+  assert_eq!(outcome.attempts, 1);
+
+  // Full happy-path event sequence: every stage fires exactly once,
+  // followed by the terminal Completed marker.
+  let events = log.lock().unwrap();
+  let kinds = known_kinds(&events);
+  assert_eq!(
+    kinds,
+    [
+      "started",
+      "extract",
+      "resolve",
+      "build_headers",
+      "convert_request",
+      "send",
+      "convert_response",
+      "completed",
+    ]
+  );
+
+  // The converted response must round-trip the canned upstream payload.
+  let converted = outcome
+    .converted_response
+    .as_ref()
+    .expect("converted_response must be present on success");
+  match converted {
+    ConvertedResponse::Buffered { status, body_json, .. } => {
+      assert_eq!(*status, 200);
+      assert_eq!(body_json["id"], "resp-1");
+      assert_eq!(body_json["choices"][0]["message"]["content"], "hi");
+    }
+    other => panic!("expected Buffered, got {other:?}"),
+  }
 }

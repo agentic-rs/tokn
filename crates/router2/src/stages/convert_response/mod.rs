@@ -11,8 +11,8 @@ use bytes::Bytes;
 use llm_headers::HeaderMap;
 use serde_json::Value;
 
-// pub mod default;
-// pub use default::DefaultConvertResponse;
+pub mod default;
+pub use default::DefaultConvertResponse;
 
 pub struct NoopConvertResponse;
 
