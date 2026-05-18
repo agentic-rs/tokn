@@ -123,15 +123,38 @@ impl SendStage for DefaultSend {
 /// Map an `llm_core::provider::Error` to a [`PipelineError`]. Transport-
 /// level failures (connect, timeout, etc.) are recoverable; everything else
 /// is permanent for this attempt.
+///
+/// The error message walks the full `std::error::Error::source()` chain so
+/// transport failures like `error sending request for url (…)` expose
+/// their underlying cause (e.g. `tcp connect error: Connection refused`,
+/// `dns error: failed to lookup address information`). Without this,
+/// reqwest's top-level `Display` hides everything below it and the user
+/// can't tell DNS failure from TLS failure from refused-connection.
 fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
   use llm_core::provider::Error as E;
   let recoverable = matches!(&err, E::Http { .. });
-  let msg = SmolStr::new(err.to_string());
+  let msg = SmolStr::new(format_with_chain(&err));
   if recoverable {
     PipelineError::recoverable(Stage::Send, msg)
   } else {
     PipelineError::permanent(Stage::Send, msg)
   }
+}
+
+/// Concatenate `err.to_string()` with every cause in the
+/// `Error::source()` chain, separated by `": "`. Reqwest in particular
+/// hides the actual transport failure (`hyper`, `rustls`, `io::Error`,
+/// `dns`) behind its own opaque top-level Display, so the chain is the
+/// only way to see what really went wrong.
+fn format_with_chain(err: &dyn std::error::Error) -> String {
+  use std::fmt::Write as _;
+  let mut out = err.to_string();
+  let mut src = err.source();
+  while let Some(cause) = src {
+    let _ = write!(out, ": {cause}");
+    src = cause.source();
+  }
+  out
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -294,5 +317,42 @@ mod tests {
   #[allow(dead_code)]
   fn _types_used() -> Option<ProviderResult<()>> {
     None
+  }
+
+  #[test]
+  fn format_with_chain_walks_full_source_chain() {
+    use std::error::Error;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Wrap {
+      msg: &'static str,
+      cause: Option<Box<dyn Error + Send + Sync>>,
+    }
+    impl fmt::Display for Wrap {
+      fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.msg)
+      }
+    }
+    impl Error for Wrap {
+      fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.cause.as_deref().map(|c| c as &dyn Error)
+      }
+    }
+
+    let leaf = Wrap {
+      msg: "connection refused",
+      cause: None,
+    };
+    let mid = Wrap {
+      msg: "tcp connect error",
+      cause: Some(Box::new(leaf)),
+    };
+    let top = Wrap {
+      msg: "error sending request",
+      cause: Some(Box::new(mid)),
+    };
+    let s = super::format_with_chain(&top);
+    assert_eq!(s, "error sending request: tcp connect error: connection refused");
   }
 }

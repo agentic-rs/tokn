@@ -22,8 +22,13 @@ pub struct CodexCliHeaders {
   pub user_agent: SmolStr,
   #[serde(rename = "Authorization")]
   pub authorization: SmolStr,
-  #[serde(rename = "Host")]
-  pub host: SmolStr,
+  /// Optional. NEVER stamped from a persona default: the persona-default
+  /// host (e.g. `chatgpt.com`) is wrong for any other upstream and would
+  /// cause edge/WAF rejections (TLS SNI vs HTTP Host mismatch) when it
+  /// leaks into Send. `build` only sets this from inbound traffic;
+  /// outbound transport derives `Host` from the URL.
+  #[serde(rename = "Host", skip_serializing_if = "Option::is_none")]
+  pub host: Option<SmolStr>,
   #[serde(rename = "Accept")]
   pub accept: SmolStr,
   #[serde(rename = "originator")]
@@ -69,7 +74,7 @@ impl HeaderSchema for CodexCliHeaders {
     Ok(Self {
       user_agent: required(map, &keys::USER_AGENT)?,
       authorization: required(map, &keys::AUTHORIZATION)?,
-      host: required(map, &keys::HOST)?,
+      host: optional(map, &keys::HOST),
       accept: required(map, &keys::ACCEPT)?,
       originator: required(map, &keys::ORIGINATOR)?,
       chatgpt_account_id: required(map, &keys::CHATGPT_ACCOUNT_ID)?,
@@ -90,7 +95,7 @@ impl HeaderSchema for CodexCliHeaders {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put(&mut m, &keys::AUTHORIZATION, &self.authorization);
-    put(&mut m, &keys::HOST, &self.host);
+    put_opt(&mut m, &keys::HOST, &self.host);
     put(&mut m, &keys::ACCEPT, &self.accept);
     put(&mut m, &keys::ORIGINATOR, &self.originator);
     put(&mut m, &keys::CHATGPT_ACCOUNT_ID, &self.chatgpt_account_id);
@@ -142,7 +147,7 @@ impl CodexCliHeaders {
         "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)".into()
       }),
       authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
-      host: from_inbound_or(inbound, &keys::HOST, || "chatgpt.com".into()),
+      host: None,
       accept: from_inbound_or(inbound, &keys::ACCEPT, || "text/event-stream".into()),
       originator: from_inbound_or(inbound, &keys::ORIGINATOR, || "codex_exec".into()),
       chatgpt_account_id: vars
@@ -178,7 +183,7 @@ mod tests {
     CodexCliHeaders {
       user_agent: "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)".into(),
       authorization: "<redacted>".into(),
-      host: "chatgpt.com".into(),
+      host: Some("chatgpt.com".into()),
       accept: "text/event-stream".into(),
       originator: "codex_exec".into(),
       chatgpt_account_id: "<redacted>".into(),
@@ -216,7 +221,7 @@ mod tests {
       "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)"
     );
     assert_eq!(h.authorization.as_str(), "<missing>");
-    assert_eq!(h.host.as_str(), "chatgpt.com");
+    assert!(h.host.is_none(), "no inbound Host => no persona-default Host (would leak to wire)");
     assert_eq!(h.accept.as_str(), "text/event-stream");
     assert_eq!(h.originator.as_str(), "codex_exec");
     assert_eq!(h.chatgpt_account_id.as_str(), "<missing>");
@@ -232,10 +237,12 @@ mod tests {
     inbound.insert(&keys::USER_AGENT, "codex_exec/9.9.9");
     inbound.insert(&keys::AUTHORIZATION, "Bearer abc");
     inbound.insert(&keys::OPENAI_BETA, "responses=v1");
+    inbound.insert(&keys::HOST, "chatgpt.com");
     let h = CodexCliHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "codex_exec/9.9.9");
     assert_eq!(h.authorization.as_str(), "Bearer abc");
     assert_eq!(h.openai_beta.as_deref(), Some("responses=v1"));
+    assert_eq!(h.host.as_deref(), None);
   }
 
   #[test]

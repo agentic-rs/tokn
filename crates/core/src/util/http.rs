@@ -44,11 +44,32 @@ pub async fn send(
   client: &reqwest::Client,
   method: Method,
   url: &str,
-  headers: HeaderMap,
+  mut headers: HeaderMap,
   body: Option<Bytes>,
   capture: Option<&crate::provider::OutboundCapture>,
   what: &'static str,
 ) -> crate::provider::Result<reqwest::Response> {
+  // Strip transport-derived headers before handing off to reqwest:
+  //   - `Host`     : MUST be derived from `url` (SNI + HTTP Host must agree
+  //                  or upstream WAFs reject; e.g. zai returns 403 when a
+  //                  stale persona-default `Host: api.deepseek.com` survives
+  //                  to a request actually sent to `api.z.ai`).
+  //   - `Content-Length` : reqwest computes the correct value from `body`;
+  //                  a stale persona-supplied value will not match the
+  //                  serialized payload.
+  // Persona builders may inject these from inbound captures or from defaults
+  // derived from real-world traffic; that's fine for diagnostics but must
+  // not reach the wire.
+  let stripped_host = headers.remove(&llm_headers::keys::HOST);
+  let stripped_clen = headers.remove(&llm_headers::keys::CONTENT_LENGTH);
+  if stripped_host > 0 || stripped_clen > 0 {
+    tracing::trace!(
+      what,
+      stripped_host,
+      stripped_clen,
+      "stripped transport headers before reqwest dispatch"
+    );
+  }
   if let (Some(capture), Some(body)) = (capture, body.as_ref()) {
     let _ = capture.set(crate::db::OutboundSnapshot {
       method: Some(method.as_str().to_string()),

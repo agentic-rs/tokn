@@ -28,7 +28,7 @@ pub enum Error {
     source: reqwest::header::InvalidHeaderName,
   },
 
-  #[snafu(display("{what}: HTTP request failed"))]
+  #[snafu(display("{what}: HTTP request failed: {source}"))]
   Http { what: &'static str, source: reqwest::Error },
 
   #[snafu(display("{what}: upstream returned {status}: {body}"))]

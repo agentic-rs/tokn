@@ -25,8 +25,12 @@ pub struct OpencodeHeaders {
   pub user_agent: SmolStr,
   #[serde(rename = "Authorization")]
   pub authorization: SmolStr,
-  #[serde(rename = "Host")]
-  pub host: SmolStr,
+  /// Optional. NEVER stamped from a persona default: the persona-default
+  /// host (e.g. `api.deepseek.com`) is wrong for any other upstream and
+  /// caused real 403s when it leaked into Send. `build` only sets this
+  /// from inbound traffic; outbound transport derives `Host` from the URL.
+  #[serde(rename = "Host", skip_serializing_if = "Option::is_none")]
+  pub host: Option<SmolStr>,
   #[serde(rename = "Accept")]
   pub accept: SmolStr,
   #[serde(rename = "Accept-Encoding")]
@@ -53,7 +57,7 @@ impl HeaderSchema for OpencodeHeaders {
     Ok(Self {
       user_agent: required(map, &keys::USER_AGENT)?,
       authorization: required(map, &keys::AUTHORIZATION)?,
-      host: required(map, &keys::HOST)?,
+      host: optional(map, &keys::HOST),
       accept: required(map, &keys::ACCEPT)?,
       accept_encoding: required(map, &keys::ACCEPT_ENCODING)?,
       connection: required(map, &keys::CONNECTION)?,
@@ -67,7 +71,7 @@ impl HeaderSchema for OpencodeHeaders {
     let mut m = HeaderMap::new();
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put(&mut m, &keys::AUTHORIZATION, &self.authorization);
-    put(&mut m, &keys::HOST, &self.host);
+    put_opt(&mut m, &keys::HOST, &self.host);
     put(&mut m, &keys::ACCEPT, &self.accept);
     put(&mut m, &keys::ACCEPT_ENCODING, &self.accept_encoding);
     put(&mut m, &keys::CONNECTION, &self.connection);
@@ -105,7 +109,7 @@ impl OpencodeHeaders {
         "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13".into()
       }),
       authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
-      host: from_inbound_or(inbound, &keys::HOST, || "api.deepseek.com".into()),
+      host: None,
       accept: from_inbound_or(inbound, &keys::ACCEPT, || "*/*".into()),
       accept_encoding: from_inbound_or(inbound, &keys::ACCEPT_ENCODING, || "gzip, deflate, br, zstd".into()),
       connection: from_inbound_or(inbound, &keys::CONNECTION, || "keep-alive".into()),
@@ -128,7 +132,7 @@ mod tests {
     OpencodeHeaders {
       user_agent: "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13".into(),
       authorization: "<redacted>".into(),
-      host: "api.deepseek.com".into(),
+      host: Some("api.deepseek.com".into()),
       accept: "*/*".into(),
       accept_encoding: "gzip, deflate, br, zstd".into(),
       connection: "keep-alive".into(),
@@ -173,7 +177,7 @@ mod tests {
       "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
     );
     assert_eq!(h.authorization.as_str(), "<missing>");
-    assert_eq!(h.host.as_str(), "api.deepseek.com");
+    assert!(h.host.is_none(), "no inbound Host => no persona-default Host (would leak to wire)");
     assert_eq!(h.accept.as_str(), "*/*");
     assert_eq!(h.accept_encoding.as_str(), "gzip, deflate, br, zstd");
     assert_eq!(h.connection.as_str(), "keep-alive");
@@ -189,10 +193,12 @@ mod tests {
     inbound.insert(&keys::USER_AGENT, "custom-ua/9.9");
     inbound.insert(&keys::AUTHORIZATION, "Bearer secret");
     inbound.insert(&keys::CONTENT_LENGTH, "1234");
+    inbound.insert(&keys::HOST, "api.deepseek.com");
     let h = OpencodeHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "custom-ua/9.9");
     assert_eq!(h.authorization.as_str(), "Bearer secret");
     assert_eq!(h.content_length.as_deref(), Some("1234"));
+    assert_eq!(h.host.as_deref(), None);
   }
 
   #[test]
