@@ -39,7 +39,7 @@ pub enum SelectorOutcome {
 
 #[async_trait]
 pub trait AccountSelector: Send + Sync {
-  async fn select(&self, extracted: &Extracted) -> Result<SelectorOutcome, PipelineError>;
+  async fn select(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<SelectorOutcome, PipelineError>;
 }
 
 pub struct PoolResolve<S: AccountSelector> {
@@ -54,8 +54,8 @@ impl<S: AccountSelector> PoolResolve<S> {
 
 #[async_trait]
 impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
-  async fn resolve(&self, _ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
-    match self.selector.select(extracted).await? {
+  async fn resolve(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
+    match self.selector.select(ctx, extracted).await? {
       SelectorOutcome::Selected {
         account_id,
         provider_id,
@@ -79,7 +79,7 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
         Stage::Resolve,
         SmolStr::new(format!(
           "no account supports endpoint {} for model {}",
-          extracted.endpoint, extracted.model
+          ctx.endpoint, extracted.model
         )),
       )),
     }
@@ -104,7 +104,7 @@ mod tests {
 
   #[async_trait]
   impl AccountSelector for FixedSelector {
-    async fn select(&self, _ex: &Extracted) -> Result<SelectorOutcome, PipelineError> {
+    async fn select(&self, _ctx: &PipelineCtx, _ex: &Extracted) -> Result<SelectorOutcome, PipelineError> {
       Ok(match self.0 {
         SelectorOutcomeKind::Ok => SelectorOutcome::Selected {
           account_id: SmolStr::new("acct-1"),
@@ -120,7 +120,6 @@ mod tests {
 
   fn fake_extracted() -> Extracted {
     Extracted {
-      endpoint: Endpoint::ChatCompletions,
       client_id: None,
       model: SmolStr::new("input-model"),
       stream: false,
@@ -138,7 +137,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-r", Arc::new(EventBus::new()))
+    PipelineCtx::new("req-r", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
   }
 
   #[tokio::test]

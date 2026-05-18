@@ -12,6 +12,7 @@
 
 use super::stage::{AccountSelector, SelectorOutcome};
 use crate::event::Stage;
+use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::Extracted;
 use async_trait::async_trait;
@@ -32,7 +33,7 @@ impl PoolAccountSelector {
 
 #[async_trait]
 impl AccountSelector for PoolAccountSelector {
-  async fn select(&self, extracted: &Extracted) -> Result<SelectorOutcome, PipelineError> {
+  async fn select(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<SelectorOutcome, PipelineError> {
     // Route mode hint comes from the inbound `x-route-mode` header (or
     // equivalent) — `DefaultExtract` parses this into
     // `extracted.route_mode_hint`.
@@ -43,7 +44,7 @@ impl AccountSelector for PoolAccountSelector {
 
     match self
       .pool
-      .acquire_for_route(extracted.session_id.as_deref(), &route, extracted.endpoint)
+      .acquire_for_route(extracted.session_id.as_deref(), &route, ctx.endpoint)
     {
       EndpointAcquire::Account { acct, endpoint } => {
         let provider_id = SmolStr::from(acct.provider.info().id.as_str());

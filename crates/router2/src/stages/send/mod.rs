@@ -9,9 +9,12 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Resolved, SendStage, SentResponse};
+use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
 use smol_str::SmolStr;
+
+pub mod default;
+pub use default::DefaultSend;
 
 pub struct NoopSend;
 
@@ -20,6 +23,7 @@ impl SendStage for NoopSend {
   async fn send(
     &self,
     _ctx: &PipelineCtx,
+    _extracted: &Extracted,
     _resolved: &Resolved,
     _headers: &BuiltHeaders,
     _body: &ConvertedRequest,

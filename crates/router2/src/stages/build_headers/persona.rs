@@ -206,7 +206,6 @@ mod tests {
 
   fn extracted(headers: HeaderMap, client_id: Option<&str>) -> Extracted {
     Extracted {
-      endpoint: Endpoint::ChatCompletions,
       client_id: client_id.map(|s| llm_core::ClientId::from(SmolStr::new(s))),
       model: "gpt-4o".into(),
       stream: false,
@@ -236,7 +235,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-bh", Arc::new(EventBus::new()))
+    PipelineCtx::new("req-bh", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
   }
 
   #[tokio::test]

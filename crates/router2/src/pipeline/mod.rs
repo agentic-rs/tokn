@@ -80,7 +80,7 @@ impl PipelineRunner {
       .request_id
       .clone()
       .unwrap_or_else(|| SmolStr::new(uuid_like()));
-    let ctx = PipelineCtx::new(request_id, self.events.clone());
+    let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
     ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
 
     // ---- Extract ----
@@ -96,7 +96,7 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
     if self.options.stop_after == Some(Stage::Extract) {
-      return self.short_circuit(&ctx, None, None, None);
+      return self.short_circuit(&ctx, None, None, None, None, None);
     }
 
     // ---- Resolve ----
@@ -115,7 +115,7 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
     if self.options.stop_after == Some(Stage::Resolve) {
-      return self.short_circuit(&ctx, Some(resolved), None, None);
+      return self.short_circuit(&ctx, Some(resolved), None, None, None, None);
     }
 
     // ---- BuildHeaders ----
@@ -132,7 +132,7 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
     if self.options.stop_after == Some(Stage::BuildHeaders) {
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), None);
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), None, None, None);
     }
 
     // ---- ConvertRequest ----
@@ -149,11 +149,16 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
     if self.options.stop_after == Some(Stage::ConvertRequest) {
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted));
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted), None, None);
     }
 
     // ---- Send ----
-    let sent = match self.profile.send.send(&ctx, &resolved, &headers, &converted).await {
+    let sent = match self
+      .profile
+      .send
+      .send(&ctx, &extracted, &resolved, &headers, &converted)
+      .await
+    {
       Ok(s) => {
         ctx.emit_known(StageEvent::Send);
         s
@@ -161,12 +166,11 @@ impl PipelineRunner {
       Err(err) => return self.fail(&ctx, err),
     };
     if self.options.stop_after == Some(Stage::Send) {
-      let _ = sent;
-      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted));
+      return self.short_circuit(&ctx, Some(resolved), Some(headers), Some(converted), Some(sent), None);
     }
 
     // ---- ConvertResponse ----
-    let _converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
+    let converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
       Ok(c) => {
         ctx.emit_known(StageEvent::ConvertResponse);
         c
@@ -182,14 +186,18 @@ impl PipelineRunner {
       .with_resolved(resolved)
       .with_built_headers(headers)
       .with_converted_request(converted)
+      .with_converted_response(converted_response)
   }
 
+  #[allow(clippy::too_many_arguments)]
   fn short_circuit(
     &self,
     ctx: &PipelineCtx,
     resolved: Option<Resolved>,
     headers: Option<BuiltHeaders>,
     converted: Option<ConvertedRequest>,
+    sent: Option<SentResponse>,
+    converted_response: Option<ConvertedResponse>,
   ) -> PipelineOutcome {
     ctx.emit_known(StageEvent::Completed {
       success: true,
@@ -204,6 +212,12 @@ impl PipelineRunner {
     }
     if let Some(c) = converted {
       out = out.with_converted_request(c);
+    }
+    if let Some(s) = sent {
+      out = out.with_sent_response(s);
+    }
+    if let Some(c) = converted_response {
+      out = out.with_converted_response(c);
     }
     out
   }

@@ -39,7 +39,7 @@ pub struct DefaultExtract;
 impl ExtractStage for DefaultExtract {
   async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
-      endpoint,
+      endpoint: _,
       headers,
       raw_body,
       decoded_body,
@@ -86,7 +86,6 @@ impl ExtractStage for DefaultExtract {
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
     Ok(Extracted {
-      endpoint,
       client_id,
       model,
       stream,
@@ -156,7 +155,7 @@ mod tests {
   use std::sync::Arc;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-test", Arc::new(EventBus::new()))
+    PipelineCtx::new("req-test", Endpoint::ChatCompletions, Arc::new(EventBus::new()))
   }
 
   fn raw(headers: HeaderMap, body: Value) -> RawInbound {

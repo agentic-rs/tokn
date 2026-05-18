@@ -37,14 +37,14 @@ pub struct DefaultConvertRequest;
 impl ConvertRequestStage for DefaultConvertRequest {
   async fn convert_request(
     &self,
-    _ctx: &PipelineCtx,
+    ctx: &PipelineCtx,
     extracted: &Extracted,
     resolved: &Resolved,
   ) -> Result<ConvertedRequest, PipelineError> {
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
-    if resolved.upstream_endpoint != extracted.endpoint {
-      upstream_body = llm_convert::convert_request(extracted.endpoint, resolved.upstream_endpoint, &upstream_body)
+    if resolved.upstream_endpoint != ctx.endpoint {
+      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
         .map_err(|e| perm(format!("request conversion failed: {e}")))?;
     }
 
@@ -105,13 +105,16 @@ mod tests {
   use llm_headers::HeaderMap;
   use std::sync::Arc;
 
-  fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-cr", Arc::new(EventBus::new()))
+  fn ctx_at(endpoint: Endpoint) -> PipelineCtx {
+    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new()))
   }
 
-  fn extracted_with(endpoint: Endpoint, body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
+  fn ctx() -> PipelineCtx {
+    ctx_at(Endpoint::ChatCompletions)
+  }
+
+  fn extracted_with(body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
     Extracted {
-      endpoint,
       client_id: None,
       model: SmolStr::new("input-model"),
       stream: false,
@@ -144,7 +147,7 @@ mod tests {
   async fn passthrough_when_endpoints_match_and_no_transformer() {
     let body = serde_json::json!({"model": "input-model", "messages": [{"role":"user","content":"hi"}]});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(Endpoint::ChatCompletions, body.clone(), None, raw.clone());
+    let ex = extracted_with(body.clone(), None, raw.clone());
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
@@ -158,7 +161,7 @@ mod tests {
   async fn rewrites_model_field() {
     let body = serde_json::json!({"model": "input-model", "messages": []});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(Endpoint::ChatCompletions, body, None, raw);
+    let ex = extracted_with(body, None, raw);
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "upstream-model-7");
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
@@ -178,7 +181,7 @@ mod tests {
     }
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(Endpoint::ChatCompletions, body, None, raw);
+    let ex = extracted_with(body, None, raw);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Stamp));
     let res = resolved_with(handle, Endpoint::ChatCompletions, "input-model");
 
@@ -196,10 +199,13 @@ mod tests {
       "input": [{"role": "user", "content": "hi"}]
     });
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(Endpoint::Responses, body.clone(), None, raw);
+    let ex = extracted_with(body.clone(), None, raw);
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
 
-    let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
+    let out = DefaultConvertRequest
+      .convert_request(&ctx_at(Endpoint::Responses), &ex, &res)
+      .await
+      .unwrap();
     assert_ne!(out.upstream_body, body, "expected cross-endpoint conversion to mutate body");
     // wire body was re-serialized (not the original raw bytes).
     assert_eq!(out.upstream_wire_body, out.debug_outbound_body);
@@ -213,12 +219,7 @@ mod tests {
       Some(ContentEncodingKind::Gzip),
     )
     .unwrap();
-    let ex = extracted_with(
-      Endpoint::ChatCompletions,
-      body,
-      Some(ContentEncodingKind::Gzip),
-      compressed,
-    );
+    let ex = extracted_with(body, Some(ContentEncodingKind::Gzip), compressed);
     // Different upstream model → body mutates → we must re-compress.
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "upstream-model-2");
 
@@ -233,12 +234,7 @@ mod tests {
   async fn content_encoding_propagates_to_output() {
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(
-      Endpoint::ChatCompletions,
-      body,
-      Some(ContentEncodingKind::Zstd),
-      raw,
-    );
+    let ex = extracted_with(body, Some(ContentEncodingKind::Zstd), raw);
     let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
@@ -257,7 +253,7 @@ mod tests {
     }
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(Endpoint::ChatCompletions, body, None, raw);
+    let ex = extracted_with(body, None, raw);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Boom));
     let res = resolved_with(handle, Endpoint::ChatCompletions, "input-model");
 

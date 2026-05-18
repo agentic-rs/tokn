@@ -1,24 +1,32 @@
 //! Terminal outcome of a single [`PipelineRunner::run`] invocation.
 //!
 //! Mirrors the final [`StageEvent::Completed`] event but carries the typed
-//! error (if any) so callers don't need to subscribe to the bus just to learn
-//! the result.
+//! error (if any) and the per-stage outputs so callers don't need to
+//! subscribe to the bus just to learn the result.
 //!
-//! `built_headers` and `converted_request` are populated when the runner
-//! completes the front-half (Extract → ConvertRequest) successfully. They let
-//! callers inspect the outbound payload — useful for the gateway CLI smoke
-//! command and dry-run flows — without having to drain the event bus.
+//! Front-half outputs (`resolved`, `built_headers`, `converted_request`) are
+//! populated when the runner completes through ConvertRequest successfully.
+//! Back-half outputs are populated when those stages run:
 //!
-//! The back-half (`response`) will be added here in PR3b once the
-//! Send/ConvertResponse stages produce real values.
+//! * `sent_response`: present when `stop_after == Some(Stage::Send)` short-
+//!   circuits the runner after Send completes. When the full pipeline runs,
+//!   the response is consumed by ConvertResponse and this field is `None`.
+//! * `converted_response`: present when the full pipeline runs to
+//!   completion. Carries either a buffered JSON response or a live SSE
+//!   stream depending on the upstream's `Content-Type`.
+//!
+//! `PipelineOutcome` is intentionally **not** `Clone`: `SentResponse` wraps
+//! a single-shot `reqwest::Response`, and `ConvertedResponse::Stream` owns
+//! a one-time `BoxStream`. Callers move the outcome into the consumer that
+//! drains the body.
 //!
 //! [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
 //! [`StageEvent::Completed`]: crate::event::StageEvent::Completed
 
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Resolved};
+use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, ConvertedResponse, Resolved, SentResponse};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PipelineOutcome {
   pub success: bool,
   pub attempts: u32,
@@ -31,6 +39,13 @@ pub struct PipelineOutcome {
   /// successfully — for stop_before_send / dry-run callers this is the
   /// final outbound payload.
   pub converted_request: Option<ConvertedRequest>,
+  /// Send-stage output. Only populated when the runner short-circuits with
+  /// `stop_after == Some(Stage::Send)`; otherwise the response is consumed
+  /// by ConvertResponse.
+  pub sent_response: Option<SentResponse>,
+  /// ConvertResponse-stage output. `Some` once the full pipeline has run
+  /// to completion.
+  pub converted_response: Option<ConvertedResponse>,
 }
 
 impl PipelineOutcome {
@@ -42,6 +57,8 @@ impl PipelineOutcome {
       resolved: None,
       built_headers: None,
       converted_request: None,
+      sent_response: None,
+      converted_response: None,
     }
   }
 
@@ -53,6 +70,8 @@ impl PipelineOutcome {
       resolved: None,
       built_headers: None,
       converted_request: None,
+      sent_response: None,
+      converted_response: None,
     }
   }
 
@@ -68,6 +87,16 @@ impl PipelineOutcome {
 
   pub fn with_converted_request(mut self, converted: ConvertedRequest) -> Self {
     self.converted_request = Some(converted);
+    self
+  }
+
+  pub fn with_sent_response(mut self, sent: SentResponse) -> Self {
+    self.sent_response = Some(sent);
+    self
+  }
+
+  pub fn with_converted_response(mut self, converted: ConvertedResponse) -> Self {
+    self.converted_response = Some(converted);
     self
   }
 }

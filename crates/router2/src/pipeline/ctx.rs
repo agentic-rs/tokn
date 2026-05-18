@@ -1,27 +1,38 @@
 //! Per-request mutable state threaded through every stage.
 //!
-//! `PipelineCtx` carries identifiers (request id, attempt counter) and a
-//! handle to the [`EventBus`] so stages can publish custom events without
-//! holding a separate reference to the bus. Stage outputs are *not* stored
-//! here — they flow as function-typed return values between stages — but the
-//! ctx is the right home for cross-cutting state we add later (timings,
-//! cancellation tokens, etc.).
+//! `PipelineCtx` carries identifiers (request id, attempt counter), the
+//! inbound [`Endpoint`] (set by the runner from `RawInbound` before any
+//! stage runs), and a handle to the [`EventBus`] so stages can publish
+//! custom events without holding a separate reference to the bus. Stage
+//! outputs are *not* stored here — they flow as function-typed return
+//! values between stages — but the ctx is the right home for cross-cutting
+//! state we add later (timings, cancellation tokens, etc.).
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, StageEvent};
+use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
 
 pub struct PipelineCtx {
   pub request_id: SmolStr,
   pub attempt: u32,
+  /// Inbound endpoint as parsed by the transport. Set by the runner from
+  /// `RawInbound.endpoint` before the Extract stage runs and treated as
+  /// immutable for the rest of the pipeline. Downstream stages
+  /// (BuildHeaders, ConvertRequest, Send, ConvertResponse) read this when
+  /// they need to know the inbound format — e.g. to decide whether
+  /// upstream/inbound endpoints differ and a request/response conversion is
+  /// required.
+  pub endpoint: Endpoint,
   pub events: Arc<EventBus>,
 }
 
 impl PipelineCtx {
-  pub fn new(request_id: impl Into<SmolStr>, events: Arc<EventBus>) -> Self {
+  pub fn new(request_id: impl Into<SmolStr>, endpoint: Endpoint, events: Arc<EventBus>) -> Self {
     Self {
       request_id: request_id.into(),
       attempt: 0,
+      endpoint,
       events,
     }
   }

@@ -47,9 +47,13 @@ pub struct RawInbound {
 
 /// Output of [`ExtractStage`]: everything subsequent stages need to know
 /// about the inbound request, in normalized form.
+///
+/// `Extracted` deliberately does **not** carry the inbound endpoint — that
+/// lives on [`PipelineCtx`] (`ctx.endpoint`) because the runner has it from
+/// the start (out of `RawInbound`) and every stage gets `&PipelineCtx`. Keeping
+/// it on the ctx avoids duplication and ensures a single source of truth.
 #[derive(Debug, Clone)]
 pub struct Extracted {
-  pub endpoint: Endpoint,
   pub client_id: Option<ClientId>,
   pub model: SmolStr,
   pub stream: bool,
@@ -123,11 +127,93 @@ pub struct ConvertedRequest {
   pub content_encoding: Option<ContentEncodingKind>,
 }
 
-/// Placeholder output of [`SendStage`] (PR2).
-pub struct SentResponse;
+/// Output of [`SendStage`]: a live upstream HTTP response plus the metadata
+/// downstream stages need without consuming the body.
+///
+/// Holds the raw [`reqwest::Response`] so that [`ConvertResponseStage`] can
+/// choose at use-time whether to drain it into a buffered JSON payload or
+/// wrap it in an SSE pipeline. Not `Clone`: the response is single-shot.
+pub struct SentResponse {
+  pub status: u16,
+  pub headers: HeaderMap,
+  /// Whether the request *asked* for SSE streaming (mirrors `Extracted.stream`).
+  /// ConvertResponse uses this to pick the buffered vs. stream branch.
+  pub stream: bool,
+  /// Endpoint the upstream provider was actually called with — may differ
+  /// from `ctx.endpoint` when a request-shape translation happened in
+  /// ConvertRequest.
+  pub upstream_endpoint: Endpoint,
+  pub response: reqwest::Response,
+}
 
-/// Placeholder output of [`ConvertResponseStage`] (PR2).
-pub struct ConvertedResponse;
+impl std::fmt::Debug for SentResponse {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("SentResponse")
+      .field("status", &self.status)
+      .field("headers", &self.headers)
+      .field("stream", &self.stream)
+      .field("upstream_endpoint", &self.upstream_endpoint)
+      .field("response", &"<reqwest::Response>")
+      .finish()
+  }
+}
+
+/// Output of [`ConvertResponseStage`]: either a fully-buffered response
+/// ready for one-shot delivery, or a streaming SSE byte source that should
+/// be forwarded to the client as it arrives.
+pub enum ConvertedResponse {
+  Buffered {
+    status: u16,
+    headers: HeaderMap,
+    body_json: Value,
+    body_bytes: Bytes,
+  },
+  Stream {
+    status: u16,
+    headers: HeaderMap,
+    /// SSE byte stream ready to forward to the client. When upstream and
+    /// inbound endpoints differ, frames are already endpoint-translated.
+    body: futures_util::stream::BoxStream<'static, std::io::Result<Bytes>>,
+  },
+}
+
+impl ConvertedResponse {
+  pub fn status(&self) -> u16 {
+    match self {
+      Self::Buffered { status, .. } | Self::Stream { status, .. } => *status,
+    }
+  }
+
+  pub fn headers(&self) -> &HeaderMap {
+    match self {
+      Self::Buffered { headers, .. } | Self::Stream { headers, .. } => headers,
+    }
+  }
+}
+
+impl std::fmt::Debug for ConvertedResponse {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Buffered {
+        status,
+        headers,
+        body_bytes,
+        ..
+      } => f
+        .debug_struct("ConvertedResponse::Buffered")
+        .field("status", status)
+        .field("headers", headers)
+        .field("body_bytes_len", &body_bytes.len())
+        .finish(),
+      Self::Stream { status, headers, .. } => f
+        .debug_struct("ConvertedResponse::Stream")
+        .field("status", status)
+        .field("headers", headers)
+        .field("body", &"<sse stream>")
+        .finish(),
+    }
+  }
+}
 
 #[async_trait]
 pub trait ExtractStage: Send + Sync {
@@ -164,6 +250,7 @@ pub trait SendStage: Send + Sync {
   async fn send(
     &self,
     ctx: &PipelineCtx,
+    extracted: &Extracted,
     resolved: &Resolved,
     headers: &BuiltHeaders,
     body: &ConvertedRequest,
