@@ -17,7 +17,19 @@ pub fn build_client(proxy: &HttpClientOptions) -> Result<reqwest::Client> {
   let mut b = reqwest::Client::builder()
     .connect_timeout(Duration::from_secs(15))
     .timeout(Duration::from_secs(600))
-    .pool_idle_timeout(Some(Duration::from_secs(90)));
+    .pool_idle_timeout(Some(Duration::from_secs(90)))
+    // Transparent response decompression. Personas advertise
+    // `Accept-Encoding: gzip, deflate, br, zstd` (from real-world captures),
+    // and providers honor it (zai → gzip). Without these toggles reqwest
+    // hands the raw compressed bytes to downstream `convert_response` stages,
+    // which then fail with `expected value at line 1 column 1`.
+    // When reqwest decompresses, it also strips the response
+    // `Content-Encoding` and `Content-Length` headers so the persisted
+    // body and headers are mutually consistent.
+    .gzip(true)
+    .brotli(true)
+    .deflate(true)
+    .zstd(true);
 
   if let Some(url) = &proxy.url {
     let mut p = reqwest::Proxy::all(url).map_err(|e| anyhow::anyhow!("invalid proxy url: {url}: {e}"))?;
