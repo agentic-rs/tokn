@@ -821,7 +821,7 @@ mod tests {
       inbound_headers: llm_headers::HeaderMap::new(),
     };
 
-    let transformed = transformer.transform_input(&meta, body.clone()).unwrap();
+    let transformed = transformer.transform_input(meta.upstream_endpoint, body.clone()).unwrap();
     assert_eq!(transformed, body);
   }
 }

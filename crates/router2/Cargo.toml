@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+llm-accounts = { workspace = true }
 llm-core = { workspace = true }
 llm-headers = { workspace = true }
 llm-config = { workspace = true }
@@ -12,12 +13,14 @@ llm-convert = { workspace = true }
 arc-swap = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+flate2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 smol_str = { workspace = true }
 snafu = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -7,7 +7,7 @@ use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
-use llm_core::pipeline::{InputTransformer, RequestMeta};
+use llm_core::pipeline::InputTransformer;
 use parking_lot::RwLock;
 use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use llm_headers::{HeaderMap, HeaderName, HeaderValue};
@@ -159,7 +159,7 @@ impl CopilotProvider {
 }
 
 impl InputTransformer for CopilotProvider {
-  fn transform_input(&self, _meta: &RequestMeta, body: Value) -> Result<Value> {
+  fn transform_input(&self, _endpoint: Endpoint, body: Value) -> Result<Value> {
     Ok(body)
   }
 }

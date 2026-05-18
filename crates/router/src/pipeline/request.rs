@@ -154,7 +154,7 @@ pub(super) fn prepare_request(req: ResolvedRequest) -> crate::provider::Result<P
       })?;
   }
   if let Some(transformer) = req.account.provider.input_transformer() {
-    upstream_body = transformer.transform_input(&req.meta, upstream_body)?;
+    upstream_body = transformer.transform_input(req.meta.upstream_endpoint, upstream_body)?;
   }
   let debug_outbound_body = Bytes::from(serde_json::to_vec(&upstream_body).unwrap_or_default());
   let upstream_wire_body = if upstream_body == req.body {

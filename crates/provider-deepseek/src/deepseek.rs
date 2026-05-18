@@ -1,7 +1,7 @@
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
-use llm_core::pipeline::{InputTransformer, RequestMeta};
+use llm_core::pipeline::InputTransformer;
 use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use llm_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
@@ -106,8 +106,8 @@ impl DeepSeekProvider {
 }
 
 impl InputTransformer for DeepSeekProvider {
-  fn transform_input(&self, meta: &RequestMeta, body: Value) -> Result<Value> {
-    Ok(shape_request(meta.upstream_endpoint, body))
+  fn transform_input(&self, endpoint: crate::Endpoint, body: Value) -> Result<Value> {
+    Ok(shape_request(endpoint, body))
   }
 }
 

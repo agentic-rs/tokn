@@ -32,7 +32,7 @@ pub struct ParsedRequest {
 }
 
 pub trait InputTransformer: Send + Sync {
-  fn transform_input(&self, meta: &RequestMeta, body: Value) -> crate::provider::Result<Value>;
+  fn transform_input(&self, endpoint: Endpoint, body: Value) -> crate::provider::Result<Value>;
 }
 
 pub trait RequestResolver: Send + Sync {

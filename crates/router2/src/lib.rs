@@ -20,6 +20,7 @@ pub mod event;
 pub mod pipeline;
 pub mod profile;
 pub mod stages;
+pub mod utils;
 
 pub use event::{CustomEvent, Event, EventBus, EventPayload, StageEvent, Stage};
 pub use pipeline::{

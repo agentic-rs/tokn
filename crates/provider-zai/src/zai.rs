@@ -19,7 +19,7 @@ pub use crate::{models, quota, transform};
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use llm_core::account::AccountConfig;
-use llm_core::pipeline::{InputTransformer, RequestMeta};
+use llm_core::pipeline::InputTransformer;
 use llm_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use llm_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
@@ -119,7 +119,7 @@ impl ZaiProvider {
 }
 
 impl InputTransformer for ZaiProvider {
-  fn transform_input(&self, _meta: &RequestMeta, body: Value) -> Result<Value> {
+  fn transform_input(&self, _endpoint: crate::Endpoint, body: Value) -> Result<Value> {
     let model_id = body.get("model").and_then(|v| v.as_str()).unwrap_or("");
     let reasoning = self
       .model_info(model_id)
@@ -349,28 +349,13 @@ mod tests {
   #[test]
   fn input_transformer_injects_thinking_once() {
     let provider = ZaiProvider::from_account(std::sync::Arc::new(acct("zai-coding-plan", Some("sk-test")))).unwrap();
-    let meta = RequestMeta {
-      endpoint: Endpoint::ChatCompletions,
-      upstream_endpoint: Endpoint::ChatCompletions,
-      model: "glm-4.6".into(),
-      upstream_model: "glm-4.6".into(),
-      stream: false,
-      session_id: None,
-      request_id: None,
-      attempt: 0,
-      project_id: None,
-      initiator: "user".into(),
-      header_initiator: None,
-      behave_as: None,
-      inbound_headers: HeaderMap::new(),
-    };
     let body = serde_json::json!({
       "model": "glm-4.6",
       "messages": [{ "role": "user", "content": "hi" }]
     });
 
-    let once = provider.transform_input(&meta, body).unwrap();
-    let twice = provider.transform_input(&meta, once.clone()).unwrap();
+    let once = provider.transform_input(Endpoint::ChatCompletions, body).unwrap();
+    let twice = provider.transform_input(Endpoint::ChatCompletions, once.clone()).unwrap();
 
     assert_eq!(once, twice);
     assert_eq!(
@@ -401,24 +386,9 @@ mod tests {
     cfg.base_url = Some(format!("http://{addr}"));
     let provider = ZaiProvider::from_account(std::sync::Arc::new(cfg)).unwrap();
     let http = reqwest::Client::new();
-    let meta = RequestMeta {
-      endpoint: Endpoint::ChatCompletions,
-      upstream_endpoint: Endpoint::ChatCompletions,
-      model: "glm-4.6".into(),
-      upstream_model: "glm-4.6".into(),
-      stream: false,
-      session_id: None,
-      request_id: None,
-      attempt: 0,
-      project_id: None,
-      initiator: "user".into(),
-      header_initiator: None,
-      behave_as: None,
-      inbound_headers: HeaderMap::new(),
-    };
     let body = provider
       .transform_input(
-        &meta,
+        Endpoint::ChatCompletions,
         serde_json::json!({ "model": "glm-4.6", "messages": [{ "role": "user", "content": "hi" }] }),
       )
       .unwrap();
