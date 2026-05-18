@@ -3,8 +3,7 @@
 //! Each per-stage variant carries the **stage's own output** directly. The
 //! cheap-to-clone stage outputs (`Extracted` wrapped in `Arc`, `Resolved`,
 //! `BuiltHeaders`, `ConvertedRequest`) are embedded as tuple-variant
-//! payloads so subscribers read them with one destructure and the runner
-//! reuses the same value it stores on `PipelineOutcome`.
+//! payloads so subscribers read them with one destructure.
 //!
 //! `Send` and `ConvertResponse` cannot embed their full outputs — the
 //! upstream `reqwest::Response` and SSE `BoxStream` are single-shot — so
@@ -12,15 +11,16 @@
 //! struct variants.
 //!
 //! Terminal events (`Error`, `Completed`) carry only their own minimal
-//! fields. Subscribers that need accumulated state either fold prior
-//! per-stage events or read from the `PipelineOutcome` the runner returns
-//! to the caller; the runner no longer maintains a parallel snapshot.
+//! fields. Subscribers that need accumulated state fold prior per-stage
+//! events themselves — the runner no longer maintains a parallel snapshot
+//! and `PipelineRunner::run` returns only the final `ConvertedResponse` (or
+//! the originating `PipelineError`).
 //!
 //! [`PipelineRunner`]: crate::pipeline::PipelineRunner
 
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
-use llm_headers::HeaderMap;
 use llm_core::provider::Endpoint;
+use llm_headers::HeaderMap;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -106,21 +106,27 @@ pub enum StageEvent {
   /// shared via `Arc<Value>`; streaming bodies are not included on the
   /// event (the live byte stream is single-shot).
   ConvertResponse(ConvertedResponseSummary),
-  /// Any stage failure. `recoverable` is propagated verbatim from the
-  /// [`PipelineError`] returned by the stage; the runner does not infer
-  /// it. Subscribers that need partial state read from the
-  /// [`PipelineOutcome`] the runner returns to the caller, or fold prior
-  /// per-stage events themselves.
+  /// Any stage failure (or deliberate stop). `recoverable` and `stop` are
+  /// propagated verbatim from the [`PipelineError`] returned by the stage.
+  /// Subscribers that need partial state fold prior per-stage events
+  /// themselves; the event payload does not embed accumulated outputs.
+  ///
+  /// When `stop == true` the stage chose to halt the pipeline rather than
+  /// failing (e.g. a dry-run Send stub); callers should render whatever
+  /// they captured from prior events as a successful early termination.
   ///
   /// [`PipelineError`]: crate::pipeline::error::PipelineError
-  /// [`PipelineOutcome`]: crate::pipeline::outcome::PipelineOutcome
   Error {
     stage: Stage,
     message: SmolStr,
     recoverable: bool,
+    stop: bool,
   },
-  /// Emitted once at the end of [`PipelineRunner::run`], success or
-  /// failure.
+  /// Emitted once at the end of [`PipelineRunner::run`]. `success` is
+  /// `true` only when the pipeline produced a `ConvertedResponse`; both
+  /// real failures and deliberate stops set it to `false`. Subscribers
+  /// that care about the distinction read the preceding `Error` event's
+  /// `stop` flag.
   ///
   /// [`PipelineRunner::run`]: crate::pipeline::PipelineRunner::run
   Completed { success: bool, attempts: u32 },

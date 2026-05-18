@@ -12,10 +12,14 @@
 //! * [`Profile::full`] — all six slots provided. The intended production
 //!   shape.
 //! * [`Profile::without_send`] — convenience for dry-run / smoke flows: the
-//!   Send and ConvertResponse slots are filled with no-ops. Combine with
-//!   [`RunnerOptions::stop_after`](crate::pipeline::RunnerOptions::stop_after)
-//!   pointing at [`Stage::ConvertRequest`](crate::event::Stage) to short-
-//!   circuit the runner once the outbound request is fully built.
+//!   Send slot is filled with [`NoopSend`](crate::stages::NoopSend), which
+//!   halts the pipeline by returning `PipelineError::stop(...)`. The
+//!   ConvertResponse slot is filled with [`NoopConvertResponse`] but is
+//!   never invoked. Callers detect the stop via `err.stop` on the
+//!   `PipelineError` returned by `PipelineRunner::run` and render the
+//!   per-stage outputs captured from the [`EventBus`].
+//!
+//! [`EventBus`]: crate::event::EventBus
 
 use crate::pipeline::stages::{
   BuildHeadersStage, ConvertRequestStage, ConvertResponseStage, ExtractStage, ResolveStage, SendStage,
@@ -55,10 +59,12 @@ impl Profile {
     }
   }
 
-  /// Convenience constructor for dry-run / smoke flows. Fills the Send and
-  /// ConvertResponse slots with no-op stages. Callers should pair this with
-  /// [`RunnerOptions::stop_after(Stage::ConvertRequest)`](crate::pipeline::RunnerOptions::stop_after)
-  /// so the runner short-circuits instead of invoking the no-ops.
+  /// Convenience constructor for dry-run / smoke flows. Fills the Send
+  /// slot with [`NoopSend`](crate::stages::NoopSend), which halts the
+  /// pipeline by returning `PipelineError::stop(...)` after every prior
+  /// stage has run. The ConvertResponse slot is filled with
+  /// [`NoopConvertResponse`] but is never invoked. Callers branch on
+  /// `err.stop` and read per-stage outputs from the event bus.
   pub fn without_send(
     name: impl Into<SmolStr>,
     extract: Arc<dyn ExtractStage>,

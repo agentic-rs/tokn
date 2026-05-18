@@ -7,17 +7,19 @@
 //!   [`StageEvent::Completed`] after the last (always).
 //! * Run each stage; on success, emit the matching per-stage event carrying
 //!   the stage's own output (cloned where the type permits); on failure,
-//!   emit [`StageEvent::Error`] (with the stage/recoverable flag pulled
-//!   verbatim from [`PipelineError`]) followed by `Completed { success: false }`
-//!   and short-circuit.
-//! * The runner can be configured (via [`RunnerOptions::stop_after`]) to
-//!   short-circuit with success after a specific stage completes. This is
-//!   how dry-run / smoke flows skip the Send half without needing a
-//!   special-case profile constructor.
-//!
-//! The runner does not maintain a parallel "snapshot" — accumulated state
-//! is exposed only via the returned [`PipelineOutcome`]. Subscribers that
-//! need a running view fold the per-stage events themselves.
+//!   emit [`StageEvent::Error`] (with the stage / recoverable / stop flags
+//!   pulled verbatim from [`PipelineError`]) followed by `Completed { success
+//!   = !err.stop }` and short-circuit.
+//! * Return `Result<ConvertedResponse, PipelineError>` to the caller. The
+//!   runner does not retain partial state — subscribers that need the
+//!   per-stage outputs read them off the [`EventBus`] events, which carry
+//!   each stage's own output as the payload.
+//! * A stage may halt the pipeline deliberately by returning
+//!   `PipelineError::stop(...)`. This is the mechanism used by dry-run
+//!   profiles (e.g. [`NoopSend`](crate::stages::NoopSend)): the runner
+//!   still emits Error + Completed, but the caller can branch on
+//!   `err.stop` to render a successful early-termination report instead
+//!   of a failure.
 //!
 //! Hooks are intentionally absent from PR1.
 //!
@@ -25,17 +27,16 @@
 //! [`StageEvent::Started`]: crate::event::StageEvent::Started
 //! [`StageEvent::Completed`]: crate::event::StageEvent::Completed
 //! [`StageEvent::Error`]: crate::event::StageEvent::Error
+//! [`EventBus`]: crate::event::EventBus
 
 pub mod ctx;
 pub mod error;
-pub mod outcome;
 pub mod stages;
 
-use crate::event::{ConvertedResponseSummary, EventBus, SentSummary, Stage, StageEvent};
+use crate::event::{ConvertedResponseSummary, EventBus, SentSummary, StageEvent};
 use crate::profile::Profile;
 use ctx::PipelineCtx;
 use error::PipelineError;
-use outcome::PipelineOutcome;
 use smol_str::SmolStr;
 pub use stages::{
   BuildHeadersStage, BuiltHeaders, ConvertRequestStage, ConvertResponseStage, ConvertedRequest, ConvertedResponse,
@@ -46,55 +47,29 @@ use std::sync::Arc;
 /// Alias for clarity at call sites — the same type as [`PipelineRunner`].
 pub type Pipeline = PipelineRunner;
 
-/// Per-run configuration knobs for [`PipelineRunner`].
-///
-/// `stop_after` short-circuits the run with success once the named stage
-/// completes — used by dry-run / smoke flows that want the front-half output
-/// (BuildHeaders + ConvertRequest) without invoking Send.
-#[derive(Debug, Clone, Default)]
-pub struct RunnerOptions {
-  pub stop_after: Option<Stage>,
-}
-
-impl RunnerOptions {
-  pub fn stop_after(stage: Stage) -> Self {
-    Self {
-      stop_after: Some(stage),
-    }
-  }
-}
-
 pub struct PipelineRunner {
   pub profile: Arc<Profile>,
   pub events: Arc<EventBus>,
-  pub options: RunnerOptions,
 }
 
 impl PipelineRunner {
   pub fn new(profile: Arc<Profile>, events: Arc<EventBus>) -> Self {
-    Self {
-      profile,
-      events,
-      options: RunnerOptions::default(),
-    }
+    Self { profile, events }
   }
 
-  pub fn with_options(profile: Arc<Profile>, events: Arc<EventBus>, options: RunnerOptions) -> Self {
-    Self {
-      profile,
-      events,
-      options,
-    }
-  }
-
-  pub async fn run(&self, raw: RawInbound) -> PipelineOutcome {
+  /// Drive the pipeline through all six stages. Returns the final
+  /// [`ConvertedResponse`] on success or the originating [`PipelineError`]
+  /// on failure. Callers that need partial state (per-stage outputs)
+  /// subscribe to the [`EventBus`] — each per-stage `StageEvent` variant
+  /// carries that stage's own output.
+  ///
+  /// A `PipelineError` with `stop == true` indicates a deliberate early
+  /// termination (e.g. dry-run); it is still returned as `Err` but should
+  /// not be reported as a failure.
+  pub async fn run(&self, raw: RawInbound) -> Result<ConvertedResponse, PipelineError> {
     let request_id = raw.request_id.clone().unwrap_or_else(|| SmolStr::new(uuid_like()));
     let ctx = PipelineCtx::new(request_id, raw.endpoint, self.events.clone());
     ctx.emit_known(StageEvent::Started { endpoint: raw.endpoint });
-
-    // The outcome accumulator collects each stage's output so the caller
-    // can inspect partial state on failure and the final state on success.
-    let mut outcome = PipelineOutcome::success(0);
 
     // ---- Extract ----
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
@@ -105,24 +80,17 @@ impl PipelineRunner {
         ctx.emit_known(StageEvent::Extract(arc.clone()));
         arc
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
-    if self.options.stop_after == Some(Stage::Extract) {
-      return self.complete(&ctx, outcome);
-    }
 
     // ---- Resolve ----
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
-        outcome.resolved = Some(r.clone());
         ctx.emit_known(StageEvent::Resolve(r.clone()));
         r
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
-    if self.options.stop_after == Some(Stage::Resolve) {
-      return self.complete(&ctx, outcome);
-    }
 
     // ---- BuildHeaders ----
     let headers = match self
@@ -132,15 +100,11 @@ impl PipelineRunner {
       .await
     {
       Ok(h) => {
-        outcome.built_headers = Some(h.clone());
         ctx.emit_known(StageEvent::BuildHeaders(h.clone()));
         h
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
-    if self.options.stop_after == Some(Stage::BuildHeaders) {
-      return self.complete(&ctx, outcome);
-    }
 
     // ---- ConvertRequest ----
     let converted = match self
@@ -150,15 +114,11 @@ impl PipelineRunner {
       .await
     {
       Ok(c) => {
-        outcome.converted_request = Some(c.clone());
         ctx.emit_known(StageEvent::ConvertRequest(c.clone()));
         c
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
-    if self.options.stop_after == Some(Stage::ConvertRequest) {
-      return self.complete(&ctx, outcome);
-    }
 
     // ---- Send ----
     let sent = match self
@@ -179,18 +139,14 @@ impl PipelineRunner {
         }));
         s
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
-    if self.options.stop_after == Some(Stage::Send) {
-      outcome.sent_response = Some(sent);
-      return self.complete(&ctx, outcome);
-    }
 
     // ---- ConvertResponse ----
     let converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
       Ok(c) => {
-        // Build the summary before moving `c` into the outcome — body
-        // (when buffered) is shared via the same Arc<Value>.
+        // Build the summary before moving `c` to the caller — body (when
+        // buffered) is shared via the same Arc<Value>.
         let summary = ConvertedResponseSummary {
           status: c.status(),
           headers: c.headers().clone(),
@@ -202,48 +158,33 @@ impl PipelineRunner {
         ctx.emit_known(StageEvent::ConvertResponse(summary));
         c
       }
-      Err(err) => return self.fail(&ctx, &mut outcome, err),
+      Err(err) => return Err(self.fail(&ctx, err)),
     };
 
-    outcome.success = true;
-    outcome.attempts = ctx.attempt + 1;
-    outcome.converted_response = Some(converted_response);
-    self.complete(&ctx, outcome)
-  }
-
-  /// Emit [`StageEvent::Completed`] for a successful (or short-circuited)
-  /// run and return the assembled outcome.
-  fn complete(&self, ctx: &PipelineCtx, mut outcome: PipelineOutcome) -> PipelineOutcome {
-    outcome.success = true;
-    outcome.attempts = ctx.attempt + 1;
     ctx.emit_known(StageEvent::Completed {
       success: true,
-      attempts: outcome.attempts,
+      attempts: ctx.attempt + 1,
     });
-    outcome
+    Ok(converted_response)
   }
 
-  /// Record the failure on `outcome`, emit [`StageEvent::Error`] +
-  /// [`StageEvent::Completed { success: false }`], and return the
-  /// partially-populated outcome to the caller. Subscribers that need
-  /// the accumulated partial state read it from the returned outcome.
-  fn fail(&self, ctx: &PipelineCtx, outcome: &mut PipelineOutcome, err: PipelineError) -> PipelineOutcome {
-    outcome.success = false;
-    outcome.attempts = ctx.attempt + 1;
-    outcome.error = Some(err.clone());
+  /// Emit [`StageEvent::Error`] + [`StageEvent::Completed`] for the given
+  /// error and return it. `Completed.success` is always `false` here —
+  /// even a deliberate stop did not produce a `ConvertedResponse`.
+  /// Subscribers that need to distinguish a stop from a real failure read
+  /// the preceding `Error` event's `stop` flag.
+  fn fail(&self, ctx: &PipelineCtx, err: PipelineError) -> PipelineError {
     ctx.emit_known(StageEvent::Error {
       stage: err.stage,
       message: err.message.clone(),
       recoverable: err.recoverable,
+      stop: err.stop,
     });
     ctx.emit_known(StageEvent::Completed {
       success: false,
-      attempts: outcome.attempts,
+      attempts: ctx.attempt + 1,
     });
-    // Move the populated outcome out by replacing it with a tombstone;
-    // the caller's `&mut` reference is local to this method's parent
-    // frame and dies immediately on return, so this is sound.
-    std::mem::replace(outcome, PipelineOutcome::failure(0, err))
+    err
   }
 }
 

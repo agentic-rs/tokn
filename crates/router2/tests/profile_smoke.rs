@@ -3,7 +3,9 @@
 //! Assembles a [`Profile::without_send`] with [`DefaultExtract`], a fake
 //! [`AccountSelector`], and the [`NoopBuildHeaders`]/[`NoopConvertRequest`]
 //! stages (real impls land in PR2 follow-ups). Runs against a synthetic
-//! [`RawInbound`] and asserts the event sequence.
+//! [`RawInbound`] and asserts the event sequence. The pipeline halts at
+//! Send via `PipelineError::stop`; subscribers fold the per-stage events
+//! to reconstruct the partial outputs.
 //!
 //! The PR3b full-pipeline test (`full_pipeline_buffered_happy_path`)
 //! additionally exercises the real `DefaultSend` + `DefaultConvertResponse`
@@ -23,7 +25,7 @@ use llm_router2::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
-use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RunnerOptions};
+use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
@@ -174,11 +176,15 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
     Arc::new(NoopBuildHeaders),
     Arc::new(NoopConvertRequest),
   ));
-  let runner = PipelineRunner::with_options(profile, bus, RunnerOptions::stop_after(Stage::ConvertRequest));
+  let runner = PipelineRunner::new(profile, bus);
 
-  let outcome = runner.run(raw_chat("input-model")).await;
-  assert!(outcome.success, "outcome: {outcome:?}");
-  assert_eq!(outcome.attempts, 1);
+  // `without_send` halts at the Send stage via `PipelineError::stop`.
+  let err = runner
+    .run(raw_chat("input-model"))
+    .await
+    .expect_err("without_send must return Err(stop) at Send");
+  assert!(err.stop, "expected a stop error, got {err:?}");
+  assert_eq!(err.stage, Stage::Send);
 
   let events = log.lock().unwrap();
   let kinds = known_kinds(&events);
@@ -190,9 +196,22 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
       "resolve",
       "build_headers",
       "convert_request",
-      "completed"
+      "error",
+      "completed",
     ]
   );
+
+  // The Error event must carry the stop flag verbatim so subscribers can
+  // distinguish a deliberate stop from a real failure.
+  let (err_stage, stop_flag) = events
+    .iter()
+    .find_map(|e| match &e.payload {
+      EventPayload::Known(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
+      _ => None,
+    })
+    .expect("Error event must be present");
+  assert_eq!(err_stage, Stage::Send);
+  assert!(stop_flag);
 
   // Spot-check the Resolve event carries the upstream model and provider.
   let resolve = events.iter().find_map(|e| match &e.payload {
@@ -223,26 +242,34 @@ async fn pre_send_no_account_emits_error_then_completed_failure() {
   ));
   let runner = PipelineRunner::new(profile, bus);
 
-  let outcome = runner.run(raw_chat("nope")).await;
-  assert!(!outcome.success);
-  let err = outcome.error.expect("failure outcome must carry the underlying error");
+  let err = runner
+    .run(raw_chat("nope"))
+    .await
+    .expect_err("empty selector must fail at Resolve");
   assert_eq!(err.stage, Stage::Resolve);
   assert!(!err.recoverable);
+  assert!(!err.stop, "no-account is a real failure, not a stop");
 
   let events = log.lock().unwrap();
   let kinds = known_kinds(&events);
   assert_eq!(kinds, ["started", "extract", "error", "completed"]);
 
-  // The error event must carry the same stage + recoverable flag as the outcome.
-  let (stage, recoverable) = events
+  // The error event must mirror the returned error's stage / flags.
+  let (stage, recoverable, stop) = events
     .iter()
     .find_map(|e| match &e.payload {
-      EventPayload::Known(StageEvent::Error { stage, recoverable, .. }) => Some((*stage, *recoverable)),
+      EventPayload::Known(StageEvent::Error {
+        stage,
+        recoverable,
+        stop,
+        ..
+      }) => Some((*stage, *recoverable, *stop)),
       _ => None,
     })
     .expect("Error event must be present");
   assert_eq!(stage, Stage::Resolve);
   assert!(!recoverable);
+  assert!(!stop);
 
   // The terminal Completed event must report success=false.
   let success = events.iter().find_map(|e| match &e.payload {
@@ -378,9 +405,10 @@ async fn full_pipeline_buffered_happy_path() {
   ));
   let runner = PipelineRunner::new(profile, bus);
 
-  let outcome = runner.run(raw_chat("glm-4")).await;
-  assert!(outcome.success, "outcome: {outcome:?}");
-  assert_eq!(outcome.attempts, 1);
+  let converted = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect("happy-path pipeline must succeed");
 
   // Full happy-path event sequence: every stage fires exactly once,
   // followed by the terminal Completed marker.
@@ -400,14 +428,21 @@ async fn full_pipeline_buffered_happy_path() {
     ]
   );
 
+  // Completed must report success=true with attempts=1.
+  let (success, attempts) = events
+    .iter()
+    .find_map(|e| match &e.payload {
+      EventPayload::Known(StageEvent::Completed { success, attempts }) => Some((*success, *attempts)),
+      _ => None,
+    })
+    .expect("Completed event must be present");
+  assert!(success);
+  assert_eq!(attempts, 1);
+
   // The converted response must round-trip the canned upstream payload.
-  let converted = outcome
-    .converted_response
-    .as_ref()
-    .expect("converted_response must be present on success");
   match converted {
     ConvertedResponse::Buffered { status, body_json, .. } => {
-      assert_eq!(*status, 200);
+      assert_eq!(status, 200);
       assert_eq!(body_json["id"], "resp-1");
       assert_eq!(body_json["choices"][0]["message"]["content"], "hi");
     }
@@ -418,11 +453,12 @@ async fn full_pipeline_buffered_happy_path() {
 // ---------- PR3c: failure preserves partial outcome ----------
 
 /// Provider whose `chat` always returns an upstream 401. Used to assert
-/// that a Send-stage failure preserves the resolved account, built
-/// headers, and converted request body on the returned `PipelineOutcome`,
-/// and that the terminal Error + Completed events report the failing
-/// stage without re-embedding the partial state (callers read it from
-/// the returned outcome).
+/// that a Send-stage failure short-circuits the pipeline with the
+/// matching `PipelineError`, that the terminal Error + Completed events
+/// report the failing stage, and that subscribers can fold the prior
+/// per-stage events to recover Resolve / BuildHeaders / ConvertRequest
+/// outputs (the runner no longer carries partial state in its return
+/// value).
 struct FailingProvider {
   info: ProviderInfo,
 }
@@ -504,35 +540,23 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   ));
   let runner = PipelineRunner::new(profile, bus);
 
-  let outcome = runner.run(raw_chat("glm-4")).await;
+  let err = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect_err("upstream 401 must surface as Err");
 
-  // The pipeline failed at Send — but every earlier stage's output must
-  // survive on the returned outcome so the CLI / caller can render
-  // diagnostic context.
-  assert!(!outcome.success, "expected failure, got {outcome:?}");
-  let err = outcome.error.as_ref().expect("failure must carry error");
+  // The pipeline failed at Send.
   assert_eq!(err.stage, Stage::Send);
   assert!(
     err.message.contains("401"),
     "error message should mention upstream status: {}",
     err.message
   );
-  assert!(outcome.resolved.is_some(), "Resolve output must survive Send failure");
-  assert!(
-    outcome.built_headers.is_some(),
-    "BuildHeaders output must survive Send failure"
-  );
-  assert!(
-    outcome.converted_request.is_some(),
-    "ConvertRequest output must survive Send failure"
-  );
-  assert!(
-    outcome.converted_response.is_none(),
-    "ConvertResponse must not run after Send failure"
-  );
+  assert!(!err.stop, "401 is a real failure, not a stop");
 
-  // Event sequence stops at Send (no convert_response), then error +
-  // completed.
+  // Subscribers fold prior per-stage events to recover the partial state
+  // — the runner does not carry it on the return value any more. Every
+  // earlier stage must have fired exactly once before the Error.
   let events = log.lock().unwrap();
   let kinds = known_kinds(&events);
   assert_eq!(
@@ -548,15 +572,31 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     ]
   );
 
+  // Spot-check that each pre-Send stage's event carries its full output.
+  let resolved_seen = events
+    .iter()
+    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::Resolve(_))));
+  let headers_seen = events
+    .iter()
+    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::BuildHeaders(_))));
+  let req_seen = events
+    .iter()
+    .any(|e| matches!(&e.payload, EventPayload::Known(StageEvent::ConvertRequest(_))));
+  assert!(resolved_seen, "Resolve event must precede the Send failure");
+  assert!(headers_seen, "BuildHeaders event must precede the Send failure");
+  assert!(req_seen, "ConvertRequest event must precede the Send failure");
+
   // The terminal events mirror the failure: Error tags the originating
-  // stage; Completed reports success=false. Subscribers that need the
-  // partial state read it from the returned PipelineOutcome above (no
-  // snapshot is embedded in the events themselves).
-  let err_stage = events.iter().find_map(|e| match &e.payload {
-    EventPayload::Known(StageEvent::Error { stage, .. }) => Some(*stage),
-    _ => None,
-  });
-  assert_eq!(err_stage, Some(Stage::Send));
+  // stage with stop=false; Completed reports success=false.
+  let (err_stage, err_stop) = events
+    .iter()
+    .find_map(|e| match &e.payload {
+      EventPayload::Known(StageEvent::Error { stage, stop, .. }) => Some((*stage, *stop)),
+      _ => None,
+    })
+    .expect("Error event must be present");
+  assert_eq!(err_stage, Stage::Send);
+  assert!(!err_stop);
   let completed_success = events.iter().find_map(|e| match &e.payload {
     EventPayload::Known(StageEvent::Completed { success, .. }) => Some(*success),
     _ => None,

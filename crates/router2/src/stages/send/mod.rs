@@ -1,10 +1,10 @@
-//! No-op Send stage. Always returns a permanent [`PipelineError`] tagged
-//! `Stage::Send`. Used as a placeholder by
-//! [`Profile::without_send`](crate::profile::Profile::without_send),
-//! which configures the runner to short-circuit before this stage runs. If
-//! the runner is mistakenly invoked against a full [`Profile`] using this
-//! stub (i.e. someone forgot to swap it for a real impl), it will deliberately
-//! fail loudly rather than silently succeeding.
+//! No-op Send stage. Returns a `PipelineError::stop` so the runner
+//! short-circuits without invoking the network. Used by
+//! [`Profile::without_send`](crate::profile::Profile::without_send) for
+//! dry-run / smoke flows: the runner emits every prior stage's event
+//! (Extract/Resolve/BuildHeaders/ConvertRequest) and then a single Error
+//! event tagged `stage = Send, stop = true`. Callers detect the stop flag
+//! and render whatever partial state they captured from the bus.
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
@@ -28,9 +28,9 @@ impl SendStage for NoopSend {
     _headers: &BuiltHeaders,
     _body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    Err(PipelineError::permanent(
+    Err(PipelineError::stop(
       Stage::Send,
-      SmolStr::new("NoopSend invoked: real Send stage is not yet implemented (PR3)"),
+      SmolStr::new("NoopSend: dry-run profile stopped before contacting upstream"),
     ))
   }
 }

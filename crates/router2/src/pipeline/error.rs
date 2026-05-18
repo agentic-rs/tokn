@@ -2,7 +2,17 @@
 //! correct [`Stage`] tag and `recoverable` flag; the runner emits a matching
 //! [`StageEvent::Error`] verbatim from these fields.
 //!
+//! The `stop` flag distinguishes a *requested* short-circuit (a stage chose
+//! to halt the pipeline without producing a response — e.g. a dry-run Send
+//! stub) from a *real* failure. The runner treats both identically (emits
+//! `Error` + `Completed { success: false }` and short-circuits), but
+//! callers can branch on `err.stop` to render a successful dry-run report
+//! instead of a failure report. State accumulated up to the stop point is
+//! available to subscribers on the [`EventBus`] — each per-stage event
+//! carries that stage's own output.
+//!
 //! [`StageEvent::Error`]: crate::event::StageEvent::Error
+//! [`EventBus`]: crate::event::EventBus
 
 use crate::event::Stage;
 use smol_str::SmolStr;
@@ -13,8 +23,12 @@ pub struct PipelineError {
   pub message: SmolStr,
   /// `true` iff a retry-style decorator may sensibly re-invoke the stage.
   /// Permanent failures (bad request, 4xx, unknown model) set this to
-  /// `false`.
+  /// `false`. Always `false` when `stop == true`.
   pub recoverable: bool,
+  /// `true` iff a stage deliberately halted the pipeline rather than
+  /// failing. Used by dry-run Send stubs and other "stop here" stages.
+  /// Callers should treat this as a successful early termination.
+  pub stop: bool,
 }
 
 impl PipelineError {
@@ -23,6 +37,7 @@ impl PipelineError {
       stage,
       message: message.into(),
       recoverable,
+      stop: false,
     }
   }
 
@@ -32,6 +47,18 @@ impl PipelineError {
 
   pub fn recoverable(stage: Stage, message: impl Into<SmolStr>) -> Self {
     Self::new(stage, message, true)
+  }
+
+  /// A deliberate short-circuit: the stage chose to halt the pipeline
+  /// without producing a response. Not a failure; callers should render
+  /// whatever partial state they captured (typically via the event bus).
+  pub fn stop(stage: Stage, message: impl Into<SmolStr>) -> Self {
+    Self {
+      stage,
+      message: message.into(),
+      recoverable: false,
+      stop: true,
+    }
   }
 }
 

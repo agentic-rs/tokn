@@ -2,17 +2,18 @@
 //!
 //! Two modes:
 //!
-//! * `--dry-run` builds a [`Profile::without_send`] and stops after
-//!   `ConvertRequest`, printing the outbound preview (headers + body) from
-//!   [`PipelineOutcome::built_headers`] + [`PipelineOutcome::converted_request`].
-//!   Useful for inspecting what would be sent without touching the network.
+//! * `--dry-run` builds a [`Profile::without_send`]; the runner halts at
+//!   Send via `PipelineError::stop` after every prior stage's event has
+//!   fired. A bus subscriber captures the per-stage outputs
+//!   (`Resolved` / `BuiltHeaders` / `ConvertedRequest`) and they are
+//!   printed as the dry-run report.
 //! * Default (live) mode builds a [`Profile::full`] with [`DefaultSend`] and
 //!   [`DefaultConvertResponse`] and contacts the upstream provider. The
-//!   response is either printed as a buffered JSON payload or streamed
-//!   chunk-by-chunk to stdout (curl `-N` style).
+//!   response (returned from `run`) is either printed as a buffered JSON
+//!   payload or streamed chunk-by-chunk to stdout (curl `-N` style).
 //!
-//! In both modes every [`StageEvent`] is mirrored to stdout via a
-//! subscriber on the router2 [`EventBus`], so the user can see the pipeline
+//! In both modes every [`StageEvent`] is mirrored to stdout via a separate
+//! subscriber on the router2 [`EventBus`], so the user sees the pipeline
 //! progress in real time.
 
 use super::OutputFormat;
@@ -25,17 +26,15 @@ use clap::Args;
 use futures_util::StreamExt;
 use llm_config::RouteMode;
 use llm_router::api::AppState;
-use llm_router2::pipeline::stages::ConvertedResponse;
+use llm_router2::pipeline::stages::{BuiltHeaders, ConvertedRequest, ConvertedResponse, Resolved};
 use llm_router2::stages::{
   DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
   PoolResolve,
 };
-use llm_router2::{
-  Event, EventBus, EventPayload, PipelineOutcome, PipelineRunner, Profile, RawInbound, RunnerOptions, Stage, StageEvent,
-};
+use llm_router2::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::io::AsyncWriteExt;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
@@ -210,6 +209,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   // ---- Build the router2 profile ----
   let bus = Arc::new(EventBus::new());
   subscribe_event_printer(&bus);
+  // Capture per-stage outputs so we can render dry-run / failure reports
+  // after `run` returns. The runner no longer carries partial state on
+  // its return value; bus subscribers are the source of truth.
+  let captured = Captured::install(&bus);
 
   let selector = Arc::new(PoolAccountSelector::new(state.pool.clone(), state.route.clone()));
   let extract = Arc::new(DefaultExtract);
@@ -217,17 +220,16 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   let build_headers = Arc::new(PersonaBuildHeaders::with_opencode_default());
   let convert_request = Arc::new(DefaultConvertRequest);
 
-  let (profile, options) = if args.dry_run {
-    let profile = Arc::new(Profile::without_send(
+  let profile = if args.dry_run {
+    Arc::new(Profile::without_send(
       "gateway-smoke",
       extract,
       resolve,
       build_headers,
       convert_request,
-    ));
-    (profile, RunnerOptions::stop_after(Stage::ConvertRequest))
+    ))
   } else {
-    let profile = Arc::new(Profile::full(
+    Arc::new(Profile::full(
       "gateway-smoke",
       extract,
       resolve,
@@ -235,10 +237,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
       convert_request,
       Arc::new(DefaultSend::new(state.http.clone())),
       Arc::new(DefaultConvertResponse::new()),
-    ));
-    (profile, RunnerOptions::default())
+    ))
   };
-  let runner = PipelineRunner::with_options(profile, bus.clone(), options);
+  let runner = PipelineRunner::new(profile, bus.clone());
 
   let raw = RawInbound {
     endpoint,
@@ -249,7 +250,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     request_id: None,
   };
 
-  let outcome = runner.run(raw).await;
+  let result = runner.run(raw).await;
 
   // Shut down the legacy event plumbing — router2 events are independent.
   legacy_events.shutdown().await;
@@ -257,23 +258,60 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     archive_runtime.shutdown().await;
   }
 
-  if !outcome.success {
-    print_failure_outcome(&outcome, args.format, !args.no_redact)?;
-    let err = outcome
-      .error
-      .as_ref()
-      .map(|e| format!("{}: {}", e.stage, e.message))
-      .unwrap_or_else(|| "pipeline failed (no error attached)".into());
-    anyhow::bail!("pipeline failed: {err}");
-  }
+  let snapshot = captured.snapshot();
 
-  if args.dry_run {
-    print_dry_run_outcome(&outcome, args.format, !args.no_redact)?;
-  } else {
-    print_live_outcome(outcome, args.format, !args.no_redact).await?;
+  match result {
+    Ok(converted) => {
+      print_live_outcome(converted, &snapshot, args.format, !args.no_redact).await?;
+    }
+    Err(err) if err.stop && args.dry_run => {
+      print_dry_run_outcome(&snapshot, args.format, !args.no_redact)?;
+    }
+    Err(err) => {
+      print_failure_outcome(&err, &snapshot, args.format, !args.no_redact)?;
+      anyhow::bail!("pipeline failed: {}: {}", err.stage, err.message);
+    }
   }
 
   Ok(())
+}
+
+/// Per-stage outputs captured by a bus subscriber. Cloned out as a
+/// [`CapturedSnapshot`] once `run` returns so we can render reports
+/// without holding the mutex.
+#[derive(Default)]
+struct Captured {
+  inner: Mutex<CapturedSnapshot>,
+}
+
+#[derive(Default, Clone)]
+struct CapturedSnapshot {
+  resolved: Option<Resolved>,
+  built_headers: Option<BuiltHeaders>,
+  converted_request: Option<ConvertedRequest>,
+  attempts: Option<u32>,
+}
+
+impl Captured {
+  fn install(bus: &EventBus) -> Arc<Self> {
+    let cap = Arc::new(Captured::default());
+    let sink = cap.clone();
+    bus.subscribe(move |event: &Event| {
+      let mut snap = sink.inner.lock().unwrap();
+      match &event.payload {
+        EventPayload::Known(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
+        EventPayload::Known(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
+        EventPayload::Known(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
+        EventPayload::Known(StageEvent::Completed { attempts, .. }) => snap.attempts = Some(*attempts),
+        _ => {}
+      }
+    });
+    cap
+  }
+
+  fn snapshot(&self) -> CapturedSnapshot {
+    self.inner.lock().unwrap().clone()
+  }
 }
 
 fn subscribe_event_printer(bus: &EventBus) {
@@ -317,8 +355,13 @@ fn print_event(event: &Event) {
       stage,
       message,
       recoverable,
+      stop,
     }) => {
-      println!("[error]            stage={stage} recoverable={recoverable} message={message}");
+      if *stop {
+        println!("[stop]             stage={stage} message={message}");
+      } else {
+        println!("[error]            stage={stage} recoverable={recoverable} message={message}");
+      }
     }
     EventPayload::Known(StageEvent::Completed { success, attempts }) => {
       println!("[completed]        success={success} attempts={attempts}");
@@ -329,10 +372,10 @@ fn print_event(event: &Event) {
   }
 }
 
-fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
-  let resolved = outcome.resolved.as_ref();
-  let headers = outcome.built_headers.as_ref();
-  let converted = outcome.converted_request.as_ref();
+fn print_dry_run_outcome(snap: &CapturedSnapshot, format: OutputFormat, redact: bool) -> Result<()> {
+  let resolved = snap.resolved.as_ref();
+  let headers = snap.built_headers.as_ref();
+  let converted = snap.converted_request.as_ref();
 
   match format {
     OutputFormat::Json => {
@@ -342,7 +385,7 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
       let body_json = converted.map(|c| (*c.upstream_body).clone()).unwrap_or(Value::Null);
       let report = serde_json::json!({
         "dry_run": true,
-        "attempts": outcome.attempts,
+        "attempts": snap.attempts.unwrap_or(0),
         "account": resolved.map(|r| r.account_id.as_str()),
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
@@ -357,7 +400,9 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
     OutputFormat::Text => {
       println!();
       println!("--- outcome ---");
-      println!("attempts: {}", outcome.attempts);
+      if let Some(n) = snap.attempts {
+        println!("attempts: {n}");
+      }
       if let Some(r) = resolved {
         println!("account:  {}", r.account_id);
         println!("provider: {}", r.provider_id);
@@ -388,14 +433,14 @@ fn print_dry_run_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
 /// text preview; for streaming responses we forward the SSE byte chunks
 /// to stdout as they arrive (curl `-N` semantics) and finish with a
 /// concise summary.
-async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
-  let PipelineOutcome {
-    attempts,
-    resolved,
-    converted_response,
-    ..
-  } = outcome;
-  let converted = converted_response.ok_or_else(|| anyhow!("pipeline succeeded but produced no response"))?;
+async fn print_live_outcome(
+  converted: ConvertedResponse,
+  snap: &CapturedSnapshot,
+  format: OutputFormat,
+  redact: bool,
+) -> Result<()> {
+  let resolved = snap.resolved.as_ref();
+  let attempts = snap.attempts.unwrap_or(1);
 
   match converted {
     ConvertedResponse::Buffered {
@@ -409,11 +454,11 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
           "dry_run": false,
           "stream": false,
           "attempts": attempts,
-          "account": resolved.as_ref().map(|r| r.account_id.as_str()),
-          "provider": resolved.as_ref().map(|r| r.provider_id.as_str()),
-          "model": resolved.as_ref().map(|r| r.model.as_str()),
-          "upstream_model": resolved.as_ref().map(|r| r.upstream_model.as_str()),
-          "upstream_endpoint": resolved.as_ref().map(|r| r.upstream_endpoint.to_string()),
+          "account": resolved.map(|r| r.account_id.as_str()),
+          "provider": resolved.map(|r| r.provider_id.as_str()),
+          "model": resolved.map(|r| r.model.as_str()),
+          "upstream_model": resolved.map(|r| r.upstream_model.as_str()),
+          "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
           "status": status,
           "headers": headers_json_value(&headers, redact),
           "body": &*body_json,
@@ -424,7 +469,7 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
         println!();
         println!("--- response ---");
         println!("attempts: {}", attempts);
-        if let Some(r) = &resolved {
+        if let Some(r) = resolved {
           println!("account:  {}", r.account_id);
           println!("provider: {}", r.provider_id);
           println!("model:    {} -> {}", r.model, r.upstream_model);
@@ -455,7 +500,7 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
         println!();
         println!("--- response (stream) ---");
         println!("attempts: {}", attempts);
-        if let Some(r) = &resolved {
+        if let Some(r) = resolved {
           println!("account:  {}", r.account_id);
           println!("provider: {}", r.provider_id);
           println!("model:    {} -> {}", r.model, r.upstream_model);
@@ -493,11 +538,15 @@ async fn print_live_outcome(outcome: llm_router2::PipelineOutcome, format: Outpu
 /// Render whatever partial state the pipeline managed to accumulate before
 /// failing. Mirrors `print_dry_run_outcome` shape so the user sees the same
 /// fields whether the run succeeded, was dry-run, or aborted mid-stream.
-fn print_failure_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputFormat, redact: bool) -> Result<()> {
-  let resolved = outcome.resolved.as_ref();
-  let headers = outcome.built_headers.as_ref();
-  let converted_req = outcome.converted_request.as_ref();
-  let err = outcome.error.as_ref();
+fn print_failure_outcome(
+  err: &PipelineError,
+  snap: &CapturedSnapshot,
+  format: OutputFormat,
+  redact: bool,
+) -> Result<()> {
+  let resolved = snap.resolved.as_ref();
+  let headers = snap.built_headers.as_ref();
+  let converted_req = snap.converted_request.as_ref();
 
   match format {
     OutputFormat::Json => {
@@ -507,12 +556,13 @@ fn print_failure_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
       let body_json = converted_req.map(|c| (*c.upstream_body).clone()).unwrap_or(Value::Null);
       let report = serde_json::json!({
         "success": false,
-        "attempts": outcome.attempts,
-        "error": err.map(|e| serde_json::json!({
-          "stage": e.stage.as_str(),
-          "message": &e.message,
-          "recoverable": e.recoverable,
-        })),
+        "attempts": snap.attempts.unwrap_or(0),
+        "error": {
+          "stage": err.stage.as_str(),
+          "message": err.message.as_str(),
+          "recoverable": err.recoverable,
+          "stop": err.stop,
+        },
         "account": resolved.map(|r| r.account_id.as_str()),
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
@@ -527,12 +577,12 @@ fn print_failure_outcome(outcome: &llm_router2::PipelineOutcome, format: OutputF
     OutputFormat::Text => {
       println!();
       println!("--- failure ---");
-      println!("attempts: {}", outcome.attempts);
-      if let Some(e) = err {
-        println!("stage:    {}", e.stage);
-        println!("recoverable: {}", e.recoverable);
-        println!("message:  {}", e.message);
+      if let Some(n) = snap.attempts {
+        println!("attempts: {n}");
       }
+      println!("stage:    {}", err.stage);
+      println!("recoverable: {}", err.recoverable);
+      println!("message:  {}", err.message);
       if let Some(r) = resolved {
         println!("account:  {}", r.account_id);
         println!("provider: {}", r.provider_id);
