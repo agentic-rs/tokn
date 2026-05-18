@@ -1,5 +1,5 @@
 use crate::db::{MessageRecord, SessionSource, Usage};
-use crate::router2_event::Router2Event;
+use crate::request_event::RequestEvent;
 use bytes::Bytes;
 use llm_headers::HeaderMap;
 use std::sync::{Arc, Mutex};
@@ -8,14 +8,14 @@ use tokio::sync::{broadcast, oneshot};
 /// Top-level event flowing on the in-process broadcast bus.
 ///
 /// Subdomain enums group related variants so consumers can `match` on the
-/// domain (lifecycle, account, session, router2) without listing every
+/// domain (lifecycle, account, session, requests) without listing every
 /// variant at the top level. Telemetry (`StreamProgress`) and control
 /// (`Shutdown`) stay at the top level — they're not lifecycle records.
 ///
 /// Note: `Event` is **not** `Clone`. The bus broadcasts `Arc<Event>` so
 /// every subscriber sees the same allocation without copying the payload.
 /// If a subscriber needs to retain a subdomain payload it can clone the
-/// inner enum (e.g. `Router2Event`) which still derives `Clone`.
+/// inner enum (e.g. `RequestEvent`) which still derives `Clone`.
 #[derive(Debug)]
 pub enum Event {
   /// Inbound request lifecycle events.
@@ -24,10 +24,10 @@ pub enum Event {
   Account(AccountEvent),
   /// Session lifecycle events.
   Session(SessionEvent),
-  /// Router2 pipeline stage events (relocated to `llm_core::router2_event`).
-  /// Embedded here so subscribers can observe router2 stages on the same
+  /// Requests pipeline stage events (relocated to `llm_core::request_event`).
+  /// Embedded here so subscribers can observe requests stages on the same
   /// in-process bus that already carries the lifecycle events.
-  Router2(Router2Event),
+  Requests(RequestEvent),
 
   // --- Control ---
   /// Request graceful shutdown; sender receives `()` when drain is complete.

@@ -19,13 +19,13 @@ use llm_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
 use llm_headers::{HeaderMap, HeaderValue};
-use llm_router2::event::{EventPayload, Stage, StageEvent};
-use llm_router2::pipeline::stages::ConvertedResponse;
-use llm_router2::stages::{
+use llm_requests::event::{EventPayload, Stage, StageEvent};
+use llm_requests::pipeline::stages::ConvertedResponse;
+use llm_requests::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
-use llm_router2::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
+use llm_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::{Arc, Mutex};
@@ -95,8 +95,8 @@ struct OkSelector;
 impl AccountSelector for OkSelector {
   async fn select(
     &self,
-    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
-    _ex: &llm_router2::stage_traits::Extracted,
+    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
+    _ex: &llm_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new("acct-1"),
@@ -114,8 +114,8 @@ struct EmptySelector;
 impl AccountSelector for EmptySelector {
   async fn select(
     &self,
-    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
-    _ex: &llm_router2::stage_traits::Extracted,
+    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
+    _ex: &llm_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::NoAccount)
   }
@@ -131,7 +131,7 @@ fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
       loop {
         match rx.recv().await {
           Ok(arc) => {
-            if let llm_core::event::Event::Router2(ev) = &*arc {
+            if let llm_core::event::Event::Requests(ev) = &*arc {
               log.lock().unwrap().push(ev.clone());
             }
           }
@@ -392,8 +392,8 @@ struct CannedSelector {
 impl AccountSelector for CannedSelector {
   async fn select(
     &self,
-    _ctx: &llm_router2::pipeline::ctx::PipelineCtx,
-    _ex: &llm_router2::stage_traits::Extracted,
+    _ctx: &llm_requests::pipeline::ctx::PipelineCtx,
+    _ex: &llm_requests::stage_traits::Extracted,
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),

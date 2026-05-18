@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 /// Raw inbound HTTP payload passed to the Extract stage. The runner is
 /// responsible for assembling this from whatever transport is in front of
-/// router2 (axum in production, fixtures in tests).
+/// requests (axum in production, fixtures in tests).
 #[derive(Debug, Clone)]
 pub struct RawInbound {
   pub endpoint: Endpoint,

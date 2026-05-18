@@ -1,6 +1,6 @@
 //! Production [`SendStage`] implementation.
 //!
-//! Bridges the router2 stage pipeline to the legacy `Provider` trait
+//! Bridges the requests stage pipeline to the legacy `Provider` trait
 //! (`llm_core::provider::Provider`). Build a [`llm_core::provider::RequestCtx`]
 //! from the upstream-shaped body (produced by ConvertRequest), persona
 //! headers (produced by BuildHeaders), and a few inbound facts pulled from
@@ -20,7 +20,7 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
 use llm_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
-use llm_core::router2_event::RecordEvent;
+use llm_core::request_event::RecordEvent;
 use llm_headers::HeaderMap;
 use smol_str::SmolStr;
 use tracing::{debug, instrument, warn};

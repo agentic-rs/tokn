@@ -3,7 +3,7 @@
 //!
 //! [`PoolResolve`] is the production wiring (PR2 onward) but in PR1 it depends
 //! on a small [`AccountSelector`] trait rather than the legacy
-//! `crates/router::accounts::AccountPool`. This keeps router2 free of any
+//! `crates/router::accounts::AccountPool`. This keeps requests free of any
 //! dependency on the legacy crate; PR2 will provide a real implementation of
 //! [`AccountSelector`] backed by the existing pool (or its successor in a
 //! shared crate).

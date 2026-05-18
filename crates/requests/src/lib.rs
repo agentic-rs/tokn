@@ -1,4 +1,4 @@
-//! `router2`: greenfield reimplementation of the request pipeline.
+//! `requests`: greenfield reimplementation of the request pipeline.
 //!
 //! This crate is a library-only scaffold for the 6-stage pipeline:
 //!

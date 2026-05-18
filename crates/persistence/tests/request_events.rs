@@ -1,15 +1,15 @@
-//! Integration tests for the router2 event-driven persistence handler.
+//! Integration tests for the requests event-driven persistence handler.
 
 use bytes::Bytes;
 use llm_core::event::{Event, EventHandler};
 use llm_core::provider::Endpoint;
-use llm_core::router2_event::stage::{
+use llm_core::request_event::stage::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary, Stage, StageEvent,
 };
-use llm_core::router2_event::{Router2Event, Router2EventPayload};
+use llm_core::request_event::{RequestEvent, RequestEventPayload};
 use llm_headers::{HeaderMap, TemplateVars};
-use llm_persistence::Router2EventHandler;
+use llm_persistence::RequestEventHandler;
 use rusqlite::{params, Connection};
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -23,10 +23,10 @@ fn tempdir() -> PathBuf {
 }
 
 fn r2(request_id: &str, attempt: u32, payload: StageEvent) -> Event {
-  Event::Router2(Router2Event {
+  Event::Requests(RequestEvent {
     request_id: SmolStr::new(request_id),
     attempt,
-    payload: Router2EventPayload::Stage(payload),
+    payload: RequestEventPayload::Stage(payload),
   })
 }
 
@@ -171,7 +171,7 @@ fn is_null(v: &rusqlite::types::Value) -> bool {
 #[test]
 fn happy_path_persists_all_stages() {
   let dir = tempdir();
-  let mut h = Router2EventHandler::new(dir.clone()).unwrap();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-happy";
   h.handle(&r2(
     req,
@@ -227,7 +227,7 @@ fn happy_path_persists_all_stages() {
 #[test]
 fn error_before_send_leaves_status_null_and_records_error() {
   let dir = tempdir();
-  let mut h = Router2EventHandler::new(dir.clone()).unwrap();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-err";
   h.handle(&r2(
     req,
@@ -250,7 +250,7 @@ fn error_before_send_leaves_status_null_and_records_error() {
 #[test]
 fn retry_produces_two_independent_rows() {
   let dir = tempdir();
-  let mut h = Router2EventHandler::new(dir.clone()).unwrap();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-retry";
   // attempt 0: fails at Send
   h.handle(&r2(
@@ -294,7 +294,7 @@ fn retry_produces_two_independent_rows() {
 #[test]
 fn stage_event_without_started_is_dropped_with_warning() {
   let dir = tempdir();
-  let mut h = Router2EventHandler::new(dir.clone()).unwrap();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-orphan";
   h.handle(&r2(req, 0, extracted("m", false, None, b"")));
   h.handle(&r2(req, 0, completed(false, 1)));

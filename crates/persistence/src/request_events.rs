@@ -1,6 +1,6 @@
-//! Router2 stage-event persistence.
+//! Requests stage-event persistence.
 //!
-//! Subscribes to `Event::Router2(Router2Event { request_id, attempt, payload })`
+//! Subscribes to `Event::Requests(RequestEvent { request_id, attempt, payload })`
 //! and writes one row per `(request_id, attempt)` into the same per-day
 //! `requests/<YYYY-MM-DD>.db` files used by the legacy lifecycle writer.
 //!
@@ -19,7 +19,7 @@
 use crate::requests::open_day_db;
 use crate::{headers_json, Result};
 use llm_core::event::{Event, EventHandler};
-use llm_core::router2_event::{RecordEvent, Router2EventPayload, Stage, StageEvent};
+use llm_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -49,10 +49,10 @@ fn now_unix() -> i64 {
   time::OffsetDateTime::now_utc().unix_timestamp()
 }
 
-/// Per-day connection cache (LRU, cap 3) used by [`Router2EventHandler`].
+/// Per-day connection cache (LRU, cap 3) used by [`RequestEventHandler`].
 /// Independent from the legacy `RequestsDb` cache so the two handlers do
 /// not contend on a shared `Mutex`.
-pub struct Router2RequestsWriter {
+pub struct RequestEventsWriter {
   dir: PathBuf,
   conns: HashMap<String, Connection>,
   order: VecDeque<String>,
@@ -62,7 +62,7 @@ pub struct Router2RequestsWriter {
   request_day: HashMap<String, String>,
 }
 
-impl Router2RequestsWriter {
+impl RequestEventsWriter {
   pub fn new(dir: PathBuf) -> Result<Self> {
     std::fs::create_dir_all(&dir)?;
     Ok(Self {
@@ -85,7 +85,7 @@ impl Router2RequestsWriter {
     }
     self.order.retain(|k| k != key);
     self.order.push_back(key.to_string());
-    Ok(self.conns.get_mut(key).expect("opened router2 requests db"))
+    Ok(self.conns.get_mut(key).expect("opened requests requests db"))
   }
 
   fn conn_for_request(&mut self, request_id: &str) -> Option<&mut Connection> {
@@ -123,7 +123,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(inbound_req_headers);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 Extract without prior Started");
+      tracing::warn!(request_id = %id, "requests Extract without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -146,7 +146,7 @@ impl Router2RequestsWriter {
       ],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 Extract UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests Extract UPDATE matched no row");
     }
     Ok(())
   }
@@ -161,7 +161,7 @@ impl Router2RequestsWriter {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 Resolve without prior Started");
+      tracing::warn!(request_id = %id, "requests Resolve without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -173,7 +173,7 @@ impl Router2RequestsWriter {
       params![id, account_id, provider_id, upstream_endpoint],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 Resolve UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests Resolve UPDATE matched no row");
     }
     Ok(())
   }
@@ -187,7 +187,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_req_headers);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 BuildHeaders without prior Started");
+      tracing::warn!(request_id = %id, "requests BuildHeaders without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -195,7 +195,7 @@ impl Router2RequestsWriter {
       params![id, hdr_json.as_ref()],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 BuildHeaders UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests BuildHeaders UPDATE matched no row");
     }
     Ok(())
   }
@@ -203,7 +203,7 @@ impl Router2RequestsWriter {
   pub fn on_convert_request(&mut self, request_id: &str, attempt: u32, outbound_req_body: &bytes::Bytes) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 ConvertRequest without prior Started");
+      tracing::warn!(request_id = %id, "requests ConvertRequest without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -211,7 +211,7 @@ impl Router2RequestsWriter {
       params![id, outbound_req_body.as_ref()],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 ConvertRequest UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests ConvertRequest UPDATE matched no row");
     }
     Ok(())
   }
@@ -227,7 +227,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_resp_headers);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 Send without prior Started");
+      tracing::warn!(request_id = %id, "requests Send without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -240,7 +240,7 @@ impl Router2RequestsWriter {
       params![id, status as i64, hdr_json.as_ref(), ts_now],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 Send UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests Send UPDATE matched no row");
     }
     Ok(())
   }
@@ -256,7 +256,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(inbound_resp_headers);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 ConvertResponse without prior Started");
+      tracing::warn!(request_id = %id, "requests ConvertResponse without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -268,7 +268,7 @@ impl Router2RequestsWriter {
       params![id, status as i64, hdr_json.as_ref(), inbound_resp_body.as_ref()],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 ConvertResponse UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests ConvertResponse UPDATE matched no row");
     }
     Ok(())
   }
@@ -277,7 +277,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let formatted = format!("{}: {message}", stage.as_str());
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 Error without prior Started");
+      tracing::warn!(request_id = %id, "requests Error without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -285,7 +285,7 @@ impl Router2RequestsWriter {
       params![id, formatted],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 Error UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests Error UPDATE matched no row");
     }
     Ok(())
   }
@@ -293,7 +293,7 @@ impl Router2RequestsWriter {
   pub fn on_completed(&mut self, request_id: &str, attempt: u32, ts_now: i64) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 Completed without prior Started");
+      tracing::warn!(request_id = %id, "requests Completed without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -301,7 +301,7 @@ impl Router2RequestsWriter {
       params![id, ts_now],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 Completed UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests Completed UPDATE matched no row");
     }
     Ok(())
   }
@@ -325,7 +325,7 @@ impl Router2RequestsWriter {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(headers);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 UpstreamReq without prior Started");
+      tracing::warn!(request_id = %id, "requests UpstreamReq without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -338,7 +338,7 @@ impl Router2RequestsWriter {
       params![id, method, url, hdr_json.as_ref(), body.as_ref()],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 UpstreamReq UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests UpstreamReq UPDATE matched no row");
     }
     Ok(())
   }
@@ -351,7 +351,7 @@ impl Router2RequestsWriter {
   pub fn on_upstream_body(&mut self, request_id: &str, attempt: u32, body: &bytes::Bytes) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "router2 UpstreamBody without prior Started");
+      tracing::warn!(request_id = %id, "requests UpstreamBody without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
@@ -359,38 +359,38 @@ impl Router2RequestsWriter {
       params![id, body.as_ref()],
     )?;
     if updated == 0 {
-      tracing::warn!(request_id = %id, "router2 UpstreamBody UPDATE matched no row");
+      tracing::warn!(request_id = %id, "requests UpstreamBody UPDATE matched no row");
     }
     Ok(())
   }
 }
 
-/// `EventHandler` that persists router2 stage events into the requests DB.
+/// `EventHandler` that persists requests stage events into the requests DB.
 /// Construct once and register alongside the legacy `DbEventHandler` —
 /// both run in the same `spawn_event_loop` and each maintains its own
 /// per-day connection cache.
-pub struct Router2EventHandler {
-  writer: Router2RequestsWriter,
+pub struct RequestEventHandler {
+  writer: RequestEventsWriter,
 }
 
-impl Router2EventHandler {
+impl RequestEventHandler {
   pub fn new(requests_dir: PathBuf) -> Result<Self> {
     Ok(Self {
-      writer: Router2RequestsWriter::new(requests_dir)?,
+      writer: RequestEventsWriter::new(requests_dir)?,
     })
   }
 }
 
-impl EventHandler for Router2EventHandler {
+impl EventHandler for RequestEventHandler {
   fn handle(&mut self, event: &Event) {
-    let Event::Router2(r2) = event else {
+    let Event::Requests(r2) = event else {
       return;
     };
     let request_id = r2.request_id.as_str();
     let attempt = r2.attempt;
     let result = match &r2.payload {
-      Router2EventPayload::Custom(_) => return,
-      Router2EventPayload::Stage(stage) => match stage {
+      RequestEventPayload::Custom(_) => return,
+      RequestEventPayload::Stage(stage) => match stage {
         StageEvent::Started { endpoint } => self
           .writer
           .on_started(request_id, attempt, now_unix(), endpoint.as_str()),
@@ -436,7 +436,7 @@ impl EventHandler for Router2EventHandler {
       // `reqwest::Response::headers()`) and so is intentionally a no-op
       // here — we keep the event for downstream consumers (debug printers,
       // observers) that want a single source of wire-truth events.
-      Router2EventPayload::Record(RecordEvent::UpstreamReq {
+      RequestEventPayload::Record(RecordEvent::UpstreamReq {
         method,
         url,
         headers,
@@ -444,13 +444,13 @@ impl EventHandler for Router2EventHandler {
       }) => self
         .writer
         .on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
-      Router2EventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
-      Router2EventPayload::Record(RecordEvent::UpstreamBody { body }) => {
+      RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
+      RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => {
         self.writer.on_upstream_body(request_id, attempt, body)
       }
     };
     if let Err(e) = result {
-      tracing::warn!(error = %e, request_id, attempt, "router2 persistence write failed");
+      tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
     }
   }
 }
@@ -466,7 +466,7 @@ impl EventHandler for Router2EventHandler {
 ///
 /// Returns `Ok(None)` if no row matches. BLOB columns are decoded to a
 /// UTF-8 string when valid; otherwise they are emitted as a JSON array of
-/// bytes (`[u8, u8, ...]`). Headers/body BLOBs written by the router2
+/// bytes (`[u8, u8, ...]`). Headers/body BLOBs written by the requests
 /// writer are always JSON, so the string branch is the common path.
 pub fn read_request_row(
   requests_dir: &std::path::Path,

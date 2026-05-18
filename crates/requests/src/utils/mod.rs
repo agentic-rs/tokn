@@ -1,4 +1,4 @@
-//! Shared utilities for router2 stages.
+//! Shared utilities for requests stages.
 //!
 //! `codec` ports the content-encoding helpers from the legacy router so
 //! the new pipeline can negotiate / inflate / re-deflate request and

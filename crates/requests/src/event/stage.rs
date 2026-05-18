@@ -1,10 +1,10 @@
-//! Conversions from router2's full stage-output structs into the cloneable
-//! `*Summary` types defined in `llm_core::router2_event`. The runner uses
+//! Conversions from requests's full stage-output structs into the cloneable
+//! `*Summary` types defined in `llm_core::request_event`. The runner uses
 //! these `From` impls at emit time so subscribers receive llm-core types
-//! while stages keep operating on the richer router2-internal structs.
+//! while stages keep operating on the richer requests-internal structs.
 
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, ConvertedResponse, Extracted, Resolved, SentResponse};
-use llm_core::router2_event::{
+use llm_core::request_event::{
   BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, ResolvedSummary,
   SentSummary,
 };

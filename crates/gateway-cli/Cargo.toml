@@ -20,7 +20,7 @@ llm-config = { workspace = true }
 llm-catalogue = { workspace = true }
 llm-convert = { workspace = true }
 llm-router = { workspace = true }
-llm-router2 = { workspace = true }
+llm-requests = { workspace = true }
 llm-persistence = { workspace = true }
 llm-provider-copilot = { workspace = true }
 llm-provider-deepseek = { workspace = true }

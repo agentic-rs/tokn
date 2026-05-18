@@ -11,7 +11,7 @@ members = [
   "crates/endpoint-responses",
   "crates/endpoint-messages",
   "crates/router",
-  "crates/router2",
+  "crates/requests",
   "crates/accounts",
   "crates/gateway-cli",
   "crates/persistence",
@@ -35,7 +35,7 @@ llm-endpoint-responses = { path = "crates/endpoint-responses" }
 llm-endpoint-messages = { path = "crates/endpoint-messages" }
 llm-headers = { path = "crates/headers" }
 llm-router = { path = "crates/router" }
-llm-router2 = { path = "crates/router2" }
+llm-requests = { path = "crates/requests" }
 llm-persistence = { path = "crates/persistence" }
 llm-accounts = { path = "crates/accounts" }
 llm-provider-copilot = { path = "crates/provider-copilot" }

@@ -1,6 +1,6 @@
 //! Production [`AccountSelector`] backed by [`llm_accounts::AccountPool`].
 //!
-//! [`PoolAccountSelector`] bridges the router2 [`AccountSelector`] trait
+//! [`PoolAccountSelector`] bridges the requests [`AccountSelector`] trait
 //! to the existing [`AccountPool`] + [`RouteResolver`] machinery. It
 //! mirrors what `crates/router/src/pipeline/request.rs::resolve_account`
 //! does, but returns a typed [`SelectorOutcome`] instead of poking at an

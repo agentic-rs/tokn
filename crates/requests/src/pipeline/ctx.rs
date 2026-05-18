@@ -40,7 +40,7 @@ impl PipelineCtx {
 
   /// Publish a [`StageEvent`] tagged with the current request id and attempt.
   pub fn emit_stage(&self, payload: StageEvent) {
-    self.events.emit(CoreEvent::Router2(Event {
+    self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
       payload: EventPayload::Stage(payload),
@@ -52,7 +52,7 @@ impl PipelineCtx {
   /// reqwest actually put on the wire (vs the intent values carried on
   /// per-stage summaries).
   pub fn emit_record(&self, payload: RecordEvent) {
-    self.events.emit(CoreEvent::Router2(Event {
+    self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
       payload: EventPayload::Record(payload),
@@ -61,7 +61,7 @@ impl PipelineCtx {
 
   /// Publish a [`CustomEvent`] from inside a stage or decorator.
   pub fn emit_custom(&self, kind: &'static str, value: impl std::any::Any + Send + Sync) {
-    self.events.emit(CoreEvent::Router2(Event {
+    self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
       payload: EventPayload::Custom(CustomEvent::new(kind, value)),

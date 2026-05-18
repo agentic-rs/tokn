@@ -3,7 +3,7 @@
 //! Ported from `crates/router/src/api/codec.rs`. The legacy version was
 //! coupled to `axum::http::HeaderMap` and the gateway `ApiError`; this
 //! port reuses `llm_headers::HeaderMap` + `llm_headers::HeaderValue` and
-//! exposes a self-contained [`CodecError`] so router2 stages stay free
+//! exposes a self-contained [`CodecError`] so requests stages stay free
 //! of HTTP-server framework imports.
 //!
 //! Behaviour parity with the legacy module is preserved (and exercised

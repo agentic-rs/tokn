@@ -8,7 +8,7 @@
 //! * `behave_as: Option<String>` is replaced by `client_id: Option<ClientId>`.
 //! * All small strings are [`SmolStr`].
 //!
-//! Header name lists are duplicated here intentionally to keep router2 free
+//! Header name lists are duplicated here intentionally to keep requests free
 //! of any dependency on the legacy `crates/router` crate. PR2 will move the
 //! canonical constants to a shared location.
 
@@ -127,7 +127,7 @@ fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
 }
 
 /// Conservative heuristic mirroring `crates/router::util::initiator`. We
-/// classify based purely on body shape since router2 doesn't yet depend on
+/// classify based purely on body shape since requests doesn't yet depend on
 /// the legacy crate's helpers. The detail is "agent" iff a `tools` array is
 /// present and non-empty (common signal of agent-style calls); otherwise
 /// "user". This is intentionally simpler than the legacy implementation —

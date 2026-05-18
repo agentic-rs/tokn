@@ -3,7 +3,7 @@
 //! Distinct from the upstream-shaped *intent* values carried on stage
 //! summaries (`ConvertedRequestSummary`, `SentSummary`):
 //!
-//! - intent values describe what router2 *prepared*;
+//! - intent values describe what requests *prepared*;
 //! - records describe what reqwest *actually sent and received* — after
 //!   `Provider::patch_headers` auth injection, `Host`/`Content-Length`
 //!   stripping in [`crate::util::http::send`], and reqwest's transparent
@@ -14,13 +14,13 @@
 //! still flow through the per-stage events for diagnostics (and for
 //! dry-run profiles whose Send stage is a no-op).
 //!
-//! Records ride a dedicated [`Router2EventPayload::Record`] variant
+//! Records ride a dedicated [`RequestEventPayload::Record`] variant
 //! (peer of `Stage` and `Custom`) rather than nesting inside
 //! `StageEvent`, so subscribers that only care about lifecycle/error
 //! observation don't pay a match-arm tax for wire-truth captures, and
 //! vice versa.
 //!
-//! [`Router2EventPayload::Record`]: super::Router2EventPayload::Record
+//! [`RequestEventPayload::Record`]: super::RequestEventPayload::Record
 
 use bytes::Bytes;
 use llm_headers::HeaderMap;

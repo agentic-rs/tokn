@@ -1,12 +1,12 @@
-//! Event payload types for the `llm-router2` pipeline.
+//! Event payload types for the `llm-requests` pipeline.
 //!
 //! These types live in `llm-core` so that the workspace's
-//! [`llm_core::event::Event`] enum can embed a [`Router2(Router2Event)`]
-//! variant without inverting the dep graph (router2 already depends on
+//! [`llm_core::event::Event`] enum can embed a [`Requests(RequestEvent)`]
+//! variant without inverting the dep graph (requests already depends on
 //! llm-core).
 //!
 //! Three payload shapes are supported as peers under
-//! [`Router2EventPayload`]:
+//! [`RequestEventPayload`]:
 //!
 //! * [`StageEvent`] — a closed enum of lifecycle/observation variants
 //!   the runner emits at well-defined points (Started, per-stage
@@ -21,10 +21,10 @@
 //!   structured records without modifying either of the closed enums.
 //!
 //! The event bus itself is `llm_core::event::EventBus` (a tokio broadcast
-//! channel); router2 publishes `llm_core::event::Event::Router2(Router2Event
+//! channel); requests publishes `llm_core::event::Event::Requests(RequestEvent
 //! { ... })` directly onto it.
 //!
-//! [`Router2(Router2Event)`]: crate::event::Event::Router2
+//! [`Requests(RequestEvent)`]: crate::event::Event::Requests
 
 pub mod record;
 pub mod stage;
@@ -39,25 +39,25 @@ use smol_str::SmolStr;
 use std::any::Any;
 use std::sync::Arc;
 
-/// A single router2 pipeline event. Carries the per-request bookkeeping
+/// A single requests pipeline event. Carries the per-request bookkeeping
 /// (request_id, attempt) plus a typed or `Any`-typed payload.
 #[derive(Clone, Debug)]
-pub struct Router2Event {
+pub struct RequestEvent {
   pub request_id: SmolStr,
   pub attempt: u32,
-  pub payload: Router2EventPayload,
+  pub payload: RequestEventPayload,
 }
 
-/// One of three payload shapes carried on a [`Router2Event`].
+/// One of three payload shapes carried on a [`RequestEvent`].
 ///
-/// - [`Stage`](Router2EventPayload::Stage) — closed-set lifecycle /
+/// - [`Stage`](RequestEventPayload::Stage) — closed-set lifecycle /
 ///   per-stage observation events.
-/// - [`Record`](Router2EventPayload::Record) — wire-truth captures from
+/// - [`Record`](RequestEventPayload::Record) — wire-truth captures from
 ///   the actual outbound HTTP call.
-/// - [`Custom`](Router2EventPayload::Custom) — `Any`-typed escape hatch
+/// - [`Custom`](RequestEventPayload::Custom) — `Any`-typed escape hatch
 ///   for middleware / decorator stages.
 #[derive(Clone, Debug)]
-pub enum Router2EventPayload {
+pub enum RequestEventPayload {
   Stage(StageEvent),
   Record(RecordEvent),
   Custom(CustomEvent),

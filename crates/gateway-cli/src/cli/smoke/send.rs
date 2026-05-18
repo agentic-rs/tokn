@@ -1,4 +1,4 @@
-//! `gateway smoke send` — drives the router2 pipeline end-to-end.
+//! `gateway smoke send` — drives the requests pipeline end-to-end.
 //!
 //! Two modes:
 //!
@@ -13,7 +13,7 @@
 //!   payload or streamed chunk-by-chunk to stdout (curl `-N` style).
 //!
 //! In both modes every [`StageEvent`] is mirrored to stdout via a separate
-//! subscriber on the router2 [`EventBus`], so the user sees the pipeline
+//! subscriber on the requests [`EventBus`], so the user sees the pipeline
 //! progress in real time.
 
 use super::OutputFormat;
@@ -26,14 +26,14 @@ use clap::Args;
 use futures_util::StreamExt;
 use llm_config::RouteMode;
 use llm_core::event::Event as CoreEvent;
-use llm_router::api::AppState;
-use llm_router2::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
-use llm_router2::pipeline::stages::ConvertedResponse;
-use llm_router2::stages::{
+use llm_requests::event::{BuiltHeadersSummary, ConvertedRequestSummary, ResolvedSummary};
+use llm_requests::pipeline::stages::ConvertedResponse;
+use llm_requests::stages::{
   DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders, PoolAccountSelector,
   PoolResolve,
 };
-use llm_router2::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
+use llm_requests::{Event, EventBus, EventPayload, PipelineError, PipelineRunner, Profile, RawInbound, StageEvent};
+use llm_router::api::AppState;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -143,12 +143,12 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   filter_accounts(&mut accounts, args.provider.as_deref(), args.account.as_deref())?;
 
   // The legacy AppState still owns the account pool + route resolver + the
-  // legacy `EventBus`. We reuse that same bus for router2 events too — the
-  // `build_event_bus` handler list already contains `Router2EventHandler`
-  // (when `cfg.db.enabled`), so emitting `Event::Router2(_)` on it persists
+  // legacy `EventBus`. We reuse that same bus for requests events too — the
+  // `build_event_bus` handler list already contains `RequestEventHandler`
+  // (when `cfg.db.enabled`), so emitting `Event::Requests(_)` on it persists
   // the smoke run into `requests/<YYYY-MM-DD>.db`. All legacy handlers
   // (`DbEventHandler`, progress, archive) match only on legacy `Event::*`
-  // variants and ignore router2 events.
+  // variants and ignore requests events.
   let (legacy_events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state(&cfg, &accounts, legacy_events.clone())?;
@@ -179,7 +179,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     anyhow::bail!("missing message: pass either a positional message or --body-file");
   }
 
-  // Build the inbound body we'll feed to router2. We keep the body symmetrical
+  // Build the inbound body we'll feed to requests. We keep the body symmetrical
   // with the legacy CLI behaviour so existing fixtures still work.
   let body_value = match custom_body {
     Some(mut v) => {
@@ -217,8 +217,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     println!();
   }
 
-  // ---- Build the router2 profile ----
-  // Reuse the legacy bus so `Router2EventHandler` persists smoke runs.
+  // ---- Build the requests profile ----
+  // Reuse the legacy bus so `RequestEventHandler` persists smoke runs.
   let bus = legacy_events.clone();
   subscribe_event_printer(&bus);
   // Capture per-stage outputs so we can render dry-run / failure reports
@@ -264,7 +264,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   let result = runner.run(raw).await;
 
-  // Shut down the legacy event plumbing — router2 events are independent.
+  // Shut down the legacy event plumbing — requests events are independent.
   legacy_events.shutdown().await;
   if let Some(archive_runtime) = archive_runtime {
     archive_runtime.shutdown().await;
@@ -324,7 +324,7 @@ impl Captured {
       loop {
         match rx.recv().await {
           Ok(arc) => {
-            if let CoreEvent::Router2(event) = &*arc {
+            if let CoreEvent::Requests(event) = &*arc {
               let mut snap = sink.inner.lock().unwrap();
               if snap.request_id.is_none() {
                 snap.request_id = Some(event.request_id.to_string());
@@ -357,7 +357,7 @@ fn subscribe_event_printer(bus: &EventBus) {
     loop {
       match rx.recv().await {
         Ok(arc) => {
-          if let CoreEvent::Router2(event) = &*arc {
+          if let CoreEvent::Requests(event) = &*arc {
             print_event(event);
           }
         }
@@ -415,7 +415,7 @@ fn print_event(event: &Event) {
       println!("[completed]        success={success} attempts={attempts}");
     }
     EventPayload::Record(r) => {
-      use llm_core::router2_event::RecordEvent;
+      use llm_core::request_event::RecordEvent;
       match r {
         RecordEvent::UpstreamReq {
           method,
