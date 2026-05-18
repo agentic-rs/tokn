@@ -1,8 +1,11 @@
 pub mod archive;
 pub mod migrate;
 pub mod requests;
+pub mod router2;
 pub mod sessions;
 pub mod usage;
+
+pub use router2::Router2EventHandler;
 
 use bytes::Bytes;
 use llm_headers::HeaderMap;
