@@ -460,8 +460,19 @@ fn print_event(event: &Event) {
         RecordEvent::UpstreamResp { status, headers } => {
           println!("[record:upstream_resp] status={status} headers={}", headers.len());
         }
-        RecordEvent::UpstreamBody { body } => {
-          println!("[record:upstream_body] bytes={}", body.len());
+        RecordEvent::UpstreamBody { body, error } => {
+          println!(
+            "[record:upstream_body] bytes={} error={}",
+            body.len(),
+            error.as_deref().unwrap_or("-")
+          );
+        }
+        RecordEvent::ConvertedBody { body, error } => {
+          println!(
+            "[record:converted_body] bytes={} error={}",
+            body.len(),
+            error.as_deref().unwrap_or("-")
+          );
         }
         RecordEvent::Usage(usage) => {
           println!(
@@ -615,6 +626,7 @@ async fn print_live_outcome(
       status,
       headers,
       mut body,
+      ..
     } => {
       // For text format, print a short header banner first so the user sees
       // metadata before the stream body. For json format we still stream

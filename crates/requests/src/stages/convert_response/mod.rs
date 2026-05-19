@@ -22,7 +22,7 @@ fn noop_buffered() -> ConvertedResponse {
     status: 0,
     headers: HeaderMap::new(),
     body_json: Arc::new(Value::Null),
-    body_bytes: Bytes::new(),
+    body_bytes: Some(Bytes::new()),
   }
 }
 

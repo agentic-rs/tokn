@@ -18,7 +18,7 @@ use crate::pipeline::error::PipelineError;
 use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use llm_accounts::AccountHandle;
 use llm_core::provider::Endpoint;
 use llm_core::ClientId;
@@ -26,6 +26,85 @@ use llm_headers::{HeaderMap, TemplateVars};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokio::sync::mpsc;
+
+#[derive(Clone)]
+struct AccumHelper {
+  tx: mpsc::UnboundedSender<AccumMsg>,
+}
+
+enum AccumMsg {
+  Upstream(Bytes),
+  Converted(Bytes),
+  UpstreamError(SmolStr),
+  ConvertedError(SmolStr),
+}
+
+impl AccumHelper {
+  fn spawn(ctx: &PipelineCtx) -> Self {
+    let request_id = ctx.request_id.clone();
+    let attempt = ctx.attempt;
+    let events = ctx.events.clone();
+    let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
+    tokio::spawn(async move {
+      let mut upstream = Vec::new();
+      let mut converted = Vec::new();
+      let mut upstream_error = None;
+      let mut converted_error = None;
+      while let Some(msg) = rx.recv().await {
+        match msg {
+          AccumMsg::Upstream(bytes) => upstream.extend_from_slice(&bytes),
+          AccumMsg::Converted(bytes) => converted.extend_from_slice(&bytes),
+          AccumMsg::UpstreamError(err) => upstream_error = Some(err),
+          AccumMsg::ConvertedError(err) => converted_error = Some(err),
+        }
+      }
+      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+        request_id: request_id.clone(),
+        attempt,
+        payload: llm_core::request_event::RequestEventPayload::Record(
+          llm_core::request_event::RecordEvent::UpstreamBody {
+            body: Bytes::from(upstream),
+            error: upstream_error,
+          },
+        ),
+      }));
+      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+        request_id,
+        attempt,
+        payload: llm_core::request_event::RequestEventPayload::Record(
+          llm_core::request_event::RecordEvent::ConvertedBody {
+            body: Bytes::from(converted),
+            error: converted_error,
+          },
+        ),
+      }));
+    });
+    Self { tx }
+  }
+
+  fn note_upstream(&self, item: &std::io::Result<Bytes>) {
+    match item {
+      Ok(bytes) => {
+        let _ = self.tx.send(AccumMsg::Upstream(bytes.clone()));
+      }
+      Err(err) => {
+        let _ = self.tx.send(AccumMsg::UpstreamError(SmolStr::new(err.to_string())));
+      }
+    }
+  }
+
+  fn note_converted(&self, item: &std::io::Result<Bytes>) {
+    match item {
+      Ok(bytes) => {
+        let _ = self.tx.send(AccumMsg::Converted(bytes.clone()));
+      }
+      Err(err) => {
+        let _ = self.tx.send(AccumMsg::ConvertedError(SmolStr::new(err.to_string())));
+      }
+    }
+  }
+}
 
 /// Raw inbound HTTP payload passed to the Extract stage. The runner is
 /// responsible for assembling this from whatever transport is in front of
@@ -174,7 +253,7 @@ pub enum ConvertedResponse {
     /// [`StageEvent::ConvertResponse`](crate::event::StageEvent::ConvertResponse)
     /// payload can share the value without re-serializing the body.
     body_json: Arc<Value>,
-    body_bytes: Bytes,
+    body_bytes: Option<Bytes>,
   },
   Stream {
     status: u16,
@@ -211,9 +290,13 @@ impl std::fmt::Debug for ConvertedResponse {
         .debug_struct("ConvertedResponse::Buffered")
         .field("status", status)
         .field("headers", headers)
-        .field("body_bytes_len", &body_bytes.len())
+        .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()))
         .finish(),
-      Self::Stream { status, headers, .. } => f
+      Self::Stream {
+        status,
+        headers,
+        ..
+      } => f
         .debug_struct("ConvertedResponse::Stream")
         .field("status", status)
         .field("headers", headers)
@@ -298,13 +381,41 @@ pub trait ConvertResponseStage: Send + Sync {
       response,
     } = sent;
     if stream {
+      let accum = AccumHelper::spawn(ctx);
+      let accum_upstream = accum.clone();
       let body = response
         .bytes_stream()
-        .map(|item| item.map_err(std::io::Error::other))
+        .map_err(std::io::Error::other)
+        .inspect(move |item| accum_upstream.note_upstream(item))
         .boxed();
-      return self
+      let converted = self
         .convert_stream(ctx, status, headers, upstream_endpoint, body)
-        .await;
+        .await?;
+      return Ok(match converted {
+        ConvertedResponse::Stream {
+          status,
+          headers,
+          body,
+        } => {
+          ConvertedResponse::Stream {
+            status,
+            headers,
+            body: stream::unfold((body, accum), |(mut body, accum)| async move {
+              match body.next().await {
+                Some(item) => {
+                  accum.note_converted(&item);
+                  Some((item, (body, accum)))
+                }
+                None => {
+                  None
+                }
+              }
+            })
+            .boxed(),
+          }
+        }
+        other => other,
+      });
     }
     let raw = response.bytes().await.map_err(|e| {
       PipelineError::recoverable(
@@ -312,7 +423,10 @@ pub trait ConvertResponseStage: Send + Sync {
         SmolStr::new(format!("reading upstream body: {e}")),
       )
     })?;
-    ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody { body: raw.clone() });
+    ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody {
+      body: raw.clone(),
+      error: None,
+    });
     self
       .convert_buffered(ctx, status, headers, upstream_endpoint, raw)
       .await

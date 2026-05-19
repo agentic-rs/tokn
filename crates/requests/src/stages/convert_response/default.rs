@@ -12,8 +12,7 @@
 //!    [`EndpointTranslator`] when endpoints differ.
 //!
 //! The trait's provided [`convert_response`](ConvertResponseStage::convert_response)
-//! handles the dispatch (buffered vs stream) and emits `RecordEvent::UpstreamBody`
-//! for the buffered path.
+//! handles the dispatch (buffered vs stream).
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
@@ -66,7 +65,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
         status,
         headers,
         body_json: Arc::new(Value::Null),
-        body_bytes: Bytes::new(),
+        body_bytes: Some(Bytes::new()),
       });
     }
 
@@ -100,7 +99,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
       status,
       headers,
       body_json: Arc::new(body_json),
-      body_bytes,
+      body_bytes: Some(body_bytes),
     })
   }
 
@@ -134,8 +133,9 @@ impl ConvertResponseStage for DefaultConvertResponse {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::event::EventBus;
+  use crate::event::{EventBus, EventPayload};
   use crate::pipeline::stages::{ConvertedResponse, SentResponse};
+  use llm_core::request_event::RecordEvent;
   use futures_util::StreamExt;
   use llm_core::provider::Endpoint;
   use llm_headers::HeaderMap;
@@ -176,7 +176,7 @@ mod tests {
       } => {
         assert_eq!(status, 200);
         assert_eq!(body_json["id"], "x");
-        assert_eq!(body_bytes.as_ref(), br#"{"id":"x","choices":[]}"#);
+        assert_eq!(body_bytes.unwrap().as_ref(), br#"{"id":"x","choices":[]}"#);
       }
       _ => panic!("expected buffered"),
     }
@@ -204,7 +204,7 @@ mod tests {
       } => {
         assert_eq!(status, 502);
         assert!(body_json.is_null());
-        assert!(body_bytes.is_empty());
+        assert!(body_bytes.unwrap().is_empty());
       }
       _ => panic!("expected buffered"),
     }
@@ -243,7 +243,11 @@ mod tests {
       .await
       .unwrap();
     match out {
-      ConvertedResponse::Stream { status, mut body, .. } => {
+      ConvertedResponse::Stream {
+        status,
+        mut body,
+        ..
+      } => {
         assert_eq!(status, 200);
         let chunk = body.next().await.expect("at least one chunk").expect("ok chunk");
         assert!(!chunk.is_empty());
@@ -257,6 +261,7 @@ mod tests {
     let stage = DefaultConvertResponse::new();
     let events = Arc::new(EventBus::new(64));
     let ctx = PipelineCtx::new("req-body", Endpoint::ChatCompletions, events.clone());
+    let mut rx = events.subscribe();
     let sent = SentResponse {
       status: 200,
       headers: HeaderMap::new(),
@@ -268,17 +273,32 @@ mod tests {
     match out {
       ConvertedResponse::Buffered { status, body_bytes, .. } => {
         assert_eq!(status, 200);
-        assert_eq!(body_bytes.as_ref(), br#"{"ok":true}"#);
+        assert_eq!(body_bytes.unwrap().as_ref(), br#"{"ok":true}"#);
       }
       _ => panic!("expected buffered"),
     }
+    let mut saw = false;
+    for _ in 0..4 {
+      if let Ok(ev) = rx.recv().await {
+        if let llm_core::event::Event::Requests(req) = &*ev {
+          if let EventPayload::Record(RecordEvent::UpstreamBody { body, error }) = &req.payload {
+            assert_eq!(body.as_ref(), br#"{"ok":true}"#);
+            assert!(error.is_none());
+            saw = true;
+            break;
+          }
+        }
+      }
+    }
+    assert!(saw, "buffered convert_response should emit UpstreamBody");
   }
 
   #[tokio::test]
-  async fn provided_convert_response_no_upstream_body_for_stream() {
+  async fn provided_convert_response_stream_emits_body_records() {
     let stage = DefaultConvertResponse::new();
     let events = Arc::new(EventBus::new(64));
     let ctx = PipelineCtx::new("req-stream", Endpoint::ChatCompletions, events.clone());
+    let mut rx = events.subscribe();
     let sent = SentResponse {
       status: 200,
       headers: HeaderMap::new(),
@@ -287,6 +307,38 @@ mod tests {
       response: response(200, "data: {}\n\ndata: [DONE]\n\n", "text/event-stream"),
     };
     let out = stage.convert_response(&ctx, sent).await.unwrap();
-    assert!(matches!(out, ConvertedResponse::Stream { .. }));
+    let ConvertedResponse::Stream { mut body, .. } = out else {
+      panic!("expected stream");
+    };
+    while let Some(chunk) = body.next().await {
+      chunk.expect("stream chunk");
+    }
+
+    let mut saw_upstream = false;
+    let mut saw_converted = false;
+    for _ in 0..4 {
+      if let Ok(ev) = rx.recv().await {
+        if let llm_core::event::Event::Requests(req) = &*ev {
+          match &req.payload {
+            EventPayload::Record(RecordEvent::UpstreamBody { body, error }) => {
+              assert_eq!(body.as_ref(), b"data: {}\n\ndata: [DONE]\n\n");
+              assert!(error.is_none());
+              saw_upstream = true;
+            }
+            EventPayload::Record(RecordEvent::ConvertedBody { body, error }) => {
+              assert!(!body.is_empty());
+              assert!(error.is_none());
+              saw_converted = true;
+            }
+            _ => {}
+          }
+          if saw_upstream && saw_converted {
+            break;
+          }
+        }
+      }
+    }
+    assert!(saw_upstream, "stream convert_response should emit UpstreamBody");
+    assert!(saw_converted, "stream convert_response should emit ConvertedBody");
   }
 }

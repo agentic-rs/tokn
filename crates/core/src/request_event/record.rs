@@ -9,9 +9,9 @@
 //!   `Provider::patch_headers` auth injection / `Host`+`Content-Length`
 //!   stripping in [`crate::util::http::send`], and parsed usage.
 //!
-//! Persistence uses records to populate connection, usage, and outbound
-//! wire-accurate columns; intent values still flow through the per-stage
-//! events for diagnostics (and for dry-run profiles whose Send stage is a
+//! Persistence uses records to populate connection, usage, outbound,
+//! and fully-converted response body columns; intent values still flow through the per-stage
+//! stage events for diagnostics (and for dry-run profiles whose Send stage is a
 //! no-op).
 //!
 //! Records ride a dedicated [`RequestEventPayload::Record`] variant
@@ -30,10 +30,11 @@ use smol_str::SmolStr;
 /// Wire-truth capture from the actual outbound HTTP call (via
 /// [`OutboundCapture`](crate::provider::OutboundCapture)).
 ///
-/// The three variants split a single capture so subscribers can write
+/// The four variants split a single capture so subscribers can write
 /// each piece as soon as it's known: request side before the response
 /// arrives, response status+headers as soon as they come back, body
-/// only once it's been drained (and never for streaming responses).
+/// once it's been drained/accumulated, and converted body once the client-facing
+/// payload is fully materialized.
 #[derive(Debug, Clone)]
 pub enum RecordEvent {
   /// Inbound client->router connection facts captured by the transport
@@ -61,9 +62,19 @@ pub enum RecordEvent {
   /// reqwest decompresses).
   UpstreamResp { status: u16, headers: HeaderMap },
   /// Materialized upstream response body. Emitted only for buffered
-  /// responses; streaming responses skip this variant (the live SSE
-  /// byte stream is single-shot and can't be cheaply tee'd).
-  UpstreamBody { body: Bytes },
+  /// responses or after streaming accumulation finishes. Streaming paths may
+  /// carry a partial body plus the stream termination error.
+  UpstreamBody {
+    body: Bytes,
+    error: Option<SmolStr>,
+  },
+  /// Materialized client-facing response body after any endpoint translation.
+  /// For buffered responses the `StageEvent::ConvertResponse` summary already
+  /// carries the JSON body, so this record is emitted only for streaming paths.
+  ConvertedBody {
+    body: Bytes,
+    error: Option<SmolStr>,
+  },
   /// Parsed token usage attributed to the request. Added now so callers and
   /// persistence can converge on a stable shape before every execution path
   /// emits it.

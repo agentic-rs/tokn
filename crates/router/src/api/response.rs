@@ -26,7 +26,7 @@ pub(crate) fn converted_to_axum(c: ConvertedResponse) -> Response<Body> {
     ConvertedResponse::Buffered { status, body_bytes, .. } => {
       let status = to_status(status);
       let headers = buffered_headers();
-      (status, headers, Body::from(body_bytes)).into_response()
+      (status, headers, Body::from(body_bytes.unwrap_or_default())).into_response()
     }
     ConvertedResponse::Stream { status, body, .. } => {
       let status = to_status(status);

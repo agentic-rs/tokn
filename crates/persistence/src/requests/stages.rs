@@ -110,7 +110,8 @@ impl EventHandler for RequestEventHandler {
             body,
           } => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
           RecordEvent::UpstreamResp { .. } => Ok(()),
-          RecordEvent::UpstreamBody { body } => self.on_upstream_body(request_id, attempt, body),
+          RecordEvent::UpstreamBody { body, .. } => self.on_upstream_body(request_id, attempt, body),
+          RecordEvent::ConvertedBody { body, .. } => self.on_converted_body(request_id, attempt, body),
           RecordEvent::Usage(usage) => self.on_usage(request_id, attempt, usage),
         }
       }
@@ -429,6 +430,26 @@ impl RequestEventHandler {
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests UpstreamBody UPDATE matched no row");
+    }
+    Ok(())
+  }
+
+  /// Wire-truth client-facing response body after any stream translation.
+  /// Buffered flows still write `inbound_resp_body` from `StageEvent::ConvertResponse`;
+  /// this record backfills the same column for streaming flows once the full
+  /// SSE output has been accumulated.
+  pub fn on_converted_body(&mut self, request_id: &str, attempt: u32, body: &bytes::Bytes) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let Some(conn) = self.db.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "requests ConvertedBody without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET inbound_resp_body = ?2 WHERE request_id = ?1",
+      params![id, body.as_ref()],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "requests ConvertedBody UPDATE matched no row");
     }
     Ok(())
   }
