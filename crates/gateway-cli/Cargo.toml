@@ -1,6 +1,6 @@
 [package]
 name = "tokn-gateway-cli"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Local OpenAI-compatible API gateway for LLM providers"
 license = "MIT OR Apache-2.0"
