@@ -1,12 +1,12 @@
 use super::context::ForwardContext;
 use super::recording::CompletedEventBuilder;
-use super::usage::parse_usage_any_json;
 use crate::api::codec::maybe_compress_buffered_response;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
+use llm_convert::usage::parse_usage_any_json;
 use serde_json::Value;
 
 pub(crate) async fn buffered_response(

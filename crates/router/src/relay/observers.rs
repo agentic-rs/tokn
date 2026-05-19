@@ -1,7 +1,7 @@
 use super::recording::CompletedEventBuilder;
-use super::usage::parse_usage_any_value;
 use bytes::Bytes;
 use llm_convert::sse::{observer_channel, ObserverMsg, ObserverSender};
+use llm_convert::usage::parse_usage_any_value;
 use llm_core::db::Usage;
 use std::sync::Arc;
 

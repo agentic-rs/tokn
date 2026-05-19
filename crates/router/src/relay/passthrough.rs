@@ -1,7 +1,6 @@
 use super::context::ForwardContext;
 use super::observers::{spawn_stream_recorder, StreamMeta};
 use super::recording::CompletedEventBuilder;
-use super::usage::parse_usage_any_json;
 use crate::api::codec::maybe_compress_buffered_response;
 use crate::api::error::ApiError;
 use crate::api::AppState;
@@ -12,6 +11,7 @@ use axum::http::{HeaderMap, Method};
 use axum::response::Response;
 use bytes::Bytes;
 use llm_convert::sse::SsePipeline;
+use llm_convert::usage::parse_usage_any_json;
 use serde_json::Value;
 
 pub(crate) fn is_sse_response(headers: &HeaderMap, fallback_stream: bool) -> bool {

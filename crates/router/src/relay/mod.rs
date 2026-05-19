@@ -10,7 +10,6 @@ mod observers;
 mod passthrough;
 mod recording;
 mod stream;
-mod usage;
 
 pub(crate) use buffered::buffered_response;
 pub(crate) use context::ForwardContext;
@@ -23,7 +22,6 @@ mod tests {
   use super::context::ForwardContext;
   use super::passthrough::{is_sse_response, passthrough_buffered_response, passthrough_streaming_response};
   use super::recording::{extract_request_messages, CompletedEventBuilder};
-  use super::usage::parse_usage_any_value;
   use crate::api::build_state;
   use crate::config::{Account as AccountCfg, AuthType, Config};
   use crate::db::{CallRecord, SessionSource, Usage};
@@ -254,84 +252,6 @@ mod tests {
     };
     llm_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
     (Arc::new(bus), records)
-  }
-
-  #[test]
-  fn parses_openai_chat_usage() {
-    let v = json!({ "usage": { "prompt_tokens": 11, "completion_tokens": 22 }});
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(11));
-    assert_eq!(u.output_tokens, Some(22));
-    assert_eq!(u.details.cache_read, None);
-    assert_eq!(u.details.reasoning, None);
-  }
-
-  #[test]
-  fn parses_responses_usage_shape() {
-    let v = json!({ "usage": { "input_tokens": 5, "output_tokens": 7 }});
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(5));
-    assert_eq!(u.output_tokens, Some(7));
-  }
-
-  #[test]
-  fn parses_anthropic_message_start_nested_usage() {
-    // Anthropic input_tokens excludes cache portions; total = 9 + 4 + 2 = 15
-    let v = json!({
-        "type": "message_start",
-        "message": { "usage": {
-          "input_tokens": 9,
-          "output_tokens": 1,
-          "cache_creation_input_tokens": 4,
-          "cache_read_input_tokens": 2
-        }}
-    });
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(15));
-    assert_eq!(u.output_tokens, Some(1));
-    assert_eq!(u.details.cache_read, Some(2));
-  }
-
-  #[test]
-  fn parses_responses_response_completed_nested_usage() {
-    let v = json!({
-        "type": "response.completed",
-        "response": { "usage": { "input_tokens": 3, "output_tokens": 4 }}
-    });
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(3));
-    assert_eq!(u.output_tokens, Some(4));
-  }
-
-  #[test]
-  fn parses_openai_cached_and_reasoning_tokens() {
-    let v = json!({ "usage": {
-      "prompt_tokens": 100,
-      "completion_tokens": 50,
-      "prompt_tokens_details": { "cached_tokens": 30 },
-      "completion_tokens_details": { "reasoning_tokens": 20 }
-    }});
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(100));
-    assert_eq!(u.output_tokens, Some(50));
-    assert_eq!(u.details.cache_read, Some(30));
-    assert_eq!(u.details.reasoning, Some(20));
-  }
-
-  #[test]
-  fn parses_codex_usage_details_shape() {
-    let v = json!({ "usage": {
-      "input_tokens": 35973,
-      "input_tokens_details": { "cached_tokens": 34176 },
-      "output_tokens": 989,
-      "output_tokens_details": { "reasoning_tokens": 11 },
-      "total_tokens": 36962
-    }});
-    let u = parse_usage_any_value(&v);
-    assert_eq!(u.input_tokens, Some(35973));
-    assert_eq!(u.output_tokens, Some(989));
-    assert_eq!(u.details.cache_read, Some(34176));
-    assert_eq!(u.details.reasoning, Some(11));
   }
 
   #[test]

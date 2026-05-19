@@ -7,6 +7,7 @@ pub mod messages;
 pub mod responses;
 pub mod sse;
 pub mod tools;
+pub mod usage;
 
 use crate::provider::Endpoint;
 use serde_json::Value;
