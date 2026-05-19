@@ -20,8 +20,10 @@ use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResp
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use llm_convert::sse::{EndpointTranslator, SsePipeline};
+use llm_convert::sse::{observer_channel, EndpointTranslator, ObserverMsg, SsePipeline};
+use llm_convert::usage::{parse_usage_any_value, usage_has_any};
 use llm_core::provider::Endpoint;
+use llm_core::request_event::RecordEvent;
 use llm_headers::HeaderMap;
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -78,6 +80,13 @@ impl ConvertResponseStage for DefaultConvertResponse {
       )
     })?;
 
+    // Best-effort usage extraction. Emit a RecordEvent::Usage so the
+    // persistence layer (and any other subscriber) can pick it up.
+    let parsed_usage = parse_usage_any_value(&upstream_json);
+    if usage_has_any(&parsed_usage) {
+      ctx.emit_record(RecordEvent::Usage(parsed_usage));
+    }
+
     let (body_json, body_bytes) = if upstream_endpoint == inbound_endpoint {
       (upstream_json, body)
     } else {
@@ -126,6 +135,39 @@ impl ConvertResponseStage for DefaultConvertResponse {
     if upstream_endpoint != inbound_endpoint {
       pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
     }
+
+    // Tap parsed SSE event JSON to extract usage and emit
+    // `RecordEvent::Usage` per frame that yields new figures. The shared
+    // `usage_state` aggregate is also updated so the runner's periodic
+    // `StreamProgress` events carry live usage.
+    let (tap_tx, mut tap_rx) = observer_channel();
+    pipeline = pipeline.with_tap_parsed(tap_tx);
+    let tap_request_id = ctx.request_id.clone();
+    let tap_attempt = ctx.attempt;
+    let tap_events = ctx.events.clone();
+    let tap_guard = ctx.events.begin_finalizer();
+    tokio::spawn(async move {
+      while let Some(msg) = tap_rx.recv().await {
+        match msg {
+          ObserverMsg::Parsed(Some(value)) => {
+            let parsed = parse_usage_any_value(&value);
+            if !usage_has_any(&parsed) {
+              continue;
+            }
+            tap_events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+              request_id: tap_request_id.clone(),
+              attempt: tap_attempt,
+              ts: llm_core::util::now_unix_ms(),
+              payload: llm_core::request_event::RequestEventPayload::Record(RecordEvent::Usage(parsed)),
+            }));
+          }
+          ObserverMsg::Done | ObserverMsg::Error(_) => break,
+          _ => {}
+        }
+      }
+      tap_guard.finish();
+    });
+
     Ok(ConvertedResponse {
       status,
       headers,

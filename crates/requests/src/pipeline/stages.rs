@@ -50,6 +50,9 @@ impl AccumHelper {
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
+    let usage: Arc<std::sync::Mutex<llm_core::db::Usage>> =
+      Arc::new(std::sync::Mutex::new(llm_core::db::Usage::default()));
+    let usage_for_task = usage.clone();
     tokio::spawn(async move {
       use tokio::time::{interval, Duration, MissedTickBehavior};
 
@@ -80,11 +83,12 @@ impl AccumHelper {
             }
           }
           _ = tick.tick() => {
+            let snapshot = usage_for_task.lock().map(|u| u.clone()).unwrap_or_default();
             events.emit(llm_core::event::Event::StreamProgress {
               request_id: request_id.to_string(),
               model: model.to_string(),
               endpoint: endpoint_label.clone(),
-              usage: llm_core::db::Usage::default(),
+              usage: snapshot,
               bytes_streamed,
               chunks,
             });
@@ -435,6 +439,13 @@ pub trait ConvertResponseStage: Send + Sync {
     body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError>;
 
+  /// Convert a streaming upstream response.
+  ///
+  /// Implementations should attach a parsed-frame tap to the SSE pipeline
+  /// and emit `RecordEvent::Usage` for each frame that yields new figures.
+  /// The default `convert_response` dispatcher reads this state from its
+  /// periodic `StreamProgress` emitter so progress events carry live usage.
+  /// running inside that dispatcher.
   async fn convert_stream(
     &self,
     ctx: &PipelineCtx,
