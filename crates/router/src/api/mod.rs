@@ -3,6 +3,7 @@ pub mod endpoints;
 pub mod error;
 pub mod identity;
 pub mod models;
+pub mod response;
 
 use crate::api::identity::AccountIdentityResolver;
 use anyhow::Result;
@@ -33,6 +34,10 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
+  /// Optional `llm-requests` pipeline used to handle `chat_completions`
+  /// when the `LLM_ROUTER_USE_PIPELINE=chat` env var is set. POC plumbing
+  /// — `None` in default builds, so legacy `handle_endpoint` runs.
+  pub chat_pipeline: Option<Arc<llm_requests::Pipeline>>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -221,6 +226,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
+  let chat_pipeline = build_chat_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   Ok(AppState {
     pool,
     provider_registry,
@@ -229,7 +235,42 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     http,
     events,
     body_max_bytes,
+    chat_pipeline,
   })
+}
+
+/// Construct the experimental chat-completions pipeline when the
+/// `LLM_ROUTER_USE_PIPELINE=chat` env var is set. Returns `None` otherwise.
+///
+/// The pipeline shares `AppState.events` so persistence (`RequestEventHandler`)
+/// receives `StageEvent::*` and `RecordEvent::*` automatically. Persona
+/// resolution uses `PersonaBuildHeaders::with_opencode_default()` — a known
+/// fidelity gap vs. legacy (no `x-behave-as` or `account.settings.behave_as`
+/// honor). Acceptable because the flag is off by default.
+fn build_chat_pipeline(
+  pool: Arc<AccountPool>,
+  route: Arc<RouteResolver>,
+  http: reqwest::Client,
+  events: Arc<EventBus>,
+) -> Option<Arc<llm_requests::Pipeline>> {
+  if std::env::var("LLM_ROUTER_USE_PIPELINE").as_deref() != Ok("chat") {
+    return None;
+  }
+  use llm_requests::stages::{
+    DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders,
+    PoolAccountSelector, PoolResolve,
+  };
+  let selector = Arc::new(PoolAccountSelector::new(pool, route));
+  let profile = llm_requests::Profile::full(
+    "chat-poc",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(http)),
+    Arc::new(DefaultConvertResponse::new()),
+  );
+  Some(Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events)))
 }
 
 #[cfg(test)]

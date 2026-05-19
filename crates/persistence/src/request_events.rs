@@ -101,7 +101,8 @@ impl RequestEventsWriter {
     let conn = self.conn_for_day(&key)?;
     conn.execute(
       "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
-       VALUES (?1, ?2, ?3, '', '', '', '')",
+       VALUES (?1, ?2, ?3, '', '', '', '')
+       ON CONFLICT(request_id) DO NOTHING",
       params![id, ts, endpoint],
     )?;
     self.request_day.insert(id, key);

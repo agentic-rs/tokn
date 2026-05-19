@@ -8,6 +8,8 @@ use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use llm_accounts::routing::route_mode_as_str;
+use llm_core::provider::Endpoint;
+use smol_str::SmolStr;
 use std::time::Instant;
 use tracing::instrument;
 
@@ -31,6 +33,33 @@ async fn handle(
         .and_then(|v| v.to_str().ok())
         .map(str::to_string)
     });
+  // POC fast-path: when the env-var-gated chat pipeline is configured and
+  // this request targets /chat/completions, route through llm-requests and
+  // skip ALL legacy event emissions (Started/Headers/Completed). The
+  // pipeline emits its own StageEvent/RecordEvent stream which
+  // RequestEventHandler consumes; emitting LegacyRequestEvent::Started here
+  // would cause DbEventHandler to insert a row first, then
+  // RequestEventHandler's INSERT on StageEvent::Started would hit a UNIQUE
+  // constraint and orphan every subsequent stage UPDATE.
+  let use_pipeline = parser.endpoint() == Endpoint::ChatCompletions && state.chat_pipeline.is_some();
+
+  if use_pipeline {
+    let decoded = super::codec::decode_json_request(&inbound, body)?;
+    let pipeline = state.chat_pipeline.clone().expect("checked is_some above");
+    let raw = llm_requests::RawInbound {
+      endpoint: Endpoint::ChatCompletions,
+      headers: (&inbound).into(),
+      raw_body: decoded.raw_body.clone(),
+      decoded_body: decoded.decoded_body.clone(),
+      body_json: decoded.value.clone(),
+      request_id: Some(SmolStr::new(&hx.request_id)),
+    };
+    return match pipeline.run(raw).await {
+      Ok(converted) => Ok(super::response::converted_to_axum(converted)),
+      Err(err) => Err(ApiError::bad_gateway(err.to_string())),
+    };
+  }
+
   let mode = state
     .route
     .resolve_mode(hx.route_mode_hint.as_deref())
