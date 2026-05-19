@@ -2,6 +2,7 @@
 name = "tokn-endpoint-responses"
 version.workspace = true
 edition = "2021"
+description = "Typed schemas for OpenAI-compatible responses endpoints"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true

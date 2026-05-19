@@ -2,6 +2,7 @@
 name = "tokn-provider-deepseek"
 version.workspace = true
 edition = "2021"
+description = "DeepSeek provider integration for tokn"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true

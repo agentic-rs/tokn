@@ -2,6 +2,7 @@
 name = "tokn-endpoint-core"
 version.workspace = true
 edition = "2021"
+description = "Shared endpoint primitives and traits used by tokn endpoint crates"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true

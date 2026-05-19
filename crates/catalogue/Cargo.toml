@@ -2,6 +2,7 @@
 name = "tokn-catalogue"
 version.workspace = true
 edition = "2021"
+description = "Model and provider catalogue loading and mapping utilities for tokn"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
