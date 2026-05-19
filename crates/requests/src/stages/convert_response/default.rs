@@ -1,29 +1,28 @@
 //! Production [`ConvertResponseStage`] implementation.
 //!
-//! Bridges the upstream HTTP response produced by [`SendStage`] to the
-//! shape the client originally asked for. Two branches:
+//! Two focused methods split by the trait's provided dispatcher:
 //!
-//! 1. **Streaming** (`sent.stream == true`): wrap the response in
-//!    [`llm_convert::sse::SsePipeline`]; if the upstream endpoint differs
-//!    from `ctx.endpoint`, install an [`EndpointTranslator`] so frames
-//!    arrive in the client's expected shape. Returned as
-//!    [`ConvertedResponse::Stream`] for forwarding chunk-by-chunk.
-//! 2. **Buffered** (default): drain the body, parse JSON, and run
-//!    [`llm_convert::convert_response`] when upstream/inbound endpoints
-//!    differ. Returned as [`ConvertedResponse::Buffered`] with the
-//!    canonical JSON value and its re-serialized bytes.
+//! 1. [`convert_buffered`](DefaultConvertResponse::convert_buffered):
+//!    receives the already-drained body bytes, parses JSON, and optionally
+//!    translates via [`llm_convert::convert_response`] when upstream/inbound
+//!    endpoints differ.
 //!
-//! Mirrors the legacy [`router::relay::buffered`] / [`router::relay::stream`]
-//! behaviour minus the observer/recording side-channels (those belong in
-//! a later PR's observer wiring).
+//! 2. [`convert_stream`](DefaultConvertResponse::convert_stream):
+//!    wraps the live [`reqwest::Response`] in [`SsePipeline`]; installs an
+//!    [`EndpointTranslator`] when endpoints differ.
+//!
+//! The trait's provided [`convert_response`](ConvertResponseStage::convert_response)
+//! handles the dispatch (buffered vs stream) and emits `RecordEvent::UpstreamBody`
+//! for the buffered path.
 
-use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse, SentResponse};
+use crate::pipeline::stages::{ConvertResponseStage, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
 use llm_convert::sse::{EndpointTranslator, SsePipeline};
+use llm_core::provider::Endpoint;
+use llm_headers::HeaderMap;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -45,55 +44,23 @@ impl Default for DefaultConvertResponse {
 
 #[async_trait]
 impl ConvertResponseStage for DefaultConvertResponse {
-  #[instrument(name = "default_convert_response", skip_all, fields(
-    status = sent.status,
-    stream = sent.stream,
-    upstream_endpoint = ?sent.upstream_endpoint,
+  #[instrument(name = "default_convert_buffered", skip_all, fields(
+    status = status,
+    upstream_endpoint = ?upstream_endpoint,
     inbound_endpoint = ?ctx.endpoint,
+    body_len = body.len(),
   ))]
-  async fn convert_response(&self, ctx: &PipelineCtx, sent: SentResponse) -> Result<ConvertedResponse, PipelineError> {
-    let SentResponse {
-      status,
-      headers,
-      stream,
-      upstream_endpoint,
-      response,
-    } = sent;
+  async fn convert_buffered(
+    &self,
+    ctx: &PipelineCtx,
+    status: u16,
+    headers: HeaderMap,
+    upstream_endpoint: Endpoint,
+    body: Bytes,
+  ) -> Result<ConvertedResponse, PipelineError> {
     let inbound_endpoint = ctx.endpoint;
 
-    if stream {
-      debug!("wrapping upstream response as SSE stream");
-      let mut pipeline = SsePipeline::from_response(response);
-      if upstream_endpoint != inbound_endpoint {
-        pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
-      }
-      return Ok(ConvertedResponse::Stream {
-        status,
-        headers,
-        body: pipeline.run(),
-      });
-    }
-
-    // Buffered branch: drain the body and (optionally) translate shape.
-    let raw = response.bytes().await.map_err(|e| {
-      // Body-read failures are transport-ish; recoverable.
-      PipelineError::recoverable(
-        Stage::ConvertResponse,
-        SmolStr::new(format!("reading upstream body: {e}")),
-      )
-    })?;
-
-    // Wire-truth record: the upstream response body exactly as drained,
-    // post-decompression (reqwest decodes gzip/br/deflate/zstd before
-    // handing bytes to us). Streaming responses skip this — the live SSE
-    // byte stream is single-shot and can't be cheaply tee'd, matching
-    // legacy behavior (no `outbound_resp_body` for streaming).
-    ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody { body: raw.clone() });
-
-    // If the body is empty (e.g. some error responses), short-circuit
-    // with a Null JSON value rather than failing — matches the legacy
-    // buffered path's tolerance for blank upstream bodies.
-    if raw.is_empty() {
+    if body.is_empty() {
       return Ok(ConvertedResponse::Buffered {
         status,
         headers,
@@ -102,28 +69,26 @@ impl ConvertResponseStage for DefaultConvertResponse {
       });
     }
 
-    let upstream_json: Value = serde_json::from_slice(&raw).map_err(|e| {
+    let upstream_json: Value = serde_json::from_slice(&body).map_err(|e| {
       PipelineError::permanent(
-        Stage::ConvertResponse,
+        crate::event::Stage::ConvertResponse,
         SmolStr::new(format!("upstream body not valid JSON: {e}")),
       )
     })?;
 
     let (body_json, body_bytes) = if upstream_endpoint == inbound_endpoint {
-      // No translation needed — keep the bytes exactly as received so
-      // downstream consumers can match upstream's serialization quirks.
-      (upstream_json, raw)
+      (upstream_json, body)
     } else {
       let translated =
         llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|e| {
           PipelineError::permanent(
-            Stage::ConvertResponse,
+            crate::event::Stage::ConvertResponse,
             SmolStr::new(format!("response conversion failed: {e}")),
           )
         })?;
       let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|e| {
         PipelineError::permanent(
-          Stage::ConvertResponse,
+          crate::event::Stage::ConvertResponse,
           SmolStr::new(format!("serializing translated response failed: {e}")),
         )
       })?;
@@ -137,13 +102,39 @@ impl ConvertResponseStage for DefaultConvertResponse {
       body_bytes,
     })
   }
+
+  #[instrument(name = "default_convert_stream", skip_all, fields(
+    status = status,
+    upstream_endpoint = ?upstream_endpoint,
+    inbound_endpoint = ?ctx.endpoint,
+  ))]
+  async fn convert_stream(
+    &self,
+    ctx: &PipelineCtx,
+    status: u16,
+    headers: HeaderMap,
+    upstream_endpoint: Endpoint,
+    response: reqwest::Response,
+  ) -> Result<ConvertedResponse, PipelineError> {
+    debug!("wrapping upstream response as SSE stream");
+    let inbound_endpoint = ctx.endpoint;
+    let mut pipeline = SsePipeline::from_response(response);
+    if upstream_endpoint != inbound_endpoint {
+      pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
+    }
+    Ok(ConvertedResponse::Stream {
+      status,
+      headers,
+      body: pipeline.run(),
+    })
+  }
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use crate::event::EventBus;
-  use crate::pipeline::stages::SentResponse;
+  use crate::pipeline::stages::{ConvertedResponse, SentResponse};
   use futures_util::StreamExt;
   use llm_core::provider::Endpoint;
   use llm_headers::HeaderMap;
@@ -162,26 +153,17 @@ mod tests {
     reqwest::Response::from(resp)
   }
 
-  fn sent(endpoint: Endpoint, stream: bool, response: reqwest::Response) -> SentResponse {
-    SentResponse {
-      status: response.status().as_u16(),
-      headers: HeaderMap::new(),
-      stream,
-      upstream_endpoint: endpoint,
-      response,
-    }
-  }
-
   #[tokio::test]
   async fn buffered_passthrough_same_endpoint() {
     let stage = DefaultConvertResponse::new();
-    let s = sent(
-      Endpoint::ChatCompletions,
-      false,
-      response(200, r#"{"id":"x","choices":[]}"#, "application/json"),
-    );
     let out = stage
-      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .convert_buffered(
+        &ctx(Endpoint::ChatCompletions),
+        200,
+        HeaderMap::new(),
+        Endpoint::ChatCompletions,
+        Bytes::from_static(br#"{"id":"x","choices":[]}"#),
+      )
       .await
       .unwrap();
     match out {
@@ -193,7 +175,6 @@ mod tests {
       } => {
         assert_eq!(status, 200);
         assert_eq!(body_json["id"], "x");
-        // Bytes are preserved verbatim when endpoints match.
         assert_eq!(body_bytes.as_ref(), br#"{"id":"x","choices":[]}"#);
       }
       _ => panic!("expected buffered"),
@@ -203,9 +184,14 @@ mod tests {
   #[tokio::test]
   async fn buffered_empty_body_yields_null() {
     let stage = DefaultConvertResponse::new();
-    let s = sent(Endpoint::ChatCompletions, false, response(502, "", "text/plain"));
     let out = stage
-      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .convert_buffered(
+        &ctx(Endpoint::ChatCompletions),
+        502,
+        HeaderMap::new(),
+        Endpoint::ChatCompletions,
+        Bytes::new(),
+      )
       .await
       .unwrap();
     match out {
@@ -226,16 +212,17 @@ mod tests {
   #[tokio::test]
   async fn buffered_invalid_json_is_permanent() {
     let stage = DefaultConvertResponse::new();
-    let s = sent(
-      Endpoint::ChatCompletions,
-      false,
-      response(200, "not json", "text/plain"),
-    );
     let err = stage
-      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .convert_buffered(
+        &ctx(Endpoint::ChatCompletions),
+        200,
+        HeaderMap::new(),
+        Endpoint::ChatCompletions,
+        Bytes::from_static(b"not json"),
+      )
       .await
       .unwrap_err();
-    assert_eq!(err.stage, Stage::ConvertResponse);
+    assert_eq!(err.stage, crate::event::Stage::ConvertResponse);
     assert!(!err.recoverable);
     assert!(err.message.contains("not valid JSON"));
   }
@@ -244,23 +231,61 @@ mod tests {
   async fn stream_branch_returns_stream_variant() {
     let stage = DefaultConvertResponse::new();
     let body = "data: {\"hello\":1}\n\ndata: [DONE]\n\n";
-    let s = sent(
-      Endpoint::ChatCompletions,
-      true,
-      response(200, body, "text/event-stream"),
-    );
     let out = stage
-      .convert_response(&ctx(Endpoint::ChatCompletions), s)
+      .convert_stream(
+        &ctx(Endpoint::ChatCompletions),
+        200,
+        HeaderMap::new(),
+        Endpoint::ChatCompletions,
+        response(200, body, "text/event-stream"),
+      )
       .await
       .unwrap();
     match out {
       ConvertedResponse::Stream { status, mut body, .. } => {
         assert_eq!(status, 200);
-        // Drain a chunk to confirm the stream is live.
         let chunk = body.next().await.expect("at least one chunk").expect("ok chunk");
         assert!(!chunk.is_empty());
       }
       _ => panic!("expected stream"),
     }
+  }
+
+  #[tokio::test]
+  async fn provided_convert_response_emits_upstream_body_for_buffered() {
+    let stage = DefaultConvertResponse::new();
+    let events = Arc::new(EventBus::new(64));
+    let ctx = PipelineCtx::new("req-body", Endpoint::ChatCompletions, events.clone());
+    let sent = SentResponse {
+      status: 200,
+      headers: HeaderMap::new(),
+      stream: false,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      response: response(200, r#"{"ok":true}"#, "application/json"),
+    };
+    let out = stage.convert_response(&ctx, sent).await.unwrap();
+    match out {
+      ConvertedResponse::Buffered { status, body_bytes, .. } => {
+        assert_eq!(status, 200);
+        assert_eq!(body_bytes.as_ref(), br#"{"ok":true}"#);
+      }
+      _ => panic!("expected buffered"),
+    }
+  }
+
+  #[tokio::test]
+  async fn provided_convert_response_no_upstream_body_for_stream() {
+    let stage = DefaultConvertResponse::new();
+    let events = Arc::new(EventBus::new(64));
+    let ctx = PipelineCtx::new("req-stream", Endpoint::ChatCompletions, events.clone());
+    let sent = SentResponse {
+      status: 200,
+      headers: HeaderMap::new(),
+      stream: true,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      response: response(200, "data: {}\n\ndata: [DONE]\n\n", "text/event-stream"),
+    };
+    let out = stage.convert_response(&ctx, sent).await.unwrap();
+    assert!(matches!(out, ConvertedResponse::Stream { .. }));
   }
 }

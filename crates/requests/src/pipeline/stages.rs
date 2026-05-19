@@ -266,5 +266,50 @@ pub trait SendStage: Send + Sync {
 
 #[async_trait]
 pub trait ConvertResponseStage: Send + Sync {
-  async fn convert_response(&self, ctx: &PipelineCtx, sent: SentResponse) -> Result<ConvertedResponse, PipelineError>;
+  async fn convert_buffered(
+    &self,
+    ctx: &PipelineCtx,
+    status: u16,
+    headers: HeaderMap,
+    upstream_endpoint: Endpoint,
+    body: Bytes,
+  ) -> Result<ConvertedResponse, PipelineError>;
+
+  async fn convert_stream(
+    &self,
+    ctx: &PipelineCtx,
+    status: u16,
+    headers: HeaderMap,
+    upstream_endpoint: Endpoint,
+    response: reqwest::Response,
+  ) -> Result<ConvertedResponse, PipelineError>;
+
+  async fn convert_response(
+    &self,
+    ctx: &PipelineCtx,
+    sent: SentResponse,
+  ) -> Result<ConvertedResponse, PipelineError> {
+    let SentResponse {
+      status,
+      headers,
+      stream,
+      upstream_endpoint,
+      response,
+    } = sent;
+    if stream {
+      return self
+        .convert_stream(ctx, status, headers, upstream_endpoint, response)
+        .await;
+    }
+    let raw = response.bytes().await.map_err(|e| {
+      PipelineError::recoverable(
+        crate::event::Stage::ConvertResponse,
+        SmolStr::new(format!("reading upstream body: {e}")),
+      )
+    })?;
+    ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamBody { body: raw.clone() });
+    self
+      .convert_buffered(ctx, status, headers, upstream_endpoint, raw)
+      .await
+  }
 }
