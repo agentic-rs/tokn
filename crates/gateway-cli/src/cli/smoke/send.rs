@@ -8,8 +8,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use axum::response::Response;
 use clap::Args;
-use llm_config::RouteMode;
-use llm_router::api::AppState;
+use tokn_config::RouteMode;
+use tokn_router::api::AppState;
 use std::path::PathBuf;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
@@ -106,7 +106,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   filter_accounts(&mut accounts, args.provider.as_deref(), args.account.as_deref())?;
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
-  let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
+  let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
 
   let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
 
@@ -170,11 +170,11 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   if args.dry_run {
     let dry_endpoint = match endpoint {
-      Endpoint::ChatCompletions => llm_router::pipeline::DryRunEndpoint::ChatCompletions,
-      Endpoint::Responses => llm_router::pipeline::DryRunEndpoint::Responses,
-      Endpoint::Messages => llm_router::pipeline::DryRunEndpoint::Messages,
+      Endpoint::ChatCompletions => tokn_router::pipeline::DryRunEndpoint::ChatCompletions,
+      Endpoint::Responses => tokn_router::pipeline::DryRunEndpoint::Responses,
+      Endpoint::Messages => tokn_router::pipeline::DryRunEndpoint::Messages,
     };
-    let dry = llm_router::pipeline::dry_run_request(
+    let dry = tokn_router::pipeline::dry_run_request(
       &state,
       dry_endpoint,
       headers.clone(),
@@ -194,14 +194,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   let resp_result: Result<Response> = match endpoint {
     Endpoint::ChatCompletions => {
-      llm_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
+      tokn_router::api::endpoints::chat_completions(State(state.clone()), headers, body_bytes)
         .await
         .map_err(|e| anyhow!("{e}"))
     }
-    Endpoint::Responses => llm_router::api::endpoints::responses(State(state.clone()), headers, body_bytes)
+    Endpoint::Responses => tokn_router::api::endpoints::responses(State(state.clone()), headers, body_bytes)
       .await
       .map_err(|e| anyhow!("{e}")),
-    Endpoint::Messages => llm_router::api::endpoints::messages(State(state.clone()), headers, body_bytes)
+    Endpoint::Messages => tokn_router::api::endpoints::messages(State(state.clone()), headers, body_bytes)
       .await
       .map_err(|e| anyhow!("{e}")),
   };
@@ -230,7 +230,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 }
 
 pub(super) fn filter_accounts(
-  accounts: &mut Vec<llm_core::account::AccountConfig>,
+  accounts: &mut Vec<tokn_core::account::AccountConfig>,
   provider: Option<&str>,
   account: Option<&str>,
 ) -> Result<()> {
@@ -414,7 +414,7 @@ fn print_json_response(status: reqwest::StatusCode, body: &[u8], stream: bool) -
   Ok(())
 }
 
-fn print_dry_run(dry: &llm_router::pipeline::DryRunOutput, format: OutputFormat) -> Result<()> {
+fn print_dry_run(dry: &tokn_router::pipeline::DryRunOutput, format: OutputFormat) -> Result<()> {
   let headers = headers_json(&dry.headers);
   let body_json: serde_json::Value = serde_json::from_slice(dry.body.as_ref())
     .unwrap_or_else(|_| serde_json::Value::String(String::from_utf8_lossy(dry.body.as_ref()).into_owned()));

@@ -38,7 +38,7 @@ pub(super) async fn proxy_passthrough(
     .ok()
     .map(crate::api::routing::route_mode_as_str)
     .map(str::to_string);
-  state.events.emit(llm_core::event::Event::RequestStarted {
+  state.events.emit(tokn_core::event::Event::RequestStarted {
     request_id: request_id.clone(),
     ts,
     endpoint: path.to_string(),
@@ -48,7 +48,7 @@ pub(super) async fn proxy_passthrough(
     method: parts.method.to_string(),
     url: Some(url.clone()),
   });
-  state.events.emit(llm_core::event::Event::RequestHeaders {
+  state.events.emit(tokn_core::event::Event::RequestHeaders {
     request_id: request_id.clone(),
     ts,
     endpoint_hint: None,
@@ -83,7 +83,7 @@ pub(super) async fn proxy_passthrough(
           msg.clone(),
           None,
         ));
-        state.events.emit(llm_core::event::Event::RequestCompleted {
+        state.events.emit(tokn_core::event::Event::RequestCompleted {
           request_id: request_id.clone(),
           success: false,
           total_attempts: 1,
@@ -116,7 +116,7 @@ pub(super) async fn proxy_passthrough(
   let mut completion =
     crate::pipeline::completion::CompletionGuard::new(state.events.clone(), request_id.clone(), started);
   let stream = body_meta.stream;
-  state.events.emit(llm_core::event::Event::RequestParsed {
+  state.events.emit(tokn_core::event::Event::RequestParsed {
     request_id: request_id.clone(),
     attempt: ctx.attempt,
     account_id: identity.account_id.unwrap_or_else(|| "<unknown>".to_string()),
@@ -148,7 +148,7 @@ pub(super) async fn proxy_passthrough(
     }
   };
   let status = response.status();
-  state.events.emit(llm_core::event::Event::RequestResponded {
+  state.events.emit(tokn_core::event::Event::RequestResponded {
     request_id: request_id.clone(),
     attempt: ctx.attempt,
     outbound_status: status.as_u16(),

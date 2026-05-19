@@ -1,11 +1,11 @@
 [package]
-name = "llm-endpoint-chat-completions"
+name = "tokn-endpoint-chat-completions"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-llm-endpoint-core = { workspace = true }
-llm-endpoint-macros = { workspace = true }
+tokn-endpoint-core = { workspace = true }
+tokn-endpoint-macros = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

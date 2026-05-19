@@ -14,10 +14,10 @@ use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
-use llm_config::Config;
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::event::EventBus;
+use tokn_config::Config;
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::event::EventBus;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,7 +51,7 @@ pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   let name = name.as_str();
-  name.starts_with("x-llm-router-")
+  name.starts_with("x-tokn-router-")
     || name == "x-route-mode"
     || name == "x-behave-as"
     || REQUEST_ID_HEADERS.contains(&name)
@@ -220,7 +220,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     AccountPool::from_accounts_with(accounts, cfg, move |account| registry.build(account))?
   };
   let route = Arc::new(RouteResolver::new(cfg.server.route_mode, &cfg.model_families));
-  let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
+  let http = tokn_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   Ok(AppState {
     pool,
@@ -249,7 +249,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

@@ -6,10 +6,10 @@ pub mod pipeline;
 pub mod proxy;
 pub mod relay;
 
-pub use llm_config as config;
-pub use llm_config::profiles;
-pub use llm_convert as convert;
-pub use llm_core::{db, provider, util};
+pub use tokn_config as config;
+pub use tokn_config::profiles;
+pub use tokn_convert as convert;
+pub use tokn_core::{db, provider, util};
 
 pub fn install_rustls_crypto_provider() -> Result<()> {
   rustls::crypto::ring::default_provider()

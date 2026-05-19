@@ -4,10 +4,10 @@ use crate::db::{DbEventHandler, DbPaths};
 use crate::progress::{ArchiveProgressEventHandler, ProgressEventHandler, ProgressLogEventHandler};
 use anyhow::Result;
 use axum::Router;
-use llm_auth::AuthStore;
-use llm_config::RouteMode;
-use llm_core::account::AccountConfig;
-use llm_core::event::{EventBus, EventHandler, EventReceiver};
+use tokn_auth::AuthStore;
+use tokn_config::RouteMode;
+use tokn_core::account::AccountConfig;
+use tokn_core::event::{EventBus, EventHandler, EventReceiver};
 use std::future::Future;
 use std::io::IsTerminal;
 use std::net::SocketAddr;
@@ -82,8 +82,8 @@ pub fn build_state(
   cfg: &Config,
   accounts: &[AccountConfig],
   events: Arc<EventBus>,
-) -> Result<llm_router::api::AppState> {
-  llm_router::api::build_state(cfg, accounts, events)
+) -> Result<tokn_router::api::AppState> {
+  tokn_router::api::build_state(cfg, accounts, events)
 }
 
 pub fn build_state_for_route_mode(
@@ -91,19 +91,19 @@ pub fn build_state_for_route_mode(
   accounts: &[AccountConfig],
   events: Arc<EventBus>,
   route_mode: RouteMode,
-) -> Result<llm_router::api::AppState> {
+) -> Result<tokn_router::api::AppState> {
   let mut cfg = cfg.clone();
   cfg.server.route_mode = route_mode;
   build_state(&cfg, accounts, events)
 }
 
 pub fn state_with_route_mode(
-  state: &llm_router::api::AppState,
+  state: &tokn_router::api::AppState,
   route_mode: RouteMode,
   cfg: &Config,
-) -> llm_router::api::AppState {
+) -> tokn_router::api::AppState {
   let mut state = state.clone();
-  state.route = Arc::new(llm_router::api::routing::RouteResolver::new(
+  state.route = Arc::new(tokn_router::api::routing::RouteResolver::new(
     route_mode,
     &cfg.model_families,
   ));
@@ -120,7 +120,7 @@ where
   F: Future<Output = ()> + Send + 'static,
 {
   let listener = tokio::net::TcpListener::bind(addr).await?;
-  tracing::info!(%addr, "llm-router listening");
+  tracing::info!(%addr, "tokn-router listening");
   axum::serve(listener, app).with_graceful_shutdown(shutdown).await?;
   Ok(())
 }

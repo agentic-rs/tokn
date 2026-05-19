@@ -14,8 +14,8 @@ use http::header::{HeaderValue, CONNECTION, HOST, UPGRADE};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
-use llm_auth::descriptor::RewriteTarget;
-use llm_config::RouteMode;
+use tokn_auth::descriptor::RewriteTarget;
+use tokn_config::RouteMode;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -257,7 +257,7 @@ async fn route_intercepted_request(
     HOST,
     HeaderValue::from_str(&host).unwrap_or_else(|_| HeaderValue::from_static("localhost")),
   );
-  builder = builder.header("x-llm-router-local-addr", local.to_string());
+  builder = builder.header("x-tokn-router-local-addr", local.to_string());
   let body = Body::new(body);
   let request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
 

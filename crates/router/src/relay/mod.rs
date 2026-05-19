@@ -33,7 +33,7 @@ mod tests {
   use axum::body::to_bytes;
   use axum::http::{HeaderMap, Method};
   use bytes::Bytes;
-  use llm_core::event::{Event, EventBus, EventHandler};
+  use tokn_core::event::{Event, EventBus, EventHandler};
   use reqwest::ResponseBuilderExt;
   use serde_json::json;
   use std::sync::{Arc, Mutex};
@@ -248,7 +248,7 @@ mod tests {
     let records: Records = Arc::new(Mutex::new(Vec::new()));
     let handler = CollectingHandler::new(records.clone());
     let (bus, receiver) = EventBus::new(64);
-    llm_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
+    tokn_core::event::spawn_event_loop(receiver, vec![Box::new(handler)]);
     (Arc::new(bus), records)
   }
 
@@ -386,7 +386,7 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .with_outbound_response_body(Some(&resp_body))
     .build();
-    if let llm_core::event::Event::RequestResult {
+    if let tokn_core::event::Event::RequestResult {
       session_source,
       messages,
       ..
@@ -418,7 +418,7 @@ mod tests {
     .with_request_body(&req_body, Some(Endpoint::ChatCompletions))
     .build();
 
-    if let llm_core::event::Event::RequestResult {
+    if let tokn_core::event::Event::RequestResult {
       session_source,
       request_id,
       request_error,
@@ -440,7 +440,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,
@@ -493,7 +493,7 @@ mod tests {
     assert_eq!(ctx.request_id, request_id);
 
     // Emit lifecycle events as caller would
-    state.events.emit(llm_core::event::Event::RequestStarted {
+    state.events.emit(tokn_core::event::Event::RequestStarted {
       request_id: ctx.request_id.clone(),
       ts: 0,
       endpoint: ctx.endpoint.map(|e| e.as_str()).unwrap_or("unknown").to_string(),
@@ -503,7 +503,7 @@ mod tests {
       method: "POST".into(),
       url: Some("https://api.openai.com/v1/chat/completions".into()),
     });
-    state.events.emit(llm_core::event::Event::RequestParsed {
+    state.events.emit(tokn_core::event::Event::RequestParsed {
       request_id: ctx.request_id.clone(),
       attempt: 0,
       account_id: "passthrough".to_string(),
@@ -514,12 +514,12 @@ mod tests {
       behave_as: None,
       inbound_body: req_body.clone(),
     });
-    state.events.emit(llm_core::event::Event::RequestResponded {
+    state.events.emit(tokn_core::event::Event::RequestResponded {
       request_id: ctx.request_id.clone(),
       attempt: 0,
       outbound_status: 200,
       latency_ms: 1,
-      outbound_resp_headers: llm_headers::HeaderMap::new(),
+      outbound_resp_headers: tokn_headers::HeaderMap::new(),
       outbound_req_method: Some("POST".to_string()),
       outbound_req_url: Some("https://api.openai.com/v1/chat/completions".to_string()),
       outbound_req_headers: Some((&req_headers).into()),
@@ -582,7 +582,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,
@@ -639,7 +639,7 @@ mod tests {
       id: "acct".into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
-      tier: llm_core::account::AccountTier::Active,
+      tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
       base_url: None,

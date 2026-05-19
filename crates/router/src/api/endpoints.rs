@@ -22,7 +22,7 @@ async fn handle(
   let hx = request_header_extract(&inbound);
   let endpoint_hint = parser.endpoint().as_str().to_string();
   let local_addr = inbound
-    .get("x-llm-router-local-addr")
+    .get("x-tokn-router-local-addr")
     .and_then(|v| v.to_str().ok())
     .map(str::to_string)
     .or_else(|| {
@@ -38,7 +38,7 @@ async fn handle(
     .map(route_mode_as_str)
     .map(str::to_string);
 
-  state.events.emit(llm_core::event::Event::RequestStarted {
+  state.events.emit(tokn_core::event::Event::RequestStarted {
     request_id: hx.request_id.clone(),
     ts,
     endpoint: endpoint_hint.clone(),
@@ -48,7 +48,7 @@ async fn handle(
     method: "POST".to_string(),
     url: None,
   });
-  state.events.emit(llm_core::event::Event::RequestHeaders {
+  state.events.emit(tokn_core::event::Event::RequestHeaders {
     request_id: hx.request_id.clone(),
     ts,
     endpoint_hint: Some(endpoint_hint),
@@ -65,7 +65,7 @@ async fn handle(
   let decoded = match super::codec::decode_json_request(&inbound, body) {
     Ok(decoded) => decoded,
     Err(err) => {
-      state.events.emit(llm_core::event::Event::RequestCompleted {
+      state.events.emit(tokn_core::event::Event::RequestCompleted {
         request_id: hx.request_id.clone(),
         success: false,
         total_attempts: 1,

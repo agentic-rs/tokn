@@ -1,9 +1,9 @@
 use crate::config::CopilotHeaders;
 use crate::provider::Result;
-use llm_headers::keys::{
+use tokn_headers::keys::{
   ACCEPT, AUTHORIZATION, COPILOT_INTEGRATION_ID, EDITOR_PLUGIN_VERSION, EDITOR_VERSION, OPENAI_INTENT, USER_AGENT,
 };
-use llm_headers::{HeaderMap, HeaderName, HeaderValue};
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 
 /// Headers for the Copilot API token exchange (`api.github.com`).
 pub fn token_exchange_headers(github_token: &str, h: &CopilotHeaders) -> Result<HeaderMap> {

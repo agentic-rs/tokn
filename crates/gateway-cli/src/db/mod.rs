@@ -5,20 +5,20 @@ pub mod sessions;
 pub mod usage;
 
 use bytes::Bytes;
-use llm_headers::HeaderMap;
+use tokn_headers::HeaderMap;
 use snafu::Snafu;
 
-use llm_core::db::SessionSource;
-pub use llm_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
+use tokn_core::db::SessionSource;
+pub use tokn_core::db::{CallRecord, DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
-pub(crate) use llm_core::db::{Usage, UsageDetails};
+pub(crate) use tokn_core::db::{Usage, UsageDetails};
 pub use usage::UsageDb;
 
 /// Serialise an HTTP header map to JSON bytes, redacting values whose name
 /// is sensitive (`authorization`, `proxy-authorization`, `cookie`, anything
 /// containing `api-key`). Public so both inbound (server::forward) and
 /// outbound (db::requests) capture paths share the same redaction policy.
-pub fn headers_json(headers: &llm_headers::HeaderMap) -> Bytes {
+pub fn headers_json(headers: &tokn_headers::HeaderMap) -> Bytes {
   use serde_json::{Map, Value};
   let mut out = Map::new();
   for (name, value) in headers {
@@ -77,7 +77,7 @@ fn write_record(usage: &mut usage::UsageDb, sessions: &mut Option<sessions::Sess
 
 // --- Event bus integration ---
 
-use llm_core::event::{Event, EventHandler};
+use tokn_core::event::{Event, EventHandler};
 use std::collections::HashMap;
 
 /// Partial request data accumulated from lifecycle events before completion.
@@ -591,12 +591,12 @@ impl EventHandler for DbEventHandler {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use llm_core::event::{Event, EventHandler};
-  use llm_headers::HeaderMap;
+  use tokn_core::event::{Event, EventHandler};
+  use tokn_headers::HeaderMap;
   use rusqlite::{params, Connection};
 
   fn tempdir() -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("llm-router-db-events-{}", uuid::Uuid::new_v4()));
+    let p = std::env::temp_dir().join(format!("tokn-router-db-events-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&p).unwrap();
     p
   }

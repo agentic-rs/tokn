@@ -1,9 +1,9 @@
 use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
 use crate::api::routing::{RouteResolution, RouteSelector};
-use llm_config::Config;
-use llm_core::account::{AccountConfig, AccountTier};
-use llm_core::provider::{Endpoint, Provider};
+use tokn_config::Config;
+use tokn_core::account::{AccountConfig, AccountTier};
+use tokn_core::provider::{Endpoint, Provider};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,13 +19,13 @@ use tracing::{debug, info};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-  #[snafu(display("no accounts configured. Run `llm-router account add` first."))]
+  #[snafu(display("no accounts configured. Run `tokn-router account add` first."))]
   NoAccounts,
 
   #[snafu(display("failed to build provider for account `{id}`"))]
   BuildAccount {
     id: String,
-    source: llm_core::provider::Error,
+    source: tokn_core::provider::Error,
   },
 }
 
@@ -80,7 +80,7 @@ impl AccountPool {
 
   pub fn from_accounts_with<F>(accounts_in: &[AccountConfig], cfg: &Config, build_provider: F) -> Result<Arc<Self>>
   where
-    F: Fn(Arc<AccountConfig>) -> llm_core::provider::Result<Arc<dyn Provider>>,
+    F: Fn(Arc<AccountConfig>) -> tokn_core::provider::Result<Arc<dyn Provider>>,
   {
     if accounts_in.is_empty() {
       return NoAccountsSnafu.fail();

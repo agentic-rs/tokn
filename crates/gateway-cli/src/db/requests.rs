@@ -283,10 +283,10 @@ impl RequestsDb {
     attempt: u32,
     latency_header_ms: u64,
     status: u16,
-    outbound_resp_headers: &llm_headers::HeaderMap,
+    outbound_resp_headers: &tokn_headers::HeaderMap,
     outbound_req_method: Option<&str>,
     outbound_req_url: Option<&str>,
-    outbound_req_headers: Option<&llm_headers::HeaderMap>,
+    outbound_req_headers: Option<&tokn_headers::HeaderMap>,
     outbound_req_body: Option<&bytes::Bytes>,
   ) -> Result<()> {
     let request_id = composite_request_id(base_request_id, attempt);
@@ -486,7 +486,7 @@ mod tests {
 
   #[test]
   fn fresh_day_file_has_canonical_columns() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("2099-01-01.db");
     let conn = open_day_db(&path).unwrap();
@@ -562,7 +562,7 @@ mod tests {
 
   #[test]
   fn migrates_v1_day_file_and_records_request_error() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-mig-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-mig-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let ts = 100;
     let path = dir.join(format!("{}.db", day_key(ts)));
@@ -626,7 +626,7 @@ mod tests {
 
   #[test]
   fn headers_updates_existing_started_row() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-headers-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-headers-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut db = RequestsDb::new(dir.clone()).unwrap();
     let ts = 1_700_000_000;
@@ -648,7 +648,7 @@ mod tests {
     )
     .unwrap();
 
-    let mut headers = llm_headers::HeaderMap::new();
+    let mut headers = tokn_headers::HeaderMap::new();
     headers.insert("x-test", "1");
     let with_headers = HttpSnapshot {
       method: Some("POST".into()),
@@ -687,7 +687,7 @@ mod tests {
 
   #[test]
   fn result_insert_can_backfill_source_and_method() {
-    let dir = std::env::temp_dir().join(format!("llm-router-req-result-{}", uuid::Uuid::new_v4()));
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-result-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let mut db = RequestsDb::new(dir.clone()).unwrap();
     let ts = 1_700_000_000;

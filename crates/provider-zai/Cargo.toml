@@ -1,14 +1,14 @@
 [package]
-name = "llm-provider-zai"
+name = "tokn-provider-zai"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-llm-core = { workspace = true }
-llm-auth = { workspace = true }
-llm-catalogue = { workspace = true }
-llm-headers = { workspace = true }
+tokn-core = { workspace = true }
+tokn-auth = { workspace = true }
+tokn-catalogue = { workspace = true }
+tokn-headers = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }

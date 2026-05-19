@@ -20,22 +20,22 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-llm-core = { path = "crates/core" }
-llm-config = { path = "crates/config" }
-llm-auth = { path = "crates/auth" }
-llm-catalogue = { path = "crates/catalogue" }
-llm-convert = { path = "crates/convert" }
-llm-endpoint-core = { path = "crates/endpoint-core" }
-llm-endpoint-macros = { path = "crates/endpoint-macros" }
-llm-endpoint-chat-completions = { path = "crates/endpoint-chat-completions" }
-llm-endpoint-responses = { path = "crates/endpoint-responses" }
-llm-endpoint-messages = { path = "crates/endpoint-messages" }
-llm-headers = { path = "crates/headers" }
-llm-router = { path = "crates/router" }
-llm-provider-copilot = { path = "crates/provider-copilot" }
-llm-provider-deepseek = { path = "crates/provider-deepseek" }
-llm-provider-openai = { path = "crates/provider-openai" }
-llm-provider-zai = { path = "crates/provider-zai" }
+tokn-core = { path = "crates/core" }
+tokn-config = { path = "crates/config" }
+tokn-auth = { path = "crates/auth" }
+tokn-catalogue = { path = "crates/catalogue" }
+tokn-convert = { path = "crates/convert" }
+tokn-endpoint-core = { path = "crates/endpoint-core" }
+tokn-endpoint-macros = { path = "crates/endpoint-macros" }
+tokn-endpoint-chat-completions = { path = "crates/endpoint-chat-completions" }
+tokn-endpoint-responses = { path = "crates/endpoint-responses" }
+tokn-endpoint-messages = { path = "crates/endpoint-messages" }
+tokn-headers = { path = "crates/headers" }
+tokn-router = { path = "crates/router" }
+tokn-provider-copilot = { path = "crates/provider-copilot" }
+tokn-provider-deepseek = { path = "crates/provider-deepseek" }
+tokn-provider-openai = { path = "crates/provider-openai" }
+tokn-provider-zai = { path = "crates/provider-zai" }
 
 anyhow = "1"
 arc-swap = "1"

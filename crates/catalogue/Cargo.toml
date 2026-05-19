@@ -1,11 +1,11 @@
 [package]
-name = "llm-catalogue"
+name = "tokn-catalogue"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-llm-core = { workspace = true }
+tokn-core = { workspace = true }
 directories = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
