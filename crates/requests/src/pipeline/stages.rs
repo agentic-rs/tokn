@@ -38,6 +38,7 @@ enum AccumMsg {
   Converted(Bytes),
   UpstreamError(SmolStr),
   ConvertedError(SmolStr),
+  Finish,
 }
 
 impl AccumHelper {
@@ -45,6 +46,7 @@ impl AccumHelper {
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
     let events = ctx.events.clone();
+    let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
     tokio::spawn(async move {
       let mut upstream = Vec::new();
@@ -57,6 +59,7 @@ impl AccumHelper {
           AccumMsg::Converted(bytes) => converted.extend_from_slice(&bytes),
           AccumMsg::UpstreamError(err) => upstream_error = Some(err),
           AccumMsg::ConvertedError(err) => converted_error = Some(err),
+          AccumMsg::Finish => break,
         }
       }
       events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
@@ -79,6 +82,7 @@ impl AccumHelper {
           },
         ),
       }));
+      guard.finish();
     });
     Self { tx }
   }
@@ -89,6 +93,7 @@ impl AccumHelper {
         let _ = self.tx.send(AccumMsg::Upstream(bytes.clone()));
       }
       Err(err) => {
+        tracing::warn!("got upstream chunk error: {:?}", err);
         let _ = self.tx.send(AccumMsg::UpstreamError(SmolStr::new(err.to_string())));
       }
     }
@@ -100,9 +105,21 @@ impl AccumHelper {
         let _ = self.tx.send(AccumMsg::Converted(bytes.clone()));
       }
       Err(err) => {
+        tracing::warn!("got converted chunk error: {:?}", err);
         let _ = self.tx.send(AccumMsg::ConvertedError(SmolStr::new(err.to_string())));
       }
     }
+  }
+
+  fn finish(&self) {
+    tracing::debug!("upstream stream ended");
+    let _ = self.tx.send(AccumMsg::Finish);
+  }
+}
+
+impl Drop for AccumHelper {
+  fn drop(&mut self) {
+    self.finish();
   }
 }
 
@@ -407,6 +424,7 @@ pub trait ConvertResponseStage: Send + Sync {
                   Some((item, (body, accum)))
                 }
                 None => {
+                  accum.finish();
                   None
                 }
               }

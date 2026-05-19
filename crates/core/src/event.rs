@@ -3,6 +3,7 @@ use crate::request_event::RequestEvent;
 use bytes::Bytes;
 use llm_headers::HeaderMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{broadcast, oneshot};
 
 /// Top-level event flowing on the in-process broadcast bus.
@@ -207,6 +208,7 @@ pub enum SessionEvent {
 #[derive(Clone)]
 pub struct EventBus {
   tx: broadcast::Sender<Arc<Event>>,
+  active_finalizers: Arc<AtomicUsize>,
 }
 
 impl EventBus {
@@ -215,7 +217,10 @@ impl EventBus {
   /// `RecvError::Lagged` on their next `recv()`.
   pub fn new(capacity: usize) -> Self {
     let (tx, _) = broadcast::channel(capacity.max(1));
-    Self { tx }
+    Self {
+      tx,
+      active_finalizers: Arc::new(AtomicUsize::new(0)),
+    }
   }
 
   /// Subscribe to events. The returned receiver only sees events emitted
@@ -233,11 +238,47 @@ impl EventBus {
     let _ = self.tx.send(Arc::new(event));
   }
 
+  pub fn begin_finalizer(&self) -> EventFinalizerGuard {
+    self.active_finalizers.fetch_add(1, Ordering::AcqRel);
+    EventFinalizerGuard {
+      active_finalizers: self.active_finalizers.clone(),
+      finished: false,
+    }
+  }
+
   /// Gracefully shut down the event bus, waiting for the consumer to drain.
   pub async fn shutdown(&self) {
+    tracing::info!("shutting down event bus, waiting for active finalizers to finish... (active={})", self.active_finalizers.load(Ordering::Acquire));
+    while self.active_finalizers.load(Ordering::Acquire) != 0 {
+      tokio::task::yield_now().await;
+    }
+    tracing::debug!("no active finalizers, sending shutdown signal");
     let (tx, rx) = oneshot::channel();
     let _ = self.tx.send(Arc::new(Event::Shutdown(Mutex::new(Some(tx)))));
     let _ = rx.await;
+  }
+}
+
+pub struct EventFinalizerGuard {
+  active_finalizers: Arc<AtomicUsize>,
+  finished: bool,
+}
+
+impl EventFinalizerGuard {
+  pub fn finish(mut self) {
+    if !self.finished {
+      self.active_finalizers.fetch_sub(1, Ordering::AcqRel);
+      self.finished = true;
+    }
+  }
+}
+
+impl Drop for EventFinalizerGuard {
+  fn drop(&mut self) {
+    if !self.finished {
+      self.active_finalizers.fetch_sub(1, Ordering::AcqRel);
+      self.finished = true;
+    }
   }
 }
 
@@ -299,4 +340,27 @@ pub fn spawn_event_loop(
       }
     }
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::time::Duration;
+
+  #[tokio::test]
+  async fn shutdown_waits_for_active_finalizer() {
+    let bus = EventBus::new(4);
+    let guard = bus.begin_finalizer();
+
+    let shutdown = tokio::spawn({
+      let bus = bus.clone();
+      async move { bus.shutdown().await }
+    });
+
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!shutdown.is_finished(), "shutdown should wait for active finalizer");
+
+    guard.finish();
+    shutdown.await.unwrap();
+  }
 }

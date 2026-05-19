@@ -150,9 +150,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   // the smoke run into `requests/<YYYY-MM-DD>.db`. All legacy handlers
   // (`DbEventHandler`, progress, archive) match only on legacy `Event::*`
   // variants and ignore requests events.
-  let (legacy_events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
+  let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = llm_core::event::spawn_event_loop(receiver, handlers);
-  let state = crate::server_runtime::build_state(&cfg, &accounts, legacy_events.clone())?;
+  let state = crate::server_runtime::build_state(&cfg, &accounts, events.clone())?;
   let requests_dir = if cfg.db.enabled {
     Some(cfg.db.resolve_paths()?.requests_dir)
   } else {
@@ -222,7 +222,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   // ---- Build the requests profile ----
   // Reuse the legacy bus so `RequestEventHandler` persists smoke runs.
-  let bus = legacy_events.clone();
+  let bus = events.clone();
   subscribe_event_printer(&bus);
   // Capture per-stage outputs so we can render dry-run / failure reports
   // after `run` returns. The runner no longer carries partial state on
@@ -279,8 +279,35 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   let result = runner.run(raw).await;
 
+  if let Ok(converted @ ConvertedResponse::Stream { .. }) = result {
+    let snapshot = captured.snapshot();
+    print_live_outcome(converted, &snapshot, None, args.format, !args.no_redact).await?;
+
+    // Streaming final records are emitted by the stream finalizer, so we must
+    // drain the stream before shutting down the event bus.
+    events.shutdown().await;
+    if let Some(archive_runtime) = archive_runtime {
+      archive_runtime.shutdown().await;
+    }
+
+    let persisted = match (requests_dir.as_deref(), snapshot.request_id.as_ref()) {
+      (Some(dir), Some(id)) => match llm_persistence::read_request_row(dir, id.as_str()) {
+        Ok(row) => row,
+        Err(e) => {
+          eprintln!("warning: failed to read persisted request row: {e}");
+          None
+        }
+      },
+      _ => None,
+    };
+    if matches!(args.format, OutputFormat::Text) {
+      print_persisted_text(persisted.as_ref());
+    }
+    return Ok(());
+  }
+
   // Shut down the legacy event plumbing — requests events are independent.
-  legacy_events.shutdown().await;
+  events.shutdown().await;
   if let Some(archive_runtime) = archive_runtime {
     archive_runtime.shutdown().await;
   }
