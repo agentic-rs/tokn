@@ -345,6 +345,31 @@ fn inbound_connection_record_updates_connection_fields() {
 }
 
 #[test]
+fn record_without_started_bootstraps_row() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-bootstrap";
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::InboundConnection {
+      local_addr: Some(SmolStr::new("127.0.0.1:4141")),
+      peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
+      mode: SmolStr::new("route"),
+      method: SmolStr::new("POST"),
+      url: Some(SmolStr::new("https://example.test/v1/responses")),
+    },
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
+  assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
+  assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
+  assert_eq!(as_text(&row["method"]).as_deref(), Some("POST"));
+  assert_eq!(as_text(&row["inbound_req_url"]).as_deref(), Some("https://example.test/v1/responses"));
+}
+
+#[test]
 fn usage_record_updates_token_columns() {
   let dir = tempdir();
   let mut h = RequestEventHandler::new(dir.clone()).unwrap();

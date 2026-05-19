@@ -79,30 +79,41 @@ impl EventHandler for RequestEventHandler {
       // the stage lifecycle. `UpstreamResp` duplicates `StageEvent::Send`
       // (status + headers come from the same `reqwest::Response::headers()`)
       // and so is intentionally a no-op here.
-      RequestEventPayload::Record(RecordEvent::InboundConnection {
-        local_addr,
-        peer_addr,
-        mode,
-        method,
-        url,
-      }) => self.on_inbound_connection(
-        request_id,
-        attempt,
-        local_addr.as_deref(),
-        peer_addr.as_deref(),
-        mode.as_str(),
-        method.as_str(),
-        url.as_deref(),
-      ),
-      RequestEventPayload::Record(RecordEvent::UpstreamReq {
-        method,
-        url,
-        headers,
-        body,
-      }) => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
-      RequestEventPayload::Record(RecordEvent::UpstreamResp { .. }) => Ok(()),
-      RequestEventPayload::Record(RecordEvent::UpstreamBody { body }) => self.on_upstream_body(request_id, attempt, body),
-      RequestEventPayload::Record(RecordEvent::Usage(usage)) => self.on_usage(request_id, attempt, usage),
+      RequestEventPayload::Record(record) => {
+        let bootstrap = !matches!(record, RecordEvent::UpstreamResp { .. });
+        if bootstrap {
+          if let Err(e) = self.ensure_started_for_record(request_id, attempt) {
+            tracing::warn!(error = %e, request_id, attempt, "requests record bootstrap failed");
+            return;
+          }
+        }
+        match record {
+          RecordEvent::InboundConnection {
+            local_addr,
+            peer_addr,
+            mode,
+            method,
+            url,
+          } => self.on_inbound_connection(
+            request_id,
+            attempt,
+            local_addr.as_deref(),
+            peer_addr.as_deref(),
+            mode.as_str(),
+            method.as_str(),
+            url.as_deref(),
+          ),
+          RecordEvent::UpstreamReq {
+            method,
+            url,
+            headers,
+            body,
+          } => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
+          RecordEvent::UpstreamResp { .. } => Ok(()),
+          RecordEvent::UpstreamBody { body } => self.on_upstream_body(request_id, attempt, body),
+          RecordEvent::Usage(usage) => self.on_usage(request_id, attempt, usage),
+        }
+      }
     };
     if let Err(e) = result {
       tracing::warn!(error = %e, request_id, attempt, "requests persistence write failed");
@@ -111,6 +122,14 @@ impl EventHandler for RequestEventHandler {
 }
 
 impl RequestEventHandler {
+  fn ensure_started_for_record(&mut self, request_id: &str, attempt: u32) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    if self.db.conn_for_request(&id).is_some() {
+      return Ok(());
+    }
+    self.on_started(request_id, attempt, now_unix(), "")
+  }
+
   pub fn on_inbound_connection(
     &mut self,
     request_id: &str,
@@ -123,7 +142,7 @@ impl RequestEventHandler {
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.db.conn_for_request(&id) else {
-      tracing::warn!(request_id = %id, "requests InboundConnection without prior Started");
+      tracing::warn!(request_id = %id, "requests InboundConnection bootstrap failed");
       return Ok(());
     };
     let updated = conn.execute(
