@@ -125,7 +125,7 @@ pub(crate) fn passthrough_streaming_response(
   response_with_body(
     status,
     &headers,
-    Body::from_stream(SsePipeline::from_response_with_tap(resp, tx).run()),
+    Body::from_stream(SsePipeline::from_response(resp).with_tap_all(tx).run()),
   )
 }
 

@@ -44,7 +44,7 @@ pub(crate) async fn stream_response(
   };
   let tx = spawn_stream_recorder(builder, s.events.clone(), max_body, meta);
 
-  let mut pipeline = SsePipeline::from_response_with_tap(resp, tx);
+  let mut pipeline = SsePipeline::from_response(resp).with_tap_all(tx);
   if ctx.upstream_endpoint != endpoint {
     pipeline = pipeline.with_transformer(EndpointTranslator::new(ctx.upstream_endpoint, endpoint));
   }

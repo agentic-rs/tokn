@@ -47,11 +47,47 @@ pub trait EventTransformer: Send {
   }
 }
 
+/// Per-kind opt-in mask for [`SsePipeline`] tap delivery.
+///
+/// `Done` and `Error` messages are always delivered when a tap is attached;
+/// the four payload-bearing kinds (`From`, `Parsed`, `Transformed`, `To`)
+/// are individually gated so consumers only pay for what they need.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TapKinds {
+  pub from: bool,
+  pub parsed: bool,
+  pub transformed: bool,
+  pub to: bool,
+}
+
+impl TapKinds {
+  /// All four payload kinds enabled.
+  pub const fn all() -> Self {
+    Self {
+      from: true,
+      parsed: true,
+      transformed: true,
+      to: true,
+    }
+  }
+
+  /// Only `Parsed` enabled — useful for consumers that just want to inspect
+  /// SSE event JSON (e.g. usage extraction).
+  pub const fn parsed_only() -> Self {
+    Self {
+      from: false,
+      parsed: true,
+      transformed: false,
+      to: false,
+    }
+  }
+}
+
 pub struct SsePipeline {
   source: ByteStream,
   /// Shared tap sender used for raw-byte teeing and parsed/transformed/output observation.
   tap: Option<Arc<ObserverSender>>,
-  tee_byte_streams: bool,
+  tap_kinds: TapKinds,
   transformers: Vec<Box<dyn EventTransformer>>,
 }
 
@@ -64,7 +100,7 @@ impl SsePipeline {
     Self {
       source: Box::pin(source),
       tap: None,
-      tee_byte_streams: false,
+      tap_kinds: TapKinds::default(),
       transformers: Vec::new(),
     }
   }
@@ -72,12 +108,6 @@ impl SsePipeline {
   /// Create a pipeline from an HTTP response without a tap (no observer overhead).
   pub fn from_response(resp: reqwest::Response) -> Self {
     Self::from_stream(resp.bytes_stream().map(|item| item.map_err(io::Error::other)))
-  }
-
-  /// Create a pipeline from an HTTP response with a tap channel.
-  /// Raw upstream bytes are sent as `From(Bytes)` before SSE parsing.
-  pub fn from_response_with_tap(resp: reqwest::Response, tap: ObserverSender) -> Self {
-    Self::from_response(resp).with_tee_byte_streams(tap)
   }
 
   pub fn with_transformer<T>(mut self, transformer: T) -> Self
@@ -88,22 +118,29 @@ impl SsePipeline {
     self
   }
 
-  /// Attach a tap channel and tee raw input bytes to it before SSE parsing.
-  pub fn with_tee_byte_streams(mut self, tap: ObserverSender) -> Self {
+  /// Attach a tap channel with an explicit per-kind mask.
+  ///
+  /// `Done`/`Error` messages are always delivered. Each of `From`, `Parsed`,
+  /// `Transformed`, `To` is only sent when the corresponding flag in `kinds`
+  /// is set.
+  pub fn with_tap(mut self, tap: ObserverSender, kinds: TapKinds) -> Self {
     self.tap = Some(Arc::new(tap));
-    self.tee_byte_streams = true;
+    self.tap_kinds = kinds;
     self
   }
 
-  /// Attach a tap channel for observing pipeline stages.
-  /// Note: this does NOT send `From(Bytes)` — use `with_tee_byte_streams` for that.
-  pub fn with_tap(mut self, tap: ObserverSender) -> Self {
-    self.tap = Some(Arc::new(tap));
-    self
+  /// Shortcut for [`with_tap`](Self::with_tap) with [`TapKinds::all`].
+  pub fn with_tap_all(self, tap: ObserverSender) -> Self {
+    self.with_tap(tap, TapKinds::all())
+  }
+
+  /// Shortcut for [`with_tap`](Self::with_tap) with [`TapKinds::parsed_only`].
+  pub fn with_tap_parsed(self, tap: ObserverSender) -> Self {
+    self.with_tap(tap, TapKinds::parsed_only())
   }
 
   pub fn run(self) -> ByteStream {
-    let source: EventStream = if self.tee_byte_streams {
+    let source: EventStream = if self.tap_kinds.from {
       let tap = self.tap.clone();
       Box::pin(self.source.map(move |result| match result {
         Ok(bytes) => {
@@ -131,7 +168,7 @@ impl SsePipeline {
         .boxed()
     };
     Box::pin(StreamWithFinalizer::new(
-      PipelineStream::new(source, self.transformers, self.tap),
+      PipelineStream::new(source, self.transformers, self.tap, self.tap_kinds),
       finalize_tap,
     ))
   }
@@ -141,16 +178,23 @@ struct PipelineStream {
   source: EventStream,
   transformers: Vec<Box<dyn EventTransformer>>,
   tap: Option<Arc<ObserverSender>>,
+  tap_kinds: TapKinds,
   pending: VecDeque<std::io::Result<Bytes>>,
   source_done: bool,
 }
 
 impl PipelineStream {
-  fn new(source: EventStream, transformers: Vec<Box<dyn EventTransformer>>, tap: Option<Arc<ObserverSender>>) -> Self {
+  fn new(
+    source: EventStream,
+    transformers: Vec<Box<dyn EventTransformer>>,
+    tap: Option<Arc<ObserverSender>>,
+    tap_kinds: TapKinds,
+  ) -> Self {
     Self {
       source,
       transformers,
       tap,
+      tap_kinds,
       pending: VecDeque::new(),
       source_done: false,
     }
@@ -163,19 +207,40 @@ impl PipelineStream {
     }
   }
 
+  #[inline]
+  fn send_tap_parsed(&self, value: Option<Value>) {
+    if self.tap_kinds.parsed {
+      self.send_tap(ObserverMsg::Parsed(value));
+    }
+  }
+
+  #[inline]
+  fn send_tap_transformed(&self, value: Option<Value>) {
+    if self.tap_kinds.transformed {
+      self.send_tap(ObserverMsg::Transformed(value));
+    }
+  }
+
+  #[inline]
+  fn send_tap_to(&self, bytes: Bytes) {
+    if self.tap_kinds.to {
+      self.send_tap(ObserverMsg::To(bytes));
+    }
+  }
+
   fn process_event(&mut self, event: SseEvent) -> std::io::Result<()> {
     // Parsed: before transformers
-    self.send_tap(ObserverMsg::Parsed(event.json.clone()));
+    self.send_tap_parsed(event.json.clone());
 
     let transformed = self.apply_transformers(vec![event], 0)?;
     for event in transformed {
       // Transformed: after transformers
-      self.send_tap(ObserverMsg::Transformed(event.json.clone()));
+      self.send_tap_transformed(event.json.clone());
 
       let encoded = encode_event(&event);
       if !encoded.is_empty() {
         // To: encoded bytes to client
-        self.send_tap(ObserverMsg::To(encoded.clone()));
+        self.send_tap_to(encoded.clone());
         self.pending.push_back(Ok(encoded));
       }
     }
@@ -197,10 +262,10 @@ impl PipelineStream {
     for idx in 0..self.transformers.len() {
       let events = self.transformers[idx].finish().map_err(std::io::Error::other)?;
       for event in self.apply_transformers(events, idx + 1)? {
-        self.send_tap(ObserverMsg::Transformed(event.json.clone()));
+        self.send_tap_transformed(event.json.clone());
         let encoded = encode_event(&event);
         if !encoded.is_empty() {
-          self.send_tap(ObserverMsg::To(encoded.clone()));
+          self.send_tap_to(encoded.clone());
           self.pending.push_back(Ok(encoded));
         }
       }
@@ -332,7 +397,7 @@ mod tests {
       ]))
       .with_transformer(AppendTransformer("-a"))
       .with_transformer(AppendTransformer("-b"))
-      .with_tap(tx)
+      .with_tap_all(tx)
       .run()
       .collect::<Vec<_>>()
       .await
@@ -371,7 +436,7 @@ mod tests {
         Ok(Bytes::from_static(b"data: hello\n\n")),
         Ok(Bytes::from_static(b"data: [DONE]\n\n")),
       ]))
-      .with_tee_byte_streams(tx)
+      .with_tap_all(tx)
       .run()
       .collect::<Vec<_>>()
       .await;
@@ -384,5 +449,41 @@ mod tests {
       }
     }
     assert_eq!(from_count, 2);
+  }
+
+  #[test]
+  fn pipeline_parsed_only_mask_suppresses_other_kinds() {
+    let (tx, mut rx) = observer_channel();
+    futures::executor::block_on(async move {
+      let _ = SsePipeline::from_stream(stream::iter(vec![
+        Ok(Bytes::from_static(b"data: {\"x\":1}\n\n")),
+        Ok(Bytes::from_static(b"data: [DONE]\n\n")),
+      ]))
+      .with_tap_parsed(tx)
+      .run()
+      .collect::<Vec<_>>()
+      .await;
+    });
+
+    let mut from = 0;
+    let mut parsed = 0;
+    let mut transformed = 0;
+    let mut to = 0;
+    let mut done = 0;
+    while let Ok(msg) = rx.try_recv() {
+      match msg {
+        ObserverMsg::From(_) => from += 1,
+        ObserverMsg::Parsed(_) => parsed += 1,
+        ObserverMsg::Transformed(_) => transformed += 1,
+        ObserverMsg::To(_) => to += 1,
+        ObserverMsg::Done => done += 1,
+        ObserverMsg::Error(_) => {}
+      }
+    }
+    assert_eq!(from, 0);
+    assert_eq!(transformed, 0);
+    assert_eq!(to, 0);
+    assert_eq!(done, 1);
+    assert!(parsed >= 1);
   }
 }
