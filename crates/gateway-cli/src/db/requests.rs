@@ -5,37 +5,37 @@ use std::path::{Path, PathBuf};
 use time::macros::format_description;
 
 const CACHE_CAP: usize = 3;
-const BOOTSTRAP: &str = include_str!("../../../../scripts/migrations/requests/000_bootstrap.sql");
+const BOOTSTRAP: &str = include_str!("../../migrations/requests/000_bootstrap.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
     name: "initial",
-    sql: include_str!("../../../../scripts/migrations/requests/001_initial.sql"),
+    sql: include_str!("../../migrations/requests/001_initial.sql"),
   },
   migrate::Migration {
     version: 2,
     name: "add_correlation_and_error",
-    sql: include_str!("../../../../scripts/migrations/requests/002_add_correlation_and_error.sql"),
+    sql: include_str!("../../migrations/requests/002_add_correlation_and_error.sql"),
   },
   migrate::Migration {
     version: 3,
     name: "add_usage_breakdown",
-    sql: include_str!("../../../../scripts/migrations/requests/003_add_usage_breakdown.sql"),
+    sql: include_str!("../../migrations/requests/003_add_usage_breakdown.sql"),
   },
   migrate::Migration {
     version: 4,
     name: "add_response_header_latency",
-    sql: include_str!("../../../../scripts/migrations/requests/004_add_response_header_latency.sql"),
+    sql: include_str!("../../migrations/requests/004_add_response_header_latency.sql"),
   },
   migrate::Migration {
     version: 5,
     name: "add_source_and_method",
-    sql: include_str!("../../../../scripts/migrations/requests/005_add_source_and_method.sql"),
+    sql: include_str!("../../migrations/requests/005_add_source_and_method.sql"),
   },
   migrate::Migration {
     version: 6,
     name: "add_context_and_metrics",
-    sql: include_str!("../../../../scripts/migrations/requests/006_add_context_and_metrics.sql"),
+    sql: include_str!("../../migrations/requests/006_add_context_and_metrics.sql"),
   },
 ];
 
@@ -575,7 +575,7 @@ mod tests {
         )
         .unwrap();
       conn
-        .execute_batch(include_str!("../../../../scripts/migrations/requests/001_initial.sql"))
+        .execute_batch(include_str!("../../migrations/requests/001_initial.sql"))
         .unwrap();
       conn
         .execute(

@@ -4,11 +4,11 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use tracing::{debug, trace};
 
-const BOOTSTRAP: &str = include_str!("../../../../scripts/migrations/sessions/000_bootstrap.sql");
+const BOOTSTRAP: &str = include_str!("../../migrations/sessions/000_bootstrap.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
   version: 1,
   name: "initial",
-  sql: include_str!("../../../../scripts/migrations/sessions/001_initial.sql"),
+  sql: include_str!("../../migrations/sessions/001_initial.sql"),
 }];
 
 pub fn latest_version() -> u32 {
