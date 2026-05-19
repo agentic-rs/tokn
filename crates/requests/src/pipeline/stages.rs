@@ -45,6 +45,7 @@ impl AccumHelper {
   fn spawn(ctx: &PipelineCtx) -> Self {
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
+    let attempts = attempt + 1;
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
@@ -65,6 +66,7 @@ impl AccumHelper {
       events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
         request_id: request_id.clone(),
         attempt,
+        ts: llm_core::util::now_unix_ms(),
         payload: llm_core::request_event::RequestEventPayload::Record(
           llm_core::request_event::RecordEvent::UpstreamBody {
             body: Bytes::from(upstream),
@@ -73,12 +75,24 @@ impl AccumHelper {
         ),
       }));
       events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
-        request_id,
+        request_id: request_id.clone(),
         attempt,
+        ts: llm_core::util::now_unix_ms(),
         payload: llm_core::request_event::RequestEventPayload::Record(
           llm_core::request_event::RecordEvent::ConvertedBody {
             body: Bytes::from(converted),
             error: converted_error,
+          },
+        ),
+      }));
+      events.emit(llm_core::event::Event::Requests(llm_core::request_event::RequestEvent {
+        request_id,
+        attempt,
+        ts: llm_core::util::now_unix_ms(),
+        payload: llm_core::request_event::RequestEventPayload::Stage(
+          llm_core::request_event::StageEvent::Completed {
+            success: true,
+            attempts,
           },
         ),
       }));

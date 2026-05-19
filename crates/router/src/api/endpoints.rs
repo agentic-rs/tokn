@@ -50,6 +50,7 @@ async fn handle(
     state.events.emit(CoreEvent::Requests(RequestEvent {
       request_id: SmolStr::new(&hx.request_id),
       attempt: 0,
+      ts: llm_core::util::now_unix_ms(),
       payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
         local_addr: local_addr.clone().map(SmolStr::from),
         peer_addr: None,

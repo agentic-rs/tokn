@@ -43,6 +43,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
+      ts: llm_core::util::now_unix_ms(),
       payload: EventPayload::Stage(payload),
     }));
   }
@@ -55,6 +56,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
+      ts: llm_core::util::now_unix_ms(),
       payload: EventPayload::Record(payload),
     }));
   }
@@ -64,6 +66,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
+      ts: llm_core::util::now_unix_ms(),
       payload: EventPayload::Custom(CustomEvent::new(kind, value)),
     }));
   }

@@ -10,7 +10,7 @@
 //! [`RequestsDb`] stays the low-level day-rotated connection cache and
 //! `request_id → day` index used to route updates to the correct file.
 
-use super::{composite_request_id, now_unix, RequestsDb};
+use super::{composite_request_id, RequestsDb};
 use crate::{headers_json, Result};
 use llm_core::event::{Event, EventHandler};
 use llm_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
@@ -43,7 +43,7 @@ impl EventHandler for RequestEventHandler {
     let result = match &r2.payload {
       RequestEventPayload::Custom(_) => return,
       RequestEventPayload::Stage(stage) => match stage {
-        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, now_unix(), endpoint.as_str()),
+        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, r2.ts, endpoint.as_str()),
         StageEvent::Extract(s) => self.on_extract(
           request_id,
           attempt,
@@ -63,7 +63,7 @@ impl EventHandler for RequestEventHandler {
         ),
         StageEvent::BuildHeaders(s) => self.on_build_headers(request_id, attempt, &s.headers),
         StageEvent::ConvertRequest(s) => self.on_convert_request(request_id, attempt, &s.upstream_wire_body),
-        StageEvent::Send(s) => self.on_send(request_id, attempt, now_unix(), s.status, &s.headers),
+        StageEvent::Send(s) => self.on_send(request_id, attempt, r2.ts, s.status, &s.headers),
         StageEvent::ConvertResponse(s) => {
           let body_bytes = s
             .body
@@ -73,7 +73,7 @@ impl EventHandler for RequestEventHandler {
           self.on_convert_response(request_id, attempt, s.status, &s.headers, &body_bytes)
         }
         StageEvent::Error { stage, message, .. } => self.on_error(request_id, attempt, *stage, message.as_str()),
-        StageEvent::Completed { .. } => self.on_completed(request_id, attempt, now_unix()),
+        StageEvent::Completed { .. } => self.on_completed(request_id, attempt, r2.ts),
       },
       // Record events capture transport-adjacent facts that live alongside
       // the stage lifecycle. `UpstreamResp` duplicates `StageEvent::Send`
@@ -82,7 +82,7 @@ impl EventHandler for RequestEventHandler {
       RequestEventPayload::Record(record) => {
         let bootstrap = !matches!(record, RecordEvent::UpstreamResp { .. });
         if bootstrap {
-          if let Err(e) = self.ensure_started_for_record(request_id, attempt) {
+          if let Err(e) = self.ensure_started_for_record(request_id, attempt, r2.ts) {
             tracing::warn!(error = %e, request_id, attempt, "requests record bootstrap failed");
             return;
           }
@@ -123,12 +123,12 @@ impl EventHandler for RequestEventHandler {
 }
 
 impl RequestEventHandler {
-  fn ensure_started_for_record(&mut self, request_id: &str, attempt: u32) -> Result<()> {
+  fn ensure_started_for_record(&mut self, request_id: &str, attempt: u32, ts: i64) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     if self.db.conn_for_request(&id).is_some() {
       return Ok(());
     }
-    self.on_started(request_id, attempt, now_unix(), "")
+    self.on_started(request_id, attempt, ts, "")
   }
 
   pub fn on_inbound_connection(
@@ -174,7 +174,7 @@ impl RequestEventHandler {
        ON CONFLICT(request_id) DO NOTHING",
       params![id, ts, endpoint],
     )?;
-    self.db.pin_request_day(&id, ts);
+    self.db.pin_request(&id, ts);
     Ok(())
   }
 
@@ -290,12 +290,13 @@ impl RequestEventHandler {
     &mut self,
     request_id: &str,
     attempt: u32,
-    ts_now: i64,
+    ts: i64,
     status: u16,
     outbound_resp_headers: &llm_headers::HeaderMap,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let hdr_json = headers_json(outbound_resp_headers);
+    let latency_header_ms = self.db.latency_since_start(&id, ts);
     let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Send without prior Started");
       return Ok(());
@@ -305,9 +306,9 @@ impl RequestEventHandler {
          outbound_resp_status = ?2,
          outbound_resp_headers = ?3,
          status = ?2,
-         latency_header_ms = (?4 - ts) * 1000
+         latency_header_ms = ?4
        WHERE request_id = ?1",
-      params![id, status as i64, hdr_json.as_ref(), ts_now],
+      params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests Send UPDATE matched no row");
@@ -360,16 +361,18 @@ impl RequestEventHandler {
     Ok(())
   }
 
-  pub fn on_completed(&mut self, request_id: &str, attempt: u32, ts_now: i64) -> Result<()> {
+  pub fn on_completed(&mut self, request_id: &str, attempt: u32, ts: i64) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
+    let latency_ms = self.db.latency_since_start(&id, ts);
     let Some(conn) = self.db.conn_for_request(&id) else {
       tracing::warn!(request_id = %id, "requests Completed without prior Started");
       return Ok(());
     };
     let updated = conn.execute(
-      "UPDATE requests SET latency_ms = (?2 - ts) * 1000 WHERE request_id = ?1",
-      params![id, ts_now],
+      "UPDATE requests SET latency_ms = ?2 WHERE request_id = ?1",
+      params![id, latency_ms],
     )?;
+    self.db.clear_request(&id);
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests Completed UPDATE matched no row");
     }

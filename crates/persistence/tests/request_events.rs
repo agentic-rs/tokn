@@ -28,6 +28,7 @@ fn r2(request_id: &str, attempt: u32, payload: StageEvent) -> Event {
   Event::Requests(RequestEvent {
     request_id: SmolStr::new(request_id),
     attempt,
+    ts: llm_core::util::now_unix_ms(),
     payload: RequestEventPayload::Stage(payload),
   })
 }
@@ -36,6 +37,7 @@ fn rr(request_id: &str, attempt: u32, payload: RecordEvent) -> Event {
   Event::Requests(RequestEvent {
     request_id: SmolStr::new(request_id),
     attempt,
+    ts: llm_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(payload),
   })
 }

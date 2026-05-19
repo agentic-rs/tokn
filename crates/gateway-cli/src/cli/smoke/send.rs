@@ -259,6 +259,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   bus.emit(CoreEvent::Requests(RequestEvent {
     request_id: request_id.clone().into(),
     attempt: 0,
+    ts: llm_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
       local_addr: None,
       peer_addr: None,

@@ -39,11 +39,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A single requests pipeline event. Carries the per-request bookkeeping
-/// (request_id, attempt) plus a typed or `Any`-typed payload.
+/// (request_id, attempt, ts) plus a typed or `Any`-typed payload.
+/// `ts` is a millisecond-precision unix timestamp captured at emission time.
 #[derive(Clone, Debug)]
 pub struct RequestEvent {
   pub request_id: SmolStr,
   pub attempt: u32,
+  pub ts: i64,
   pub payload: RequestEventPayload,
 }
 

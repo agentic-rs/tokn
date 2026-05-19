@@ -62,17 +62,23 @@ pub fn latest_version() -> u32 {
   migrate::latest_version(MIGRATIONS)
 }
 
+struct RequestMeta {
+  day: String,
+  started_at_ms: i64,
+}
+
 /// Day-rotated SQLite connection pool plus a `request_id → day` map.
 ///
 /// Each instance keeps up to [`CACHE_CAP`] day connections open (LRU).
-/// The `request_day` map lets stage-event UPDATEs route to the day
+/// The `request_meta` map lets stage-event UPDATEs route to the day
 /// where the row was originally INSERTed, even if subsequent events
-/// arrive on the next calendar day.
+/// arrive on the next calendar day, and carries the start timestamp
+/// for latency computation.
 pub struct RequestsDb {
   dir: PathBuf,
   conns: HashMap<String, Connection>,
   order: VecDeque<String>,
-  request_day: HashMap<String, String>,
+  request_meta: HashMap<String, RequestMeta>,
 }
 
 impl RequestsDb {
@@ -82,7 +88,7 @@ impl RequestsDb {
       dir,
       conns: HashMap::new(),
       order: VecDeque::new(),
-      request_day: HashMap::new(),
+      request_meta: HashMap::new(),
     })
   }
 
@@ -127,15 +133,30 @@ impl RequestsDb {
   /// Look up the connection a previously-pinned `request_id` was written to.
   /// Returns `None` if no INSERT has pinned this id yet.
   pub(crate) fn conn_for_request(&mut self, request_id: &str) -> Option<&mut Connection> {
-    let key = self.request_day.get(request_id).cloned()?;
+    let key = self.request_meta.get(request_id)?.day.clone();
     self.conn_for_day(&key).ok()
   }
 
-  /// Pin a `request_id` to a specific day. Called by INSERT-style methods
-  /// so subsequent UPDATEs route to the same day file.
-  pub(crate) fn pin_request_day(&mut self, request_id: &str, ts: i64) {
+  pub(crate) fn pin_request(&mut self, request_id: &str, ts: i64) {
     let key = day_key(ts);
-    self.request_day.insert(request_id.to_string(), key);
+    self.request_meta.insert(
+      request_id.to_string(),
+      RequestMeta {
+        day: key,
+        started_at_ms: ts,
+      },
+    );
+  }
+
+  pub(crate) fn latency_since_start(&self, request_id: &str, ts_now: i64) -> i64 {
+    self.request_meta
+      .get(request_id)
+      .map(|m| ts_now - m.started_at_ms)
+      .unwrap_or(0)
+  }
+
+  pub(crate) fn clear_request(&mut self, request_id: &str) {
+    self.request_meta.remove(request_id);
   }
 }
 
@@ -165,15 +186,25 @@ pub(crate) fn composite_request_id(request_id: &str, attempt: u32) -> String {
   }
 }
 
+/// Convert a unix timestamp to a day key like `"2026-05-19"`.
+/// Accepts both seconds and milliseconds: values > 10_000_000_000 are
+/// treated as milliseconds (2026 in seconds ≈ 1.7B, in ms ≈ 1.7T).
 pub(crate) fn day_key(ts: i64) -> String {
-  let dt = time::OffsetDateTime::from_unix_timestamp(ts).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+  let ts_secs = if ts > 10_000_000_000 { ts / 1_000 } else { ts };
+  let dt = time::OffsetDateTime::from_unix_timestamp(ts_secs).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
   dt.date()
     .format(format_description!("[year]-[month]-[day]"))
     .unwrap_or_else(|_| "1970-01-01".to_string())
 }
 
+#[allow(dead_code)]
 pub(crate) fn now_unix() -> i64 {
   time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+pub(crate) fn now_unix_ms() -> i64 {
+  let ns = time::OffsetDateTime::now_utc().unix_timestamp_nanos();
+  (ns / 1_000_000) as i64
 }
 
 // ---------------------------------------------------------------------------
@@ -193,8 +224,9 @@ pub fn read_request_row(
   requests_dir: &Path,
   request_id: &str,
 ) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
-  let today = day_key(now_unix());
-  let yesterday = day_key(now_unix() - 86_400);
+  let now = now_unix_ms();
+  let today = day_key(now);
+  let yesterday = day_key(now - 86_400_000);
   for day in [today, yesterday] {
     let path = requests_dir.join(format!("{day}.db"));
     if !path.exists() {

@@ -145,10 +145,15 @@ impl PipelineRunner {
       Err(err) => return Err(self.fail(&ctx, err)),
     };
 
-    ctx.emit_stage(StageEvent::Completed {
-      success: true,
-      attempts: ctx.attempt + 1,
-    });
+    match &converted_response.body {
+      stages::ConvertedBody::Buffered { .. } => {
+        ctx.emit_stage(StageEvent::Completed {
+          success: true,
+          attempts: ctx.attempt + 1,
+        });
+      }
+      stages::ConvertedBody::Stream { .. } => {}
+    }
     Ok(converted_response)
   }
 
