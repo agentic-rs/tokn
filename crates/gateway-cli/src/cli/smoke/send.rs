@@ -934,6 +934,7 @@ fn pick_default_model(state: &AppState, provider_filter: Option<&str>) -> Result
 fn route_mode_name(mode: RouteMode) -> &'static str {
   match mode {
     RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",

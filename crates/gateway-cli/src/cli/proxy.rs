@@ -313,6 +313,7 @@ fn shell_arg0(path: &Path) -> Option<String> {
 fn route_mode_name(mode: RouteMode) -> &'static str {
   match mode {
     RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",

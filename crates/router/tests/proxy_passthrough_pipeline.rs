@@ -20,12 +20,40 @@ use axum::body::to_bytes;
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
 use llm_config::RouteMode;
+use llm_core::account::{AccountTier, AuthType};
 use llm_core::event::EventBus;
 use llm_router::api::build_state;
 use llm_router::config::Config;
-use llm_router::proxy::passthrough_pipeline::proxy_passthrough_via_pipeline_inner;
+use llm_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
+use llm_router::util::secret::Secret;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+fn openai_account() -> llm_router::config::Account {
+  llm_router::config::Account {
+    id: "openai-acct".into(),
+    provider: "openai".into(),
+    enabled: true,
+    tier: AccountTier::Active,
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
+    api_key: Some(Secret::new("sk-router".into())),
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  }
+}
 
 #[tokio::test]
 async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth() {
@@ -531,4 +559,37 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
     "StageEvent::Completed must fire after stream drains; {}",
     dump()
   );
+}
+
+#[tokio::test]
+async fn proxy_switch_rejects_unrecognized_provider_url() {
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Switch;
+  let events = Arc::new(EventBus::new(64));
+  let state = build_state(&cfg, &[openai_account()], events).unwrap();
+
+  let req = Request::builder()
+    .method(Method::POST)
+    .uri("/v1/chat/completions")
+    .header("content-type", "application/json")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_switch_via_pipeline_inner(
+    &state,
+    "127.0.0.1",
+    8080,
+    "http",
+    None,
+    None,
+    parts,
+    Bytes::from_static(br#"{"model":"gpt-4","messages":[{"role":"user","content":"hi"}]}"#),
+  )
+  .await;
+
+  assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+  let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+  let body = String::from_utf8_lossy(&body);
+  assert!(body.contains("recognized provider URL"), "unexpected body: {body}");
 }

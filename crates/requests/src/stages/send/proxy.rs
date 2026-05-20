@@ -19,9 +19,10 @@
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::{PipelineError, RequestsError};
+use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
+use llm_core::provider::HeaderPatchCtx;
 use llm_headers::HeaderMap;
 use smol_str::SmolStr;
 use tracing::{debug, instrument, warn};
@@ -43,6 +44,9 @@ pub mod send_keys {
   /// `"http"` (test fixtures pointing at plain HTTP mock servers).
   /// Defaults to `"https"` when absent.
   pub const SCHEME: &str = "proxy.scheme";
+  /// When true, the selected provider patches auth onto the outbound
+  /// request before proxy dispatch.
+  pub const INJECT_AUTH: &str = "proxy.inject_auth";
 }
 
 pub struct ProxySend {
@@ -89,8 +93,41 @@ impl SendStage for ProxySend {
     let url = format!("{scheme}://{host}{path}");
     debug!(%url, %method, "proxy upstream dispatch");
 
+    let inject_auth = ctx
+      .config
+      .get(send_keys::INJECT_AUTH)
+      .and_then(|v| v.as_bool())
+      .unwrap_or(false);
+    let mut outbound_headers = headers.headers.clone();
+    if inject_auth {
+      resolved
+        .account_handle
+        .provider
+        .patch_headers(
+          &mut outbound_headers,
+          &HeaderPatchCtx {
+            endpoint: resolved.upstream_endpoint,
+            body: body.upstream_body.as_ref(),
+            bearer_token: None,
+            content_encoding: body.content_encoding.map(|e| e.as_str()),
+            stream: extracted.stream,
+            initiator: extracted.initiator.as_str(),
+            inbound_headers: &HeaderMap::new(),
+            vars: &headers.vars,
+          },
+        )
+        .map_err(|err| {
+          PipelineError::permanent(
+            Stage::Send,
+            RequestsError::Provider {
+              source: ProviderError::new(err),
+            },
+          )
+        })?;
+    }
+
     let mut req = self.http.request(method.clone(), &url);
-    for (name, value) in headers.headers.iter() {
+    for (name, value) in outbound_headers.iter() {
       req = req.header(name.as_str(), value.as_str());
     }
     // Always set HOST to the intercepted host so virtual-hosted upstreams
@@ -105,7 +142,7 @@ impl SendStage for ProxySend {
     ctx.emit_record(llm_core::request_event::RecordEvent::UpstreamReq {
       method: SmolStr::new(method.as_str()),
       url: SmolStr::new(&url),
-      headers: headers.headers.clone(),
+      headers: outbound_headers.clone(),
       body: body.upstream_wire_body.clone(),
     });
 
@@ -196,11 +233,13 @@ mod tests {
   use crate::pipeline::stages::ResolveStage;
   use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::stages::resolve::proxy::ProxyResolve;
+  use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
   use llm_core::provider::Endpoint;
   use llm_headers::{HeaderName, HeaderValue};
   use serde_json::Value;
   use std::sync::Arc;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
   fn ctx_with(config: RunConfig) -> PipelineCtx {
     PipelineCtx::new_with_config(
@@ -292,5 +331,58 @@ mod tests {
       .unwrap_err();
     assert_eq!(err.stage, Stage::Send);
     assert!(err.message().contains("invalid proxy method"));
+  }
+
+  #[tokio::test]
+  async fn injects_router_managed_auth_when_enabled() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 8192];
+      let n = stream.read(&mut buf).await.unwrap();
+      buf.truncate(n);
+      stream
+        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+        .await
+        .unwrap();
+      stream.flush().await.unwrap();
+      let _ = tx.send(buf);
+    });
+
+    let ctx = ctx_with(
+      RunConfig::builder()
+        .with_str(keys::HOST, addr.to_string())
+        .with_str(send_keys::PATH, "/v1/chat/completions")
+        .with_str(send_keys::METHOD, "POST")
+        .with_str(send_keys::SCHEME, "http")
+        .with(send_keys::INJECT_AUTH, true)
+        .build(),
+    );
+    let resolved = Resolved {
+      client_id: None,
+      model: SmolStr::new("gpt-4"),
+      upstream_model: SmolStr::new("gpt-4"),
+      upstream_endpoint: Endpoint::ChatCompletions,
+      account_id: SmolStr::new("acct"),
+      provider_id: SmolStr::new("mock"),
+      account_handle: mock_handle_with_provider(
+        "acct",
+        MockProvider::new("mock").with_header("authorization", "Bearer router-token"),
+      ),
+    };
+
+    let send = ProxySend::new(reqwest::Client::new());
+    let sent = send
+      .send(&ctx, &fake_extracted(), &resolved, &fake_headers(), &fake_body())
+      .await
+      .unwrap();
+    assert_eq!(sent.status, 200);
+
+    server.await.unwrap();
+    let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
+    assert!(raw_req.contains("authorization: bearer router-token"));
+    assert!(!raw_req.contains("authorization: bearer client-token"));
   }
 }

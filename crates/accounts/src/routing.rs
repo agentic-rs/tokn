@@ -64,6 +64,12 @@ impl RouteResolver {
         upstream_model: requested_model.to_string(),
         selector: RouteSelector::Any,
       }),
+      RouteMode::Switch => Ok(RouteResolution {
+        mode,
+        requested_model: requested_model.to_string(),
+        upstream_model: requested_model.to_string(),
+        selector: RouteSelector::Any,
+      }),
       RouteMode::Exact => {
         let (provider, model) = requested_model
           .split_once('/')
@@ -109,6 +115,7 @@ impl RouteResolver {
 pub fn route_mode_as_str(mode: RouteMode) -> &'static str {
   match mode {
     RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",
@@ -139,6 +146,7 @@ impl std::error::Error for ResolveError {}
 fn parse_route_mode(raw: &str) -> Result<RouteMode, ResolveError> {
   match raw.trim().to_ascii_lowercase().as_str() {
     "passthrough" => Ok(RouteMode::Passthrough),
+    "switch" => Ok(RouteMode::Switch),
     "exact" => Ok(RouteMode::Exact),
     "route" => Ok(RouteMode::Route),
     "fuzzy" => Ok(RouteMode::Fuzzy),
@@ -174,5 +182,13 @@ mod tests {
         candidates: vec!["claude-sonnet-4".into(), "claude-3-5-sonnet".into()]
       }
     );
+  }
+
+  #[test]
+  fn parses_switch_mode() {
+    let resolver = RouteResolver::new(RouteMode::Route, &[]);
+    let resolved = resolver.resolve("gpt-4o", Some("switch")).unwrap();
+    assert_eq!(resolved.mode, RouteMode::Switch);
+    assert_eq!(resolved.upstream_model, "gpt-4o");
   }
 }

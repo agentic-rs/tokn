@@ -24,7 +24,8 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
-use llm_accounts::AccountHandle;
+use llm_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector};
+use llm_config::RouteMode;
 use llm_core::account::AccountConfig;
 use llm_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
 use serde_json::Value;
@@ -41,6 +42,16 @@ pub mod keys {
 }
 
 pub struct ProxyResolve;
+
+pub struct ProxyProviderResolve {
+  pool: Arc<AccountPool>,
+}
+
+impl ProxyProviderResolve {
+  pub fn new(pool: Arc<AccountPool>) -> Self {
+    Self { pool }
+  }
+}
 
 #[async_trait]
 impl ResolveStage for ProxyResolve {
@@ -60,6 +71,53 @@ impl ResolveStage for ProxyResolve {
       provider_id: SmolStr::new(provider_id),
       account_handle: stub_handle(account_id, provider_id),
     })
+  }
+}
+
+#[async_trait]
+impl ResolveStage for ProxyProviderResolve {
+  async fn resolve(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
+    let provider_id = ctx.config.get_str(keys::PROVIDER_ID).ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::Other {
+          source: format!("proxy switch pipeline requires `{}` in RunConfig", keys::PROVIDER_ID).into(),
+        },
+      )
+    })?;
+    let route = RouteResolution {
+      mode: RouteMode::Switch,
+      requested_model: extracted.model.to_string(),
+      upstream_model: extracted.model.to_string(),
+      selector: RouteSelector::Provider(provider_id.to_string()),
+    };
+    match self
+      .pool
+      .acquire_for_route(extracted.session_id.as_deref(), &route, ctx.endpoint)
+    {
+      EndpointAcquire::Account { acct, endpoint } => Ok(Resolved {
+        client_id: extracted.client_id.clone(),
+        model: extracted.model.clone(),
+        upstream_model: SmolStr::from(route.upstream_model.as_str()),
+        upstream_endpoint: endpoint,
+        account_id: SmolStr::from(acct.id()),
+        provider_id: SmolStr::from(acct.provider.info().id.as_str()),
+        account_handle: acct,
+      }),
+      EndpointAcquire::SessionExpired => Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::SessionExpired {
+          session_id: extracted.session_id.clone().unwrap_or_default(),
+        },
+      )),
+      EndpointAcquire::None => Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::NoAccount {
+          endpoint: ctx.endpoint,
+          model: extracted.model.clone(),
+        },
+      )),
+    }
   }
 }
 
@@ -213,6 +271,47 @@ mod tests {
       .build();
     let res = ProxyResolve.resolve(&ctx_with(cfg), &fake_extracted()).await.unwrap();
     assert_eq!(res.account_id, "user-bearer");
+    assert_eq!(res.provider_id, "openai");
+  }
+
+  #[tokio::test]
+  async fn proxy_provider_resolve_selects_account_for_provider() {
+    let cfg = RunConfig::builder().with_str(keys::PROVIDER_ID, "openai").build();
+    let account = AccountConfig {
+      id: "acct-openai".into(),
+      provider: "openai".into(),
+      enabled: true,
+      tier: Default::default(),
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: Some(llm_core::account::AuthType::Bearer),
+      username: None,
+      api_key: Some(llm_core::account::Secret::new("sk-test".to_string())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: Default::default(),
+    };
+    let mut router_cfg = llm_config::Config::default();
+    router_cfg.pool.failure_cooldown_secs = 0;
+    let pool = llm_accounts::AccountPool::from_accounts_with(&[account], &router_cfg, |cfg| {
+      llm_accounts::registry::build_for_account(cfg)
+    })
+    .unwrap();
+
+    let res = ProxyProviderResolve::new(pool)
+      .resolve(&ctx_with(cfg), &fake_extracted())
+      .await
+      .unwrap();
+    assert_eq!(res.account_id, "acct-openai");
     assert_eq!(res.provider_id, "openai");
   }
 }

@@ -49,6 +49,11 @@ pub struct AppState {
   /// `proxy.provider_id`, `proxy.account_id`) that the proxy transport
   /// layer fills before calling `run_with`.
   pub proxy_passthrough_pipeline: Arc<llm_requests::Pipeline>,
+  /// Shared `llm-requests` pipeline used by the MITM proxy `switch`
+  /// path. This variant resolves the provider from the intercepted URL,
+  /// selects a configured account for that provider, and forwards the
+  /// request bytes verbatim with router-managed auth injection.
+  pub proxy_switch_pipeline: Arc<llm_requests::Pipeline>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -117,9 +122,9 @@ async fn track_request(req: Request<axum::body::Body>, next: Next) -> Response<a
 /// Validates a route mode string from a path segment.
 pub(crate) fn validate_path_mode(mode: &str) -> Result<(), ApiError> {
   match mode {
-    "route" | "passthrough" | "exact" | "fuzzy" => Ok(()),
+    "route" | "passthrough" | "switch" | "exact" | "fuzzy" => Ok(()),
     _ => Err(error::ApiError::bad_request(format!(
-      "invalid route mode '{mode}' in path; expected route|passthrough|exact|fuzzy"
+      "invalid route mode '{mode}' in path; expected route|passthrough|switch|exact|fuzzy"
     ))),
   }
 }
@@ -229,6 +234,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let request_pipeline = build_request_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   let passthrough_pipeline = build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
+  let proxy_switch_pipeline = build_proxy_switch_pipeline(pool.clone(), http.clone(), events.clone());
   Ok(AppState {
     pool,
     provider_registry,
@@ -240,6 +246,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     request_pipeline,
     passthrough_pipeline,
     proxy_passthrough_pipeline,
+    proxy_switch_pipeline,
   })
 }
 
@@ -323,6 +330,27 @@ fn build_proxy_passthrough_pipeline(http: reqwest::Client, events: Arc<EventBus>
     Arc::new(PassthroughExtract),
     Arc::new(ProxyResolve),
     Arc::new(PassthroughBuildHeaders::preserve_host()),
+    Arc::new(PassthroughConvertRequest),
+    Arc::new(ProxySend::new(http)),
+    Arc::new(PassthroughConvertResponse::new()),
+  );
+  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+}
+
+fn build_proxy_switch_pipeline(
+  pool: Arc<AccountPool>,
+  http: reqwest::Client,
+  events: Arc<EventBus>,
+) -> Arc<llm_requests::Pipeline> {
+  use llm_requests::stages::{
+    PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
+    ProxyProviderResolve, ProxySend,
+  };
+  let profile = llm_requests::Profile::full(
+    "router-proxy-switch",
+    Arc::new(PassthroughExtract),
+    Arc::new(ProxyProviderResolve::new(pool)),
+    Arc::new(PassthroughBuildHeaders::preserve_host_with_router_auth()),
     Arc::new(PassthroughConvertRequest),
     Arc::new(ProxySend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),

@@ -50,6 +50,7 @@ fn is_router_owned(name: &str) -> bool {
 #[derive(Default)]
 pub struct PassthroughBuildHeaders {
   preserve_host: bool,
+  preserve_client_auth: bool,
 }
 
 impl PassthroughBuildHeaders {
@@ -57,7 +58,10 @@ impl PassthroughBuildHeaders {
   /// for the JSON `/v1` passthrough path, where the upstream URL is dictated
   /// by the provider and reqwest sets `Host` from that URL.
   pub fn new() -> Self {
-    Self { preserve_host: false }
+    Self {
+      preserve_host: false,
+      preserve_client_auth: true,
+    }
   }
 
   /// Preserve the inbound `Host` header verbatim. Used by the MITM proxy
@@ -65,7 +69,19 @@ impl PassthroughBuildHeaders {
   /// resolved authority (with any non-default port) and that exact value must
   /// reach the upstream.
   pub fn preserve_host() -> Self {
-    Self { preserve_host: true }
+    Self {
+      preserve_host: true,
+      preserve_client_auth: true,
+    }
+  }
+
+  /// Preserve `Host` while stripping inbound auth so the proxy send stage
+  /// can inject credentials from the selected account.
+  pub fn preserve_host_with_router_auth() -> Self {
+    Self {
+      preserve_host: true,
+      preserve_client_auth: false,
+    }
   }
 }
 
@@ -81,6 +97,9 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
     for (name, value) in extracted.headers.iter() {
       let lower = name.as_str().to_ascii_lowercase();
       if is_router_owned(&lower) {
+        continue;
+      }
+      if !self.preserve_client_auth && matches!(lower.as_str(), "authorization" | "x-api-key") {
         continue;
       }
       if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) && !(self.preserve_host && lower == "host") {
@@ -216,5 +235,23 @@ mod tests {
       "router-owned still stripped"
     );
     assert!(out.headers.contains_key("authorization"));
+  }
+
+  #[tokio::test]
+  async fn preserve_host_with_router_auth_strips_client_credentials() {
+    let h = header_map(&[
+      ("host", "api.example.com"),
+      ("authorization", "Bearer tok"),
+      ("x-api-key", "client-key"),
+      ("accept", "application/json"),
+    ]);
+    let out = PassthroughBuildHeaders::preserve_host_with_router_auth()
+      .build_headers(&ctx(), &extracted(h), &resolved("openai"))
+      .await
+      .unwrap();
+    assert_eq!(out.headers.get("host").map(|v| v.as_str()), Some("api.example.com"));
+    assert!(!out.headers.contains_key("authorization"));
+    assert!(!out.headers.contains_key("x-api-key"));
+    assert!(out.headers.contains_key("accept"));
   }
 }

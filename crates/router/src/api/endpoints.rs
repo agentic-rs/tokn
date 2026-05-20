@@ -57,6 +57,9 @@ async fn handle(
     body_json: decoded.value.clone(),
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
+  if matches!(mode, Some(llm_config::RouteMode::Switch)) {
+    return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
+  }
   let pipeline = if matches!(mode, Some(llm_config::RouteMode::Passthrough)) {
     &state.passthrough_pipeline
   } else {
