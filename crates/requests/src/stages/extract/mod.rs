@@ -12,6 +12,9 @@
 //! of any dependency on the legacy `crates/router` crate. PR2 will move the
 //! canonical constants to a shared location.
 
+pub mod passthrough;
+pub use passthrough::PassthroughExtract;
+
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ExtractStage, Extracted, RawInbound};

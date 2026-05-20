@@ -15,7 +15,9 @@ use serde_json::Value;
 use std::sync::Arc;
 
 pub mod default;
+pub mod passthrough;
 pub use default::DefaultConvertResponse;
+pub use passthrough::PassthroughConvertResponse;
 
 fn noop_buffered() -> ConvertedResponse {
   ConvertedResponse {

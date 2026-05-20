@@ -17,6 +17,8 @@
 
 mod default;
 mod noop;
+mod passthrough;
 
 pub use default::DefaultConvertRequest;
 pub use noop::NoopConvertRequest;
+pub use passthrough::PassthroughConvertRequest;

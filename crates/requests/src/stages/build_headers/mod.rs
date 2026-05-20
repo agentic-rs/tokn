@@ -6,6 +6,7 @@
 //! - [`PersonaBuildHeaders`] composes the real outbound `HeaderMap` from the
 //!   inbound request via the [`llm_headers`] persona + overlay registry.
 
+pub mod passthrough;
 pub mod persona;
 
 use crate::pipeline::ctx::PipelineCtx;
@@ -13,6 +14,7 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
 
+pub use passthrough::PassthroughBuildHeaders;
 pub use persona::PersonaBuildHeaders;
 
 /// No-op BuildHeaders stage. Returns an empty header set. Available as a

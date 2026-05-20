@@ -36,6 +36,11 @@ pub struct AppState {
   pub body_max_bytes: usize,
   /// Shared `llm-requests` pipeline used for router-owned JSON endpoints.
   pub request_pipeline: Arc<llm_requests::Pipeline>,
+  /// Shared `llm-requests` pipeline used when the resolved route mode is
+  /// [`RouteMode::Passthrough`]. Forwards the inbound request verbatim
+  /// (no JSON parse, no cross-endpoint translation) while still
+  /// emitting `RecordEvent::*` for observability and persistence.
+  pub passthrough_pipeline: Arc<llm_requests::Pipeline>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -222,6 +227,8 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let http = llm_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   let request_pipeline = build_request_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
+  let passthrough_pipeline =
+    build_passthrough_pipeline(pool.clone(), route.clone(), http.clone(), events.clone());
   Ok(AppState {
     pool,
     provider_registry,
@@ -231,6 +238,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     events,
     body_max_bytes,
     request_pipeline,
+    passthrough_pipeline,
   })
 }
 
@@ -257,6 +265,37 @@ fn build_request_pipeline(
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(http)),
     Arc::new(DefaultConvertResponse::new()),
+  );
+  Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
+}
+
+/// Construct the passthrough `llm-requests` pipeline. Forwards the
+/// inbound request body bytes verbatim with no JSON parsing or
+/// cross-endpoint translation. Auth is still injected by the provider
+/// during Send (via the upstream account handle), and observability
+/// events still flow through `events` so persistence works.
+///
+/// Mirrors the behaviour of the legacy `crates/router/src/relay/passthrough.rs`
+/// helpers but reuses the standard pipeline plumbing.
+fn build_passthrough_pipeline(
+  pool: Arc<AccountPool>,
+  route: Arc<RouteResolver>,
+  http: reqwest::Client,
+  events: Arc<EventBus>,
+) -> Arc<llm_requests::Pipeline> {
+  use llm_requests::stages::{
+    DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse,
+    PassthroughExtract, PoolAccountSelector, PoolResolve,
+  };
+  let selector = Arc::new(PoolAccountSelector::new(pool, route));
+  let profile = llm_requests::Profile::full(
+    "router-passthrough",
+    Arc::new(PassthroughExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(PassthroughBuildHeaders),
+    Arc::new(PassthroughConvertRequest),
+    Arc::new(DefaultSend::new(http)),
+    Arc::new(PassthroughConvertResponse::new()),
   );
   Arc::new(llm_requests::Pipeline::new(Arc::new(profile), events))
 }

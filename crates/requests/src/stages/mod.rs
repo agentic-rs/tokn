@@ -12,9 +12,9 @@ pub mod extract;
 pub mod resolve;
 pub mod send;
 
-pub use build_headers::{NoopBuildHeaders, PersonaBuildHeaders};
-pub use convert_request::{DefaultConvertRequest, NoopConvertRequest};
-pub use convert_response::{DefaultConvertResponse, NoopConvertResponse};
-pub use extract::DefaultExtract;
+pub use build_headers::{NoopBuildHeaders, PassthroughBuildHeaders, PersonaBuildHeaders};
+pub use convert_request::{DefaultConvertRequest, NoopConvertRequest, PassthroughConvertRequest};
+pub use convert_response::{DefaultConvertResponse, NoopConvertResponse, PassthroughConvertResponse};
+pub use extract::{DefaultExtract, PassthroughExtract};
 pub use resolve::{AccountSelector, PoolAccountSelector, PoolResolve, SelectorOutcome};
 pub use send::{DefaultSend, NoopSend};

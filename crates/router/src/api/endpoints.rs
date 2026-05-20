@@ -61,7 +61,12 @@ async fn handle(
     body_json: decoded.value.clone(),
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
-  match state.request_pipeline.run(raw).await {
+  let pipeline = if matches!(mode, Some(llm_config::RouteMode::Passthrough)) {
+    &state.passthrough_pipeline
+  } else {
+    &state.request_pipeline
+  };
+  match pipeline.run(raw).await {
     Ok(converted) => Ok(super::response::converted_to_axum(converted)),
     Err(err) => Err(pipeline_error_to_api_error(err)),
   }
