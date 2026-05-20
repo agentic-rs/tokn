@@ -40,7 +40,7 @@ impl AccountSelector for PoolAccountSelector {
     let route = self
       .resolver
       .resolve(extracted.model.as_str(), extracted.route_mode_hint.as_deref())
-      .map_err(|e| PipelineError::permanent(Stage::Resolve, SmolStr::new(e.to_string())))?;
+      .map_err(|e| PipelineError::permanent_with_source(Stage::Resolve, e.to_string(), e))?;
 
     match self
       .pool

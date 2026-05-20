@@ -16,7 +16,7 @@
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
 use llm_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
@@ -129,22 +129,34 @@ impl SendStage for DefaultSend {
       let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-          return Err(PipelineError::recoverable(
+          let source = RequestsError::UpstreamReadFailed { status, source: e };
+          return Err(PipelineError::recoverable_with_source(
             Stage::Send,
-            SmolStr::new(format!("upstream {status}: failed to read body: {e}")),
-          ))
+            source.to_string(),
+            source,
+          ));
         }
       };
-      return Err(PipelineError::recoverable(
+      let source = RequestsError::UpstreamStatus {
+        status,
+        body: truncate(&body_text, 512),
+      };
+      return Err(PipelineError::recoverable_with_source(
         Stage::Send,
-        SmolStr::new(format!("upstream {status}: {}", truncate(&body_text, 512))),
+        source.to_string(),
+        source,
       ));
     }
     if status >= 400 {
       let body_text = resp.text().await.unwrap_or_default();
-      return Err(PipelineError::permanent(
+      let source = RequestsError::UpstreamStatus {
+        status,
+        body: truncate(&body_text, 512),
+      };
+      return Err(PipelineError::permanent_with_source(
         Stage::Send,
-        SmolStr::new(format!("upstream {status}: {}", truncate(&body_text, 512))),
+        source.to_string(),
+        source,
       ));
     }
 
@@ -173,9 +185,9 @@ fn classify_provider_error(err: llm_core::provider::Error) -> PipelineError {
   let recoverable = matches!(&err, E::Http { .. });
   let msg = SmolStr::new(format_with_chain(&err));
   if recoverable {
-    PipelineError::recoverable(Stage::Send, msg)
+    PipelineError::recoverable_with_source(Stage::Send, msg, err)
   } else {
-    PipelineError::permanent(Stage::Send, msg)
+    PipelineError::permanent_with_source(Stage::Send, msg, err)
   }
 }
 

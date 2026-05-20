@@ -23,13 +23,12 @@
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{ConvertRequestStage, ConvertedRequest, Extracted, Resolved};
 use crate::utils::codec::{encode_body_bytes, ContentEncodingKind};
 use async_trait::async_trait;
 use bytes::Bytes;
 use serde_json::Value;
-use smol_str::SmolStr;
 use std::sync::Arc;
 
 pub struct DefaultConvertRequest;
@@ -45,18 +44,21 @@ impl ConvertRequestStage for DefaultConvertRequest {
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
     if resolved.upstream_endpoint != ctx.endpoint {
-      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
-        .map_err(|e| perm(format!("request conversion failed: {e}")))?;
+      upstream_body = llm_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body).map_err(
+        |source| perm(RequestsError::RequestConversion { source }),
+      )?;
     }
 
     if let Some(transformer) = resolved.account_handle.provider.input_transformer() {
       upstream_body = transformer
         .transform_input(resolved.upstream_endpoint, upstream_body)
-        .map_err(|e| perm(format!("provider input_transformer failed: {e}")))?;
+        .map_err(|source| perm(RequestsError::ProviderInputTransformer { source }))?;
     }
 
-    let debug_outbound_body =
-      Bytes::from(serde_json::to_vec(&upstream_body).map_err(|e| perm(format!("serialize upstream body: {e}")))?);
+    let debug_outbound_body = Bytes::from(
+      serde_json::to_vec(&upstream_body)
+        .map_err(|source| perm(RequestsError::SerializeUpstreamBody { source }))?,
+    );
 
     let unchanged = upstream_body == *extracted.body_json;
     let upstream_wire_body = if unchanged {
@@ -78,7 +80,7 @@ impl ConvertRequestStage for DefaultConvertRequest {
 }
 
 fn maybe_encode(body: &Bytes, encoding: Option<ContentEncodingKind>) -> Result<Bytes, PipelineError> {
-  encode_body_bytes(body.as_ref(), encoding).map_err(|e| perm(format!("re-encode outbound body: {e}")))
+  encode_body_bytes(body.as_ref(), encoding).map_err(|source| perm(RequestsError::ReencodeOutboundBody { source }))
 }
 
 fn rewrite_model(body: &Value, model: &str) -> Value {
@@ -89,8 +91,8 @@ fn rewrite_model(body: &Value, model: &str) -> Value {
   body
 }
 
-fn perm(message: String) -> PipelineError {
-  PipelineError::permanent(Stage::ConvertRequest, SmolStr::new(message))
+fn perm(source: RequestsError) -> PipelineError {
+  PipelineError::permanent_with_source(Stage::ConvertRequest, source.to_string(), source)
 }
 
 #[cfg(test)]
@@ -117,11 +119,11 @@ mod tests {
   fn extracted_with(body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
     Extracted {
       client_id: None,
-      model: SmolStr::new("input-model"),
+      model: smol_str::SmolStr::new("input-model"),
       stream: false,
       session_id: None,
       project_id: None,
-      initiator: SmolStr::new("user"),
+      initiator: smol_str::SmolStr::new("user"),
       header_initiator: None,
       route_mode_hint: None,
       headers: HeaderMap::new(),
@@ -139,11 +141,11 @@ mod tests {
   ) -> Resolved {
     Resolved {
       client_id: None,
-      model: SmolStr::new("input-model"),
-      upstream_model: SmolStr::new(upstream_model),
+      model: smol_str::SmolStr::new("input-model"),
+      upstream_model: smol_str::SmolStr::new(upstream_model),
       upstream_endpoint,
-      account_id: SmolStr::new("acct-1"),
-      provider_id: SmolStr::from(handle.provider.id()),
+      account_id: smol_str::SmolStr::new("acct-1"),
+      provider_id: smol_str::SmolStr::from(handle.provider.id()),
       account_handle: handle,
     }
   }

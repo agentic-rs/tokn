@@ -10,7 +10,7 @@
 
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
 use llm_accounts::AccountHandle;
@@ -71,17 +71,25 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
         provider_id,
         account_handle,
       }),
-      SelectorOutcome::SessionExpired { session_id } => Err(PipelineError::permanent(
-        Stage::Resolve,
-        SmolStr::new(format!("session expired: {session_id}")),
-      )),
-      SelectorOutcome::NoAccount => Err(PipelineError::permanent(
-        Stage::Resolve,
-        SmolStr::new(format!(
-          "no account supports endpoint {} for model {}",
-          ctx.endpoint, extracted.model
-        )),
-      )),
+      SelectorOutcome::SessionExpired { session_id } => {
+        let source = RequestsError::SessionExpired { session_id };
+        Err(PipelineError::permanent_with_source(
+          Stage::Resolve,
+          source.to_string(),
+          source,
+        ))
+      }
+      SelectorOutcome::NoAccount => {
+        let source = RequestsError::NoAccount {
+          endpoint: ctx.endpoint,
+          model: extracted.model.clone(),
+        };
+        Err(PipelineError::permanent_with_source(
+          Stage::Resolve,
+          source.to_string(),
+          source,
+        ))
+      }
     }
   }
 }

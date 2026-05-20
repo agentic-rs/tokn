@@ -15,12 +15,56 @@
 //! [`EventBus`]: crate::event::EventBus
 
 use crate::event::Stage;
+use crate::utils::codec::CodecError;
+use llm_convert::error::ConvertError;
+use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
+use snafu::Snafu;
 
-#[derive(Debug, Clone)]
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
+pub enum RequestsError {
+  #[snafu(display("session expired: {session_id}"))]
+  SessionExpired { session_id: SmolStr },
+
+  #[snafu(display("no account supports endpoint {endpoint} for model {model}"))]
+  NoAccount { endpoint: Endpoint, model: SmolStr },
+
+  #[snafu(display("request conversion failed: {source}"))]
+  RequestConversion { source: ConvertError },
+
+  #[snafu(display("provider input_transformer failed: {source}"))]
+  ProviderInputTransformer { source: llm_core::provider::Error },
+
+  #[snafu(display("serialize upstream body: {source}"))]
+  SerializeUpstreamBody { source: serde_json::Error },
+
+  #[snafu(display("re-encode outbound body: {source}"))]
+  ReencodeOutboundBody { source: CodecError },
+
+  #[snafu(display("upstream body not valid JSON: {source}"))]
+  UpstreamBodyNotJson { source: serde_json::Error },
+
+  #[snafu(display("response conversion failed: {source}"))]
+  ResponseConversion { source: ConvertError },
+
+  #[snafu(display("serializing translated response failed: {source}"))]
+  SerializeTranslatedResponse { source: serde_json::Error },
+
+  #[snafu(display("upstream {status}: failed to read body: {source}"))]
+  UpstreamReadFailed { status: u16, source: reqwest::Error },
+
+  #[snafu(display("upstream {status}: {body}"))]
+  UpstreamStatus { status: u16, body: String },
+}
+
+#[derive(Debug)]
 pub struct PipelineError {
   pub stage: Stage,
   pub message: SmolStr,
+  source: Option<BoxError>,
   /// `true` iff a retry-style decorator may sensibly re-invoke the stage.
   /// Permanent failures (bad request, 4xx, unknown model) set this to
   /// `false`. Always `false` when `stop == true`.
@@ -33,9 +77,22 @@ pub struct PipelineError {
 
 impl PipelineError {
   pub fn new(stage: Stage, message: impl Into<SmolStr>, recoverable: bool) -> Self {
+    Self::with_source(stage, message, recoverable, None::<std::io::Error>)
+  }
+
+  pub fn with_source<E>(
+    stage: Stage,
+    message: impl Into<SmolStr>,
+    recoverable: bool,
+    source: Option<E>,
+  ) -> Self
+  where
+    E: std::error::Error + Send + Sync + 'static,
+  {
     Self {
       stage,
       message: message.into(),
+      source: source.map(|err| Box::new(err) as BoxError),
       recoverable,
       stop: false,
     }
@@ -45,8 +102,22 @@ impl PipelineError {
     Self::new(stage, message, false)
   }
 
+  pub fn permanent_with_source<E>(stage: Stage, message: impl Into<SmolStr>, source: E) -> Self
+  where
+    E: std::error::Error + Send + Sync + 'static,
+  {
+    Self::with_source(stage, message, false, Some(source))
+  }
+
   pub fn recoverable(stage: Stage, message: impl Into<SmolStr>) -> Self {
     Self::new(stage, message, true)
+  }
+
+  pub fn recoverable_with_source<E>(stage: Stage, message: impl Into<SmolStr>, source: E) -> Self
+  where
+    E: std::error::Error + Send + Sync + 'static,
+  {
+    Self::with_source(stage, message, true, Some(source))
   }
 
   /// A deliberate short-circuit: the stage chose to halt the pipeline
@@ -56,9 +127,14 @@ impl PipelineError {
     Self {
       stage,
       message: message.into(),
+      source: None,
       recoverable: false,
       stop: true,
     }
+  }
+
+  pub fn source_ref(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    self.source.as_deref().map(|err| err as &(dyn std::error::Error + 'static))
   }
 }
 
@@ -68,4 +144,24 @@ impl std::fmt::Display for PipelineError {
   }
 }
 
-impl std::error::Error for PipelineError {}
+impl std::error::Error for PipelineError {
+  fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+    self.source_ref()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[derive(Debug, Snafu)]
+  #[snafu(display("boom"))]
+  struct Boom;
+
+  #[test]
+  fn preserves_inner_error_as_source() {
+    let err = PipelineError::permanent_with_source(Stage::Resolve, "boom", Boom);
+    let source = err.source_ref().expect("source should be present");
+    assert!(source.downcast_ref::<Boom>().is_some());
+  }
+}

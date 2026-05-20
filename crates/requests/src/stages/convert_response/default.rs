@@ -15,7 +15,7 @@
 //! handles the dispatch (buffered vs stream).
 
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -26,7 +26,6 @@ use llm_core::provider::Endpoint;
 use llm_core::request_event::RecordEvent;
 use llm_headers::HeaderMap;
 use serde_json::Value;
-use smol_str::SmolStr;
 use std::sync::Arc;
 use tracing::{debug, instrument};
 
@@ -73,11 +72,9 @@ impl ConvertResponseStage for DefaultConvertResponse {
       });
     }
 
-    let upstream_json: Value = serde_json::from_slice(&body).map_err(|e| {
-      PipelineError::permanent(
-        crate::event::Stage::ConvertResponse,
-        SmolStr::new(format!("upstream body not valid JSON: {e}")),
-      )
+    let upstream_json: Value = serde_json::from_slice(&body).map_err(|source| {
+      let source = RequestsError::UpstreamBodyNotJson { source };
+      PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
     })?;
 
     // Best-effort usage extraction. Emit a RecordEvent::Usage so the
@@ -90,18 +87,15 @@ impl ConvertResponseStage for DefaultConvertResponse {
     let (body_json, body_bytes) = if upstream_endpoint == inbound_endpoint {
       (upstream_json, body)
     } else {
-      let translated =
-        llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(|e| {
-          PipelineError::permanent(
-            crate::event::Stage::ConvertResponse,
-            SmolStr::new(format!("response conversion failed: {e}")),
-          )
-        })?;
-      let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|e| {
-        PipelineError::permanent(
-          crate::event::Stage::ConvertResponse,
-          SmolStr::new(format!("serializing translated response failed: {e}")),
-        )
+      let translated = llm_convert::convert_response(upstream_endpoint, inbound_endpoint, &upstream_json).map_err(
+        |source| {
+          let source = RequestsError::ResponseConversion { source };
+          PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
+        },
+      )?;
+      let bytes = serde_json::to_vec(&translated).map(Bytes::from).map_err(|source| {
+        let source = RequestsError::SerializeTranslatedResponse { source };
+        PipelineError::permanent_with_source(crate::event::Stage::ConvertResponse, source.to_string(), source)
       })?;
       (translated, bytes)
     };
