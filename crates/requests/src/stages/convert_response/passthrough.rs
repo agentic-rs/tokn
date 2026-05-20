@@ -36,8 +36,6 @@ use llm_convert::usage::{parse_usage_any_json, parse_usage_any_value, usage_has_
 use llm_core::provider::Endpoint;
 use llm_core::request_event::RecordEvent;
 use llm_headers::HeaderMap;
-use serde_json::Value;
-use std::sync::Arc;
 use tracing::{debug, instrument};
 
 /// Pass-through ConvertResponse. Forwards bytes verbatim; usage is extracted
@@ -89,8 +87,8 @@ impl ConvertResponseStage for PassthroughConvertResponse {
       body: ConvertedBody::Buffered {
         // Body intentionally not deserialized — passthrough preserves
         // wire bytes only.
-        body_json: Arc::new(Value::Null),
-        body_bytes: Some(body),
+        body_json: None,
+        body_bytes: body,
       },
     })
   }
@@ -247,8 +245,8 @@ mod tests {
     assert_eq!(out.status, 200);
     match out.body {
       ConvertedBody::Buffered { body_json, body_bytes } => {
-        assert_eq!(*body_json, Value::Null, "body must NOT be parsed");
-        assert_eq!(body_bytes.unwrap(), raw, "bytes verbatim");
+        assert_eq!(body_json, None, "body must NOT be parsed");
+        assert_eq!(body_bytes, raw, "bytes verbatim");
       }
       _ => panic!("expected buffered"),
     }

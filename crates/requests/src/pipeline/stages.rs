@@ -319,8 +319,8 @@ pub enum ConvertedBody {
     /// Buffered upstream JSON. `Arc`-wrapped so the matching
     /// [`StageEvent::ConvertResponse`](crate::event::StageEvent::ConvertResponse)
     /// payload can share the value without re-serializing the body.
-    body_json: Arc<Value>,
-    body_bytes: Option<Bytes>,
+    body_json: Option<Arc<Value>>,
+    body_bytes: Bytes,
   },
   Stream {
     /// SSE byte stream ready to forward to the client. When upstream and
@@ -332,9 +332,10 @@ pub enum ConvertedBody {
 impl std::fmt::Debug for ConvertedBody {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     match self {
-      Self::Buffered { body_bytes, .. } => f
+      Self::Buffered { body_bytes, body_json } => f
         .debug_struct("ConvertedBody::Buffered")
-        .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()))
+        .field("body_bytes_len", &body_bytes.len())
+        .field("body_json", if body_json.is_some() { &"<present>" } else { &"<none>" })
         .finish(),
       Self::Stream { .. } => f
         .debug_struct("ConvertedBody::Stream")
@@ -357,7 +358,7 @@ impl ConvertedResponse {
 impl ConvertedBody {
   pub async fn bytes(self) -> std::io::Result<Bytes> {
     match self {
-      Self::Buffered { body_bytes, .. } => Ok(body_bytes.unwrap_or_default()),
+      Self::Buffered { body_bytes, .. } => Ok(body_bytes),
       Self::Stream { body } => body
         .try_fold(bytes::BytesMut::new(), |mut out, chunk| async move {
           out.extend_from_slice(&chunk);
@@ -376,7 +377,7 @@ impl std::fmt::Debug for ConvertedResponse {
     match &self.body {
       ConvertedBody::Buffered { body_bytes, .. } => {
         dbg.field("kind", &"buffered")
-          .field("body_bytes_len", &body_bytes.as_ref().map(|b| b.len()));
+          .field("body_bytes_len", &body_bytes.len());
       }
       ConvertedBody::Stream { .. } => {
         dbg.field("kind", &"stream").field("body", &"<sse stream>");

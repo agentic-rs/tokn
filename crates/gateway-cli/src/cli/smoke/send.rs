@@ -620,7 +620,7 @@ async fn print_live_outcome(
           "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
           "status": status,
           "headers": headers_json_value(&headers, redact),
-          "body": &*body_json,
+          "body": body_json.as_ref().map(|b| &**b),
           "persisted": persisted.map(|m| Value::Object(m.clone())).unwrap_or(Value::Null),
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -645,7 +645,7 @@ async fn print_live_outcome(
           println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
         }
         println!("body:");
-        println!("{}", serde_json::to_string_pretty(&*body_json)?);
+        println!("{}", serde_json::to_string_pretty(&body_json.as_ref().map(|b| &**b))?);
         print_persisted_text(persisted);
       }
     },

@@ -25,7 +25,7 @@ pub(crate) fn converted_to_axum(c: ConvertedResponse) -> Response<Body> {
   match c.body {
     ConvertedBody::Buffered { body_bytes, .. } => {
       let headers = buffered_headers();
-      (status, headers, Body::from(body_bytes.unwrap_or_default())).into_response()
+      (status, headers, Body::from(body_bytes)).into_response()
     }
     ConvertedBody::Stream { body } => {
       let headers = sse_headers();

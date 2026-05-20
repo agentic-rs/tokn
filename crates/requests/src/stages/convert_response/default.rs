@@ -66,8 +66,8 @@ impl ConvertResponseStage for DefaultConvertResponse {
         status,
         headers,
         body: ConvertedBody::Buffered {
-          body_json: Arc::new(Value::Null),
-          body_bytes: Some(Bytes::new()),
+          body_json: None,
+          body_bytes: Bytes::new(),
         },
       });
     }
@@ -110,8 +110,8 @@ impl ConvertResponseStage for DefaultConvertResponse {
       status,
       headers,
       body: ConvertedBody::Buffered {
-        body_json: Arc::new(body_json),
-        body_bytes: Some(body_bytes),
+        body_json: Some(Arc::new(body_json)),
+        body_bytes: body_bytes,
       },
     })
   }
@@ -216,8 +216,8 @@ mod tests {
     assert_eq!(out.status, 200);
     match out.body {
       ConvertedBody::Buffered { body_json, body_bytes } => {
-        assert_eq!(body_json["id"], "x");
-        assert_eq!(body_bytes.unwrap().as_ref(), br#"{"id":"x","choices":[]}"#);
+        assert_eq!(body_json.unwrap()["id"], "x");
+        assert_eq!(body_bytes.as_ref(), br#"{"id":"x","choices":[]}"#);
       }
       _ => panic!("expected buffered"),
     }
@@ -239,8 +239,8 @@ mod tests {
     assert_eq!(out.status, 502);
     match out.body {
       ConvertedBody::Buffered { body_json, body_bytes } => {
-        assert!(body_json.is_null());
-        assert!(body_bytes.unwrap().is_empty());
+        assert!(body_json.is_none());
+        assert!(body_bytes.is_empty());
       }
       _ => panic!("expected buffered"),
     }
@@ -305,7 +305,7 @@ mod tests {
     assert_eq!(out.status, 200);
     match out.body {
       ConvertedBody::Buffered { body_bytes, .. } => {
-        assert_eq!(body_bytes.unwrap().as_ref(), br#"{"ok":true}"#);
+        assert_eq!(body_bytes.as_ref(), br#"{"ok":true}"#);
       }
       _ => panic!("expected buffered"),
     }

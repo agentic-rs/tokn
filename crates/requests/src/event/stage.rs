@@ -78,7 +78,7 @@ impl From<&ConvertedResponse> for ConvertedResponseSummary {
       status: c.status(),
       headers: c.headers().clone(),
       body: match &c.body {
-        ConvertedBody::Buffered { body_json, .. } => Some(body_json.clone()),
+        ConvertedBody::Buffered { body_json, .. } => body_json.clone(),
         ConvertedBody::Stream { .. } => None,
       },
     }

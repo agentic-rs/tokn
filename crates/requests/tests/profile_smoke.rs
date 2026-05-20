@@ -462,6 +462,7 @@ async fn full_pipeline_buffered_happy_path() {
       "send",
       "record",
       "convert_response",
+      "record",
       "completed",
     ]
   );
@@ -481,6 +482,7 @@ async fn full_pipeline_buffered_happy_path() {
   assert_eq!(converted.status, 200);
   match converted.body {
     ConvertedBody::Buffered { body_json, .. } => {
+      let body_json = body_json.unwrap();
       assert_eq!(body_json["id"], "resp-1");
       assert_eq!(body_json["choices"][0]["message"]["content"], "hi");
     }

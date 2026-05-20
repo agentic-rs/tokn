@@ -157,7 +157,8 @@ impl PipelineRunner {
     };
 
     match &converted_response.body {
-      stages::ConvertedBody::Buffered { .. } => {
+      stages::ConvertedBody::Buffered { body_bytes, .. } => {
+        ctx.emit_record(llm_core::request_event::RecordEvent::ConvertedBody { body: body_bytes.clone(), error: None });
         ctx.emit_stage(StageEvent::Completed {
           success: true,
           attempts: ctx.attempt + 1,

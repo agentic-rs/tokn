@@ -11,8 +11,6 @@ use bytes::Bytes;
 use futures_util::stream::BoxStream;
 use llm_core::provider::Endpoint;
 use llm_headers::HeaderMap;
-use serde_json::Value;
-use std::sync::Arc;
 
 pub mod default;
 pub mod passthrough;
@@ -24,8 +22,8 @@ fn noop_buffered() -> ConvertedResponse {
     status: 0,
     headers: HeaderMap::new(),
     body: ConvertedBody::Buffered {
-      body_json: Arc::new(Value::Null),
-      body_bytes: Some(Bytes::new()),
+      body_json: None,
+      body_bytes: Bytes::new(),
     },
   }
 }
