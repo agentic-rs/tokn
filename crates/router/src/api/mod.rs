@@ -58,9 +58,6 @@ pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   name.starts_with("x-llm-router-")
     || name == "x-route-mode"
     || name == "x-behave-as"
-    || REQUEST_ID_HEADERS.contains(&name)
-    || SESSION_ID_HEADERS.contains(&name)
-    || PROJECT_ID_HEADERS.contains(&name)
 }
 
 pub(crate) fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
@@ -420,5 +417,34 @@ mod tests {
     assert!(message.contains("unknown"));
     assert_eq!(json["error"]["type"], "not_implemented_error");
     assert_eq!(json["error"]["code"], 501);
+  }
+
+  #[test]
+  fn is_router_owned_header_does_not_include_request_session_project_id_headers() {
+    use axum::http::HeaderName;
+
+    for header in REQUEST_ID_HEADERS.iter() {
+      let name = HeaderName::try_from(*header).unwrap();
+      assert!(
+        !is_router_owned_header(&name),
+        "{header} should NOT be router-owned"
+      );
+    }
+
+    for header in SESSION_ID_HEADERS.iter() {
+      let name = HeaderName::try_from(*header).unwrap();
+      assert!(
+        !is_router_owned_header(&name),
+        "{header} should NOT be router-owned"
+      );
+    }
+
+    for header in PROJECT_ID_HEADERS.iter() {
+      let name = HeaderName::try_from(*header).unwrap();
+      assert!(
+        !is_router_owned_header(&name),
+        "{header} should NOT be router-owned"
+      );
+    }
   }
 }
