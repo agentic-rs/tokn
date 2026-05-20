@@ -39,6 +39,10 @@ pub mod send_keys {
   /// Request path + query, e.g. `"/v1/chat/completions?foo=bar"`. Must
   /// start with `/`. Defaults to `/` when absent.
   pub const PATH: &str = "proxy.path";
+  /// URL scheme, either `"https"` (production / MITM-intercepted TLS) or
+  /// `"http"` (test fixtures pointing at plain HTTP mock servers).
+  /// Defaults to `"https"` when absent.
+  pub const SCHEME: &str = "proxy.scheme";
 }
 
 pub struct ProxySend {
@@ -81,7 +85,8 @@ impl SendStage for ProxySend {
         },
       )
     })?;
-    let url = format!("https://{host}{path}");
+    let scheme = ctx.config.get_str(send_keys::SCHEME).unwrap_or("https");
+    let url = format!("{scheme}://{host}{path}");
     debug!(%url, %method, "proxy upstream dispatch");
 
     let mut req = self.http.request(method.clone(), &url);

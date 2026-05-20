@@ -47,7 +47,27 @@ fn is_router_owned(name: &str) -> bool {
   name.starts_with("x-llm-router-") || name == "x-route-mode" || name == "x-behave-as"
 }
 
-pub struct PassthroughBuildHeaders;
+#[derive(Default)]
+pub struct PassthroughBuildHeaders {
+  preserve_host: bool,
+}
+
+impl PassthroughBuildHeaders {
+  /// Default: strip `Host` along with the other hop-by-hop headers. Suitable
+  /// for the JSON `/v1` passthrough path, where the upstream URL is dictated
+  /// by the provider and reqwest sets `Host` from that URL.
+  pub fn new() -> Self {
+    Self { preserve_host: false }
+  }
+
+  /// Preserve the inbound `Host` header verbatim. Used by the MITM proxy
+  /// passthrough path, where the router has already rewritten `Host` to the
+  /// resolved authority (with any non-default port) and that exact value must
+  /// reach the upstream.
+  pub fn preserve_host() -> Self {
+    Self { preserve_host: true }
+  }
+}
 
 #[async_trait]
 impl BuildHeadersStage for PassthroughBuildHeaders {
@@ -64,7 +84,9 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
         continue;
       }
       if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
-        continue;
+        if !(self.preserve_host && lower == "host") {
+          continue;
+        }
       }
       out.insert(name.clone(), value.clone());
     }
@@ -146,7 +168,7 @@ mod tests {
       ("x-behave-as", "codex"),
       ("x-custom-thing", "hello"),
     ]);
-    let out = PassthroughBuildHeaders
+    let out = PassthroughBuildHeaders::new()
       .build_headers(&ctx(), &extracted(h), &resolved("openai"))
       .await
       .unwrap();
@@ -166,11 +188,39 @@ mod tests {
 
   #[tokio::test]
   async fn empty_template_vars() {
-    let out = PassthroughBuildHeaders
+    let out = PassthroughBuildHeaders::new()
       .build_headers(&ctx(), &extracted(HeaderMap::new()), &resolved("openai"))
       .await
       .unwrap();
     assert!(out.vars.session_id.is_none());
     assert!(out.vars.request_id.is_none());
+  }
+
+  #[tokio::test]
+  async fn preserve_host_keeps_host_with_port() {
+    let h = header_map(&[
+      ("host", "api.example.com:8443"),
+      ("connection", "keep-alive"),
+      ("authorization", "Bearer tok"),
+      ("x-llm-router-local-addr", "127.0.0.1:8080"),
+    ]);
+    let out = PassthroughBuildHeaders::preserve_host()
+      .build_headers(&ctx(), &extracted(h), &resolved("openai"))
+      .await
+      .unwrap();
+    assert_eq!(
+      out.headers.get("host").map(|v| v.as_str()),
+      Some("api.example.com:8443"),
+      "Host preserved verbatim"
+    );
+    assert!(
+      !out.headers.contains_key("connection"),
+      "other hop-by-hop still stripped"
+    );
+    assert!(
+      !out.headers.contains_key("x-llm-router-local-addr"),
+      "router-owned still stripped"
+    );
+    assert!(out.headers.contains_key("authorization"));
   }
 }

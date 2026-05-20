@@ -2,7 +2,7 @@ mod ca;
 mod connect_proxy;
 pub mod header_pipeline;
 mod passthrough;
-mod passthrough_pipeline;
+pub mod passthrough_pipeline;
 mod transport;
 
 use crate::api::AppState;
@@ -55,7 +55,6 @@ where
   let ca = Arc::new(load_or_generate_ca(&options.ca_dir, false)?);
   let state = Arc::new(state);
   let route_resolver = state.route.clone();
-  let http = state.http.clone();
   let router = proxy_router((*state).clone());
   let host_policy = HostPolicy::new(&options);
   let outbound_proxy = Arc::new(connect_proxy::ConnectProxy::from_options(&options.outbound_proxy));
@@ -75,9 +74,8 @@ where
         let host_policy = host_policy.clone();
         let outbound_proxy = outbound_proxy.clone();
         let route_resolver = route_resolver.clone();
-        let http = http.clone();
         tokio::spawn(async move {
-          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver, http).await {
+          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver).await {
             tracing::warn!(%peer, error = %err, "proxy connection failed");
           }
         });

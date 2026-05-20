@@ -38,7 +38,6 @@ pub(super) async fn handle_client(
   host_policy: HostPolicy,
   outbound_proxy: Arc<ConnectProxy>,
   route_resolver: Arc<RouteResolver>,
-  http: reqwest::Client,
 ) -> Result<()> {
   let mut reader = BufReader::new(stream);
   let mut request_line = String::new();
@@ -107,11 +106,11 @@ pub(super) async fn handle_client(
       peer,
       local,
       &host,
+      port,
       state,
       router,
       ca,
       route_resolver,
-      http,
       proxy_route_mode,
     )
     .await
@@ -133,11 +132,11 @@ async fn intercept_tls(
   peer: SocketAddr,
   local: SocketAddr,
   host: &str,
+  port: u16,
   state: Arc<AppState>,
   router: Router,
   ca: Arc<ProxyCa>,
   route_resolver: Arc<RouteResolver>,
-  http: reqwest::Client,
   proxy_route_mode: Option<String>,
 ) -> Result<()> {
   let resolver = Arc::new(DynamicResolver {
@@ -153,14 +152,16 @@ async fn intercept_tls(
   let mut http1_builder = http1::Builder::new();
   http1_builder.keep_alive(true).title_case_headers(true);
 
+  let host = host.to_string();
   let service = service_fn(move |req| {
     route_intercepted_request(
       state.clone(),
       router.clone(),
       route_resolver.clone(),
-      http.clone(),
       peer,
       local,
+      host.clone(),
+      port,
       req,
       proxy_route_mode.clone(),
     )
@@ -176,9 +177,10 @@ async fn route_intercepted_request(
   state: Arc<AppState>,
   router: Router,
   route_resolver: Arc<RouteResolver>,
-  http: reqwest::Client,
   peer: SocketAddr,
   local: SocketAddr,
+  intercepted_host: String,
+  intercepted_port: u16,
   mut req: Request<hyper::body::Incoming>,
   proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
@@ -197,12 +199,17 @@ async fn route_intercepted_request(
     }
   }
 
+  // Bare host (no port) — used by the route-rewrite branch below to
+  // look up endpoints and to set the outbound `Host` header. The
+  // passthrough branch ignores this and resolves its own authoritative
+  // host[:port] inside `proxy_passthrough_via_pipeline`.
   let host = req
     .headers()
     .get(HOST)
     .and_then(|v| v.to_str().ok())
     .map(|s| s.split(':').next().unwrap_or(s).to_string())
-    .unwrap_or_default();
+    .filter(|s| !s.is_empty())
+    .unwrap_or_else(|| intercepted_host.clone());
   let path = req.uri().path().to_string();
   let method = req.method().clone();
 
@@ -215,15 +222,21 @@ async fn route_intercepted_request(
   tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
   if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
     return Ok(
-      super::passthrough_pipeline::proxy_passthrough_via_pipeline(state.as_ref(), &host, peer, local, req)
-        .await
-        .inspect(|b| {
-          if !b.status().is_success() {
-            tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "passthrough request failed");
-          }
-        })
-        .inspect_err(|err| tracing::warn!(%host, error = %err, "passthrough failed"))
-        .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
+      super::passthrough_pipeline::proxy_passthrough_via_pipeline(
+        state.as_ref(),
+        &intercepted_host,
+        intercepted_port,
+        "https",
+        req,
+      )
+      .await
+      .inspect(|b| {
+        if !b.status().is_success() {
+          tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "passthrough request failed");
+        }
+      })
+      .inspect_err(|err| tracing::warn!(%host, error = %err, "passthrough failed"))
+      .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
     );
   }
   if let Err(err) = &resolved_mode {
