@@ -83,10 +83,8 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
       if is_router_owned(&lower) {
         continue;
       }
-      if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
-        if !(self.preserve_host && lower == "host") {
-          continue;
-        }
+      if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) && !(self.preserve_host && lower == "host") {
+        continue;
       }
       out.insert(name.clone(), value.clone());
     }

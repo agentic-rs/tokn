@@ -188,10 +188,7 @@ fn normalize_models_response(value: Value) -> Value {
     return value;
   }
   let models = find_models_array(&value).cloned().unwrap_or_default();
-  let data = models
-    .into_iter()
-    .filter_map(|entry| normalize_model_entry(entry))
-    .collect::<Vec<_>>();
+  let data = models.into_iter().filter_map(normalize_model_entry).collect::<Vec<_>>();
   serde_json::json!({ "object": "list", "data": data })
 }
 

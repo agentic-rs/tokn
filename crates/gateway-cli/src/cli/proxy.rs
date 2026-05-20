@@ -32,7 +32,7 @@ pub enum ProxyCmd {
   Ca(CaArgs),
 }
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, Default)]
 pub struct StartArgs {
   #[arg(long)]
   pub host: Option<String>,
@@ -85,19 +85,6 @@ pub enum Shell {
   Pwsh,
   Bash,
   Zsh,
-}
-
-impl Default for StartArgs {
-  fn default() -> Self {
-    Self {
-      host: None,
-      port: None,
-      route_mode: None,
-      ca_dir: None,
-      allow_remote: false,
-      no_proxy: false,
-    }
-  }
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {

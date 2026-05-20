@@ -197,7 +197,7 @@ impl Provider for CopilotProvider {
     );
     headers.insert(&CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(
-      &HeaderName::new("x-initiator"),
+      HeaderName::new("x-initiator"),
       HeaderValue::from_string(ctx.initiator.to_string()),
     );
     if let Some(encoding) = ctx.content_encoding {

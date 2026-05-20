@@ -60,7 +60,7 @@ fn resolve_request(
       parsed
         .meta
         .inbound_headers
-        .get(&llm_headers::HeaderName::new(
+        .get(llm_headers::HeaderName::new(
           llm_accounts::routing::RouteResolver::mode_header(),
         ))
         .map(|v| v.as_str()),

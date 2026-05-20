@@ -149,7 +149,7 @@ impl ProxyCa {
     let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
     let certified = Arc::new(
       CertifiedKey::from_der(
-        vec![CertificateDer::from(cert.der().clone())],
+        vec![cert.der().clone()],
         private_key,
         &rustls::crypto::ring::default_provider(),
       )

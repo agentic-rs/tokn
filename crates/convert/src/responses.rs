@@ -391,7 +391,7 @@ fn reasoning_text_from_input_item(item: &Value) -> Option<String> {
       .iter()
       .filter_map(|p| {
         let kind = p.get("type").and_then(Value::as_str).unwrap_or_default();
-        if type_filter.iter().any(|t| *t == kind) {
+        if type_filter.contains(&kind) {
           p.get("text").and_then(Value::as_str).map(str::to_string)
         } else {
           None

@@ -280,7 +280,7 @@ impl RequestCtx<'_> {
   pub fn request_body_bytes(&self) -> Bytes {
     self
       .body_bytes
-      .map(Bytes::clone)
+      .cloned()
       .unwrap_or_else(|| Bytes::from(serde_json::to_vec(self.body).unwrap_or_default()))
   }
 

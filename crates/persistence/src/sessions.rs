@@ -68,7 +68,7 @@ impl SessionsDb {
     // Resolve the next free part_seq / message_seq for this session up
     // front so we can interleave appends without races (we hold the
     // sqlite write lock for the whole transaction).
-    let (mut next_part_seq, mut next_message_seq) = next_seqs(&tx, &r.session_id)?;
+    let (mut next_part_seq, mut next_message_seq) = next_seqs(&tx, r.session_id)?;
 
     let new_message_count = r.messages.len() as i64;
     let new_part_count: i64 = r.messages.iter().map(|m| m.parts.len() as i64).sum();

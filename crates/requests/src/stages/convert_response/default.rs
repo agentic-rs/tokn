@@ -110,7 +110,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
       headers,
       body: ConvertedBody::Buffered {
         body_json: Some(Arc::new(body_json)),
-        body_bytes: body_bytes,
+        body_bytes,
       },
     })
   }

@@ -534,7 +534,7 @@ fn print_dry_run_outcome(
       let report = serde_json::json!({
         "dry_run": true,
         "attempts": snap.attempts.unwrap_or(0),
-        "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
+        "request_id": snap.request_id.as_deref(),
         "account": resolved.map(|r| r.account_id.as_str()),
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
@@ -605,7 +605,7 @@ async fn print_live_outcome(
           "dry_run": false,
           "stream": false,
           "attempts": attempts,
-          "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
+          "request_id": snap.request_id.as_deref(),
           "account": resolved.map(|r| r.account_id.as_str()),
           "provider": resolved.map(|r| r.provider_id.as_str()),
           "model": resolved.map(|r| r.model.as_str()),
@@ -613,7 +613,7 @@ async fn print_live_outcome(
           "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
           "status": status,
           "headers": headers_json_value(&headers, redact),
-          "body": body_json.as_ref().map(|b| &**b),
+          "body": body_json.as_deref(),
           "persisted": persisted.map(|m| Value::Object(m.clone())).unwrap_or(Value::Null),
         });
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -638,7 +638,7 @@ async fn print_live_outcome(
           println!("  {}: {}", name.as_str(), redact_header(name.as_str(), v, redact));
         }
         println!("body:");
-        println!("{}", serde_json::to_string_pretty(&body_json.as_ref().map(|b| &**b))?);
+        println!("{}", serde_json::to_string_pretty(&body_json.as_deref())?);
         print_persisted_text(persisted);
       }
     },
@@ -712,7 +712,7 @@ fn print_failure_outcome(
       let report = serde_json::json!({
         "success": false,
         "attempts": snap.attempts.unwrap_or(0),
-        "request_id": snap.request_id.as_ref().map(|s| s.as_str()),
+        "request_id": snap.request_id.as_deref(),
         "error": {
           "stage": err.stage.as_str(),
           "message": err.message().as_ref(),
