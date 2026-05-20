@@ -249,9 +249,9 @@ fn render_template(value: &str, vars: &TemplateVars, static_only: bool) -> Optio
   while let Some(start) = rest.find('<') {
     out.push_str(&rest[..start]);
     let after = &rest[start + 1..];
-    if after.starts_with('<') {
+    if let Some(stripped) = after.strip_prefix('<') {
       out.push('<');
-      rest = &after[1..];
+      rest = stripped;
       continue;
     }
     let end = after.find('>')?;
@@ -275,8 +275,8 @@ fn template_names(value: &str) -> Vec<String> {
   let mut rest = value;
   while let Some(start) = rest.find('<') {
     let after = &rest[start + 1..];
-    if after.starts_with('<') {
-      rest = &after[1..];
+    if let Some(stripped) = after.strip_prefix('<') {
+      rest = stripped;
       continue;
     }
     let Some(end) = after.find('>') else {

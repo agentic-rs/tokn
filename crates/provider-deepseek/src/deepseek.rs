@@ -188,6 +188,73 @@ impl Provider for DeepSeekProvider {
   }
 }
 
+fn shape_request(endpoint: crate::Endpoint, body: Value) -> Value {
+  let mut out = body;
+  let Some(obj) = out.as_object_mut() else {
+    return out;
+  };
+
+  let effort = extract_effort(obj.get("thinking")).or_else(|| extract_effort(obj.get("reasoning")));
+  let thinking_mode = extract_thinking_mode(obj.get("thinking"), obj.get("reasoning"));
+  obj.insert("thinking".into(), json!({ "type": thinking_mode }));
+  obj.remove("reasoning");
+
+  match endpoint {
+    crate::Endpoint::ChatCompletions => {
+      obj.remove("output_config");
+      if let Some(effort) = effort {
+        obj.insert("reasoning_effort".into(), Value::String(effort));
+      } else {
+        obj.remove("reasoning_effort");
+      }
+    }
+    crate::Endpoint::Messages => {
+      obj.remove("reasoning_effort");
+      if let Some(effort) = effort {
+        obj.insert("output_config".into(), json!({ "effort": effort }));
+      } else {
+        obj.remove("output_config");
+      }
+    }
+    crate::Endpoint::Responses => {}
+  }
+
+  out
+}
+
+fn extract_thinking_mode(thinking: Option<&Value>, reasoning: Option<&Value>) -> &'static str {
+  match thinking
+    .and_then(explicit_thinking_mode)
+    .or_else(|| reasoning.and_then(explicit_thinking_mode))
+  {
+    Some(mode) => mode,
+    None if thinking.is_some() || reasoning.is_some() => "enabled",
+    None => "disabled",
+  }
+}
+
+fn explicit_thinking_mode(value: &Value) -> Option<&'static str> {
+  match value {
+    Value::Bool(true) => Some("enabled"),
+    Value::Bool(false) => Some("disabled"),
+    Value::String(s) if s.eq_ignore_ascii_case("enabled") => Some("enabled"),
+    Value::String(s) if s.eq_ignore_ascii_case("disabled") => Some("disabled"),
+    Value::Object(map) => match map.get("type").and_then(Value::as_str) {
+      Some("enabled") => Some("enabled"),
+      Some("disabled") => Some("disabled"),
+      _ => None,
+    },
+    _ => None,
+  }
+}
+
+fn extract_effort(value: Option<&Value>) -> Option<String> {
+  match value {
+    Some(Value::Object(map)) => map.get("effort").and_then(Value::as_str).map(str::to_string),
+    _ => None,
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -293,8 +360,6 @@ mod tests {
     assert_eq!(p.messages_path(), "/v1/messages");
   }
 
-  // ---------- header stability tests ----------
-
   fn patch_ctx(endpoint: Endpoint, stream: bool, content_encoding: Option<&'static str>) -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
       endpoint,
@@ -322,7 +387,6 @@ mod tests {
     assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
     assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
     assert!(h.get("content-encoding").is_none());
-    // Provider must not leak any unexpected headers.
     let names: Vec<_> = h.iter().map(|(n, _)| n.as_str().to_string()).collect();
     assert_eq!(names.len(), 3, "unexpected extra headers: {names:?}");
   }
@@ -345,7 +409,6 @@ mod tests {
     let mut h = HeaderMap::new();
     p.patch_headers(&mut h, &patch_ctx(Endpoint::Messages, true, None))
       .unwrap();
-    // DeepSeek does not differentiate header shape by endpoint.
     assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test-fixture");
     assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
     assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
@@ -358,72 +421,5 @@ mod tests {
     p.patch_headers(&mut h, &patch_ctx(Endpoint::ChatCompletions, false, Some("gzip")))
       .unwrap();
     assert_eq!(h.get("content-encoding").unwrap().as_str(), "gzip");
-  }
-}
-
-fn shape_request(endpoint: crate::Endpoint, body: Value) -> Value {
-  let mut out = body;
-  let Some(obj) = out.as_object_mut() else {
-    return out;
-  };
-
-  let effort = extract_effort(obj.get("thinking")).or_else(|| extract_effort(obj.get("reasoning")));
-  let thinking_mode = extract_thinking_mode(obj.get("thinking"), obj.get("reasoning"));
-  obj.insert("thinking".into(), json!({ "type": thinking_mode }));
-  obj.remove("reasoning");
-
-  match endpoint {
-    crate::Endpoint::ChatCompletions => {
-      obj.remove("output_config");
-      if let Some(effort) = effort {
-        obj.insert("reasoning_effort".into(), Value::String(effort));
-      } else {
-        obj.remove("reasoning_effort");
-      }
-    }
-    crate::Endpoint::Messages => {
-      obj.remove("reasoning_effort");
-      if let Some(effort) = effort {
-        obj.insert("output_config".into(), json!({ "effort": effort }));
-      } else {
-        obj.remove("output_config");
-      }
-    }
-    crate::Endpoint::Responses => {}
-  }
-
-  out
-}
-
-fn extract_thinking_mode(thinking: Option<&Value>, reasoning: Option<&Value>) -> &'static str {
-  match thinking
-    .and_then(explicit_thinking_mode)
-    .or_else(|| reasoning.and_then(explicit_thinking_mode))
-  {
-    Some(mode) => mode,
-    None if thinking.is_some() || reasoning.is_some() => "enabled",
-    None => "disabled",
-  }
-}
-
-fn explicit_thinking_mode(value: &Value) -> Option<&'static str> {
-  match value {
-    Value::Bool(true) => Some("enabled"),
-    Value::Bool(false) => Some("disabled"),
-    Value::String(s) if s.eq_ignore_ascii_case("enabled") => Some("enabled"),
-    Value::String(s) if s.eq_ignore_ascii_case("disabled") => Some("disabled"),
-    Value::Object(map) => match map.get("type").and_then(Value::as_str) {
-      Some("enabled") => Some("enabled"),
-      Some("disabled") => Some("disabled"),
-      _ => None,
-    },
-    _ => None,
-  }
-}
-
-fn extract_effort(value: Option<&Value>) -> Option<String> {
-  match value {
-    Some(Value::Object(map)) => map.get("effort").and_then(Value::as_str).map(str::to_string),
-    _ => None,
   }
 }

@@ -14,17 +14,17 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-/// Build the event bus and its handlers. The requests-event persistence
-/// handler is included when usage recording is enabled. A TTY progress handler is attached
-/// automatically when stdout is a terminal.
-pub fn build_event_bus(
-  cfg: &Config,
-) -> Result<(
+type EventBusParts = (
   Arc<EventBus>,
   broadcast::Receiver<Arc<llm_core::event::Event>>,
   Vec<Box<dyn EventHandler>>,
   Option<ArchiveRuntime>,
-)> {
+);
+
+/// Build the event bus and its handlers. The requests-event persistence
+/// handler is included when usage recording is enabled. A TTY progress handler is attached
+/// automatically when stdout is a terminal.
+pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
   let capacity = cfg.db.write_queue_capacity.max(256);
   let bus = EventBus::new(capacity);
   let receiver = bus.subscribe();

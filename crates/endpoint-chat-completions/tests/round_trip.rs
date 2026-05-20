@@ -78,7 +78,7 @@ fn round_trip_event() {
   let parsed: ChatEvent = serde_json::from_value(chunk).expect("parse chunk");
   match parsed {
     ChatEvent::Chunk(c) => {
-      let _: ChatChunk = c;
+      let _: Box<ChatChunk> = c;
     }
     ChatEvent::Done => panic!("expected chunk"),
   }

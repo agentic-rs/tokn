@@ -203,6 +203,7 @@ async fn list(cfg: &Config, store: &mut AuthStore, args: ListArgs) -> Result<()>
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 enum QuotaResult {
   Skipped,
   None, // not applicable to this provider

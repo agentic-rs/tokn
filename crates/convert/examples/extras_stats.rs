@@ -148,7 +148,9 @@ fn table_has_column(conn: &Connection, table: &str, column: &str) -> Result<bool
   Ok(false)
 }
 
-fn fetch_rows(conn: &Connection, endpoint: &str, limit: usize, has_mode: bool) -> Result<Vec<(Vec<u8>, Vec<u8>, i64)>> {
+type RequestRow = (Vec<u8>, Vec<u8>, i64);
+
+fn fetch_rows(conn: &Connection, endpoint: &str, limit: usize, has_mode: bool) -> Result<Vec<RequestRow>> {
   let where_clause = if has_mode {
     "mode = 'passthrough' AND endpoint = ?1"
   } else {

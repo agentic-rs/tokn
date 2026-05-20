@@ -75,7 +75,7 @@ fn pipeline_error_to_api_error(err: llm_requests::PipelineError) -> ApiError {
     }
     | RequestsError::Resolve {
       source: ResolveError::InvalidExactModel { .. },
-    } => ApiError::bad_request(err.message().to_owned()),
+    } => ApiError::bad_request(err.message().into_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
     RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
     RequestsError::UpstreamStatus { status, body } => match StatusCode::from_u16(*status) {

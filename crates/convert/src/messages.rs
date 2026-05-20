@@ -131,7 +131,7 @@ pub fn response_from_value(v: &Value) -> Result<IrResponse> {
   Ok(IrResponse {
     id: v.get("id").and_then(Value::as_str).map(str::to_string),
     model: v.get("model").and_then(Value::as_str).map(str::to_string),
-    role: v.get("role").and_then(Value::as_str).map(Role::from_str),
+    role: v.get("role").and_then(Value::as_str).map(Role::from_wire),
     content,
     tool_calls,
     usage: v.get("usage").map(|u| Usage {
@@ -292,7 +292,7 @@ pub fn events_from_deltas(resp_id: &str, model: &str, deltas: &[IrDelta], finish
 }
 
 fn message_from_messages(v: &Value) -> Result<IrMessage> {
-  let role = Role::from_str(v.get("role").and_then(Value::as_str).unwrap_or("user"));
+  let role = Role::from_wire(v.get("role").and_then(Value::as_str).unwrap_or("user"));
   Ok(IrMessage {
     role,
     content: content_from_messages(v.get("content")),

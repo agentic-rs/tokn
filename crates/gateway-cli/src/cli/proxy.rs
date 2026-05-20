@@ -97,6 +97,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
   }
 }
 
+#[allow(clippy::result_large_err)]
 async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) -> Result<()> {
   if passthrough && args.route_mode.is_some() {
     anyhow::bail!("--passthrough and --route-mode cannot be used together");

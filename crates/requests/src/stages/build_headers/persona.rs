@@ -267,7 +267,7 @@ mod tests {
       .build_headers(&ctx(), &extracted(headers, None), &resolved("deepseek"))
       .await
       .unwrap();
-    assert!(out.headers.len() > 0, "persona map should be non-empty");
+    assert!(!out.headers.is_empty(), "persona map should be non-empty");
     // No Copilot-managed header should be present (no overlay).
     assert!(!out.headers.contains_key(&keys::COPILOT_INTEGRATION_ID));
   }
@@ -297,7 +297,7 @@ mod tests {
       .await
       .unwrap();
     // Opencode persona has a real schema → non-empty map.
-    assert!(out.headers.len() > 0);
+    assert!(!out.headers.is_empty());
   }
 
   #[tokio::test]
@@ -309,7 +309,7 @@ mod tests {
       .await
       .unwrap();
     // Persona half still builds; overlay does not.
-    assert!(out.headers.len() > 0);
+    assert!(!out.headers.is_empty());
     assert!(!out.headers.contains_key(&keys::COPILOT_INTEGRATION_ID));
   }
 

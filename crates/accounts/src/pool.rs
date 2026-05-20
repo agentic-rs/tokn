@@ -137,6 +137,10 @@ impl AccountPool {
     self.accounts.len()
   }
 
+  pub fn is_empty(&self) -> bool {
+    self.accounts.is_empty()
+  }
+
   pub fn cooldown_base(&self) -> Duration {
     self.cooldown_base
   }
@@ -412,10 +416,8 @@ impl AccountPool {
     model: &str,
     requested: Endpoint,
   ) -> Option<(Arc<AccountHandle>, Endpoint)> {
+    let bucket = self.buckets.get(provider)?;
     for endpoint in fallback_order(requested) {
-      let Some(bucket) = self.buckets.get(provider) else {
-        return None;
-      };
       if !bucket.matches(Some(model), endpoint) {
         continue;
       }

@@ -417,7 +417,7 @@ fn reasoning_text_from_input_item(item: &Value) -> Option<String> {
 }
 
 fn input_item_to_message(item: &Value) -> Result<IrMessage> {
-  let role = Role::from_str(item.get("role").and_then(Value::as_str).unwrap_or("user"));
+  let role = Role::from_wire(item.get("role").and_then(Value::as_str).unwrap_or("user"));
   let content = match item.get("content") {
     Some(Value::String(s)) => vec![ContentPart::Text { text: s.clone() }],
     Some(Value::Array(parts)) => parts.iter().map(part_from_responses).collect(),

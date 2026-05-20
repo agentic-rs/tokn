@@ -51,10 +51,8 @@ pub fn derive_lenient_fields(input: TokenStream) -> TokenStream {
         if meta.path.is_ident("rename") {
           // rename = "..."
           if let Ok(value) = meta.value() {
-            if let Ok(lit) = value.parse::<Lit>() {
-              if let Lit::Str(s) = lit {
-                key = s.value();
-              }
+            if let Ok(Lit::Str(s)) = value.parse::<Lit>() {
+              key = s.value();
             }
           } else {
             // rename(deserialize = "...", serialize = "...")

@@ -281,16 +281,8 @@ mod tests {
     let codex = CodexProvider::from_account(Arc::new(a)).unwrap();
     let mut h = HeaderMap::new();
     codex.patch_headers(&mut h, &patch_ctx()).unwrap();
-    assert_eq!(
-      h.get(&llm_headers::HeaderName::new("authorization")).unwrap().as_str(),
-      "Bearer atk-test"
-    );
-    assert_eq!(
-      h.get(&llm_headers::HeaderName::new("chatgpt-account-id"))
-        .unwrap()
-        .as_str(),
-      "acc-77"
-    );
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer atk-test");
+    assert_eq!(h.get("chatgpt-account-id").unwrap().as_str(), "acc-77");
   }
 
   #[test]
@@ -301,7 +293,7 @@ mod tests {
       let codex = CodexProvider::from_account(Arc::new(a)).unwrap();
       let mut h = HeaderMap::new();
       codex.patch_headers(&mut h, &patch_ctx()).unwrap();
-      assert!(h.get(&llm_headers::HeaderName::new("chatgpt-account-id")).is_none());
+      assert!(h.get("chatgpt-account-id").is_none());
     }
   }
 

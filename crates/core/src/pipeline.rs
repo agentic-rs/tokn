@@ -5,6 +5,8 @@ use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
 
+pub type SendFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+
 #[derive(Clone, Debug)]
 pub struct RequestMeta {
   pub endpoint: Endpoint,
@@ -49,11 +51,7 @@ pub trait RequestSender: Send + Sync {
   type Response;
   type Error;
 
-  fn send<'a>(
-    &'a self,
-    state: &'a Self::State,
-    req: &'a Self::Request,
-  ) -> Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send + 'a>>;
+  fn send<'a>(&'a self, state: &'a Self::State, req: &'a Self::Request) -> SendFuture<'a, Self::Response, Self::Error>;
 }
 
 #[async_trait]

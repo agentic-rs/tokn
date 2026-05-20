@@ -212,8 +212,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     println!("endpoint: {}", endpoint);
     println!("route:    {}", route_mode_name(route_mode));
     println!("stream:   {}", args.stream);
-    if args.body_file.is_some() {
-      println!("body:     {}", args.body_file.as_ref().unwrap().display());
+    if let Some(body_file) = args.body_file.as_ref() {
+      println!("body:     {}", body_file.display());
     }
     println!();
   }

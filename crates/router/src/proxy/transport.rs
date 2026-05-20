@@ -31,6 +31,7 @@ const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 
 const UPGRADE_REQUIRED_WEBSOCKET: &[u8] =
   b"HTTP/1.1 426 Upgrade Required\r\nconnection: Upgrade\r\nupgrade: websocket\r\ncontent-length: 0\r\n\r\n";
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_client(
   stream: TcpStream,
   peer: SocketAddr,
@@ -129,6 +130,7 @@ async fn tunnel(mut client: TcpStream, host: &str, port: u16, outbound_proxy: &C
   Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn intercept_tls(
   stream: TcpStream,
   peer: SocketAddr,
@@ -175,6 +177,7 @@ async fn intercept_tls(
   Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn route_intercepted_request(
   state: Arc<AppState>,
   router: Router,

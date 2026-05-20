@@ -175,6 +175,7 @@ fn render_item(item: &Item) -> String {
 // --- set ---------------------------------------------------------------
 
 fn cmd_set(path: &std::path::Path, args: SetArgs) -> Result<()> {
+  #[allow(clippy::result_large_err)]
   Config::edit_in_place(path, |doc| {
     let segments = key_segments(args.account.as_deref(), &args.key);
     if args.add {
@@ -241,6 +242,7 @@ fn append_array(doc: &mut DocumentMut, segments: &[String], raw: &str) -> Result
 // --- unset -------------------------------------------------------------
 
 fn cmd_unset(path: &std::path::Path, args: UnsetArgs) -> Result<()> {
+  #[allow(clippy::result_large_err)]
   Config::edit_in_place(path, |doc| {
     let segments = key_segments(args.account.as_deref(), &args.key);
     if !remove(doc, &segments) {

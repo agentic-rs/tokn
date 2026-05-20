@@ -141,7 +141,7 @@ pub fn response_from_value(v: &Value) -> Result<IrResponse> {
   let msg = choice
     .get("message")
     .unwrap_or(choice.get("delta").unwrap_or(&Value::Null));
-  let role = msg.get("role").and_then(Value::as_str).map(Role::from_str);
+  let role = msg.get("role").and_then(Value::as_str).map(Role::from_wire);
   let mut content = content_from_chat(msg.get("content"));
   if let Some(reasoning) = msg.get("reasoning_content").and_then(Value::as_str) {
     content.push(ContentPart::Reasoning {
@@ -315,7 +315,7 @@ pub fn chunk_from_deltas(resp_id: &str, model: &str, deltas: &[IrDelta], finish:
 
 fn message_from_value(msg: &Value, role: &str) -> Result<IrMessage> {
   Ok(IrMessage {
-    role: Role::from_str(role),
+    role: Role::from_wire(role),
     content: content_from_chat(msg.get("content")),
     tool_call_id: msg.get("tool_call_id").and_then(Value::as_str).map(str::to_string),
     name: msg.get("name").and_then(Value::as_str).map(str::to_string),

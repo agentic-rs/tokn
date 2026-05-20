@@ -25,6 +25,15 @@ pub struct RequestEventHandler {
   db: RequestsDb,
 }
 
+pub struct InboundConnectionUpdate<'a> {
+  local_addr: Option<&'a str>,
+  peer_addr: Option<&'a str>,
+  mode: &'a str,
+  method: &'a str,
+  inbound_method: &'a str,
+  url: Option<&'a str>,
+}
+
 impl RequestEventHandler {
   pub fn new(requests_dir: PathBuf) -> Result<Self> {
     Ok(Self {
@@ -98,12 +107,14 @@ impl EventHandler for RequestEventHandler {
           } => self.on_inbound_connection(
             request_id,
             attempt,
-            local_addr.as_deref(),
-            peer_addr.as_deref(),
-            mode.as_str(),
-            method.as_str(),
-            inbound_method.as_str(),
-            url.as_deref(),
+            InboundConnectionUpdate {
+              local_addr: local_addr.as_deref(),
+              peer_addr: peer_addr.as_deref(),
+              mode: mode.as_str(),
+              method: method.as_str(),
+              inbound_method: inbound_method.as_str(),
+              url: url.as_deref(),
+            },
           ),
           RecordEvent::UpstreamReq {
             method,
@@ -137,12 +148,7 @@ impl RequestEventHandler {
     &mut self,
     request_id: &str,
     attempt: u32,
-    local_addr: Option<&str>,
-    peer_addr: Option<&str>,
-    mode: &str,
-    method: &str,
-    inbound_method: &str,
-    url: Option<&str>,
+    update: InboundConnectionUpdate<'_>,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.db.conn_for_request(&id) else {
@@ -158,7 +164,15 @@ impl RequestEventHandler {
          inbound_req_method = COALESCE(?6, inbound_req_method),
          inbound_req_url = COALESCE(?7, inbound_req_url)
         WHERE request_id = ?1",
-      params![id, local_addr, peer_addr, mode, method, inbound_method, url],
+      params![
+        id,
+        update.local_addr,
+        update.peer_addr,
+        update.mode,
+        update.method,
+        update.inbound_method,
+        update.url
+      ],
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests InboundConnection UPDATE matched no row");

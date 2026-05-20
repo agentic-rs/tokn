@@ -55,7 +55,7 @@ pub struct ChatDelta {
 /// `[DONE]` sentinel.
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
-  Chunk(ChatChunk),
+  Chunk(Box<ChatChunk>),
   Done,
 }
 
@@ -75,6 +75,7 @@ impl<'de> Deserialize<'de> for ChatEvent {
       return Ok(Self::Done);
     }
     serde_json::from_value(value)
+      .map(Box::new)
       .map(Self::Chunk)
       .map_err(serde::de::Error::custom)
   }

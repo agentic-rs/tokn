@@ -220,7 +220,7 @@ mod tests {
       Persona::CopilotCli,
     ] {
       let out = p.build_outbound(&vars, &inbound);
-      assert!(out.len() > 0, "{p:?} should build a non-empty HeaderMap");
+      assert!(!out.is_empty(), "{p:?} should build a non-empty HeaderMap");
     }
   }
 

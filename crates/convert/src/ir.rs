@@ -34,7 +34,7 @@ pub enum Role {
 }
 
 impl Role {
-  pub fn from_str(s: &str) -> Self {
+  pub fn from_wire(s: &str) -> Self {
     match s {
       "system" => Self::System,
       "user" => Self::User,

@@ -346,8 +346,8 @@ mod tests {
   fn get_is_case_insensitive() {
     let mut m = HeaderMap::new();
     m.insert(name("Authorization"), "Bearer x");
-    assert_eq!(m.get(&name("authorization")).map(|v| v.as_str()), Some("Bearer x"));
-    assert_eq!(m.get(&name("AUTHORIZATION")).map(|v| v.as_str()), Some("Bearer x"));
+    assert_eq!(m.get(name("authorization")).map(|v| v.as_str()), Some("Bearer x"));
+    assert_eq!(m.get(name("AUTHORIZATION")).map(|v| v.as_str()), Some("Bearer x"));
   }
 
   #[test]
@@ -366,7 +366,7 @@ mod tests {
     m.insert(name("Authorization"), "Bearer old");
     m.insert(name("authorization"), "Bearer new");
     assert_eq!(m.len(), 1);
-    assert_eq!(m.get(&name("authorization")).map(|v| v.as_str()), Some("Bearer new"));
+    assert_eq!(m.get(name("authorization")).map(|v| v.as_str()), Some("Bearer new"));
   }
 
   #[test]
@@ -397,7 +397,7 @@ mod tests {
     m.append(name("X"), "1");
     m.append(name("X"), "2");
     m.insert(name("Y"), "3");
-    assert_eq!(m.remove(&name("x")), 2);
+    assert_eq!(m.remove(name("x")), 2);
     assert_eq!(m.len(), 1);
   }
 
@@ -447,7 +447,7 @@ mod tests {
     assert!(json.contains("\"Set-Cookie\":[\"a=1\",\"b=2\"]"), "got {json}");
     let back: HeaderMap = serde_json::from_str(&json).unwrap();
     assert_eq!(back.len(), 4);
-    assert_eq!(back.get(&name("authorization")).unwrap().as_str(), "Bearer x");
+    assert_eq!(back.get(name("authorization")).unwrap().as_str(), "Bearer x");
     let cookie_name = name("set-cookie");
     let cookies: Vec<_> = back.get_all(&cookie_name).map(|v| v.as_str()).collect();
     assert_eq!(cookies, vec!["a=1", "b=2"]);
@@ -459,7 +459,7 @@ mod tests {
     let json = r#"{"authorization":"Bearer x","content-type":"application/json"}"#;
     let m: HeaderMap = serde_json::from_str(json).unwrap();
     assert_eq!(m.len(), 2);
-    assert_eq!(m.get(&name("Authorization")).unwrap().as_str(), "Bearer x");
+    assert_eq!(m.get(name("Authorization")).unwrap().as_str(), "Bearer x");
   }
 
   #[test]

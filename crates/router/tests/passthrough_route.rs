@@ -187,9 +187,8 @@ async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
     let (mut stream, _) = listener.accept().await.unwrap();
     let mut buf = vec![0_u8; 16384];
     let _ = stream.read(&mut buf).await.unwrap();
-    let head = format!(
-      "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ntransfer-encoding: chunked\r\n\r\n",
-    );
+    let head =
+      "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\ntransfer-encoding: chunked\r\n\r\n".to_string();
     stream.write_all(head.as_bytes()).await.unwrap();
     // Write the SSE body as a single chunked-encoded frame followed
     // by the terminator. Using one chunk keeps this test focused on
