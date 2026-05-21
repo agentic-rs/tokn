@@ -48,6 +48,9 @@ async fn handle(
       url: None,
     }),
   }));
+  if matches!(mode, Some(llm_config::RouteMode::Switch)) {
+    return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
+  }
   let decoded = super::codec::decode_json_request(&inbound, body)?;
   let raw = llm_requests::RawInbound {
     endpoint: parser.endpoint(),
@@ -57,9 +60,6 @@ async fn handle(
     body_json: decoded.value.clone(),
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
-  if matches!(mode, Some(llm_config::RouteMode::Switch)) {
-    return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
-  }
   let pipeline = if matches!(mode, Some(llm_config::RouteMode::Passthrough)) {
     &state.passthrough_pipeline
   } else {
