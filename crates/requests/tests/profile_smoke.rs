@@ -25,7 +25,7 @@ use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
 use tokn_headers::{HeaderMap, HeaderValue};
-use tokn_requests::event::{EventPayload, Stage, StageEvent};
+use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
   AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
@@ -705,10 +705,10 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   // Subscribers fold prior per-stage events to recover the partial state
   // — the runner does not carry it on the return value any more. Every
   // earlier stage must have fired exactly once before the Error. The
-  // single `record` is `Record::UpstreamResp` (status+headers from the
-  // 401) — the mock bypasses `util::http::send` so `Record::UpstreamReq`
-  // is skipped, and the error returns before ConvertResponse runs so
-  // there is no `Record::UpstreamBody` either.
+  // mock bypasses `util::http::send`, so `Record::UpstreamReq` is
+  // skipped, but buffered upstream status failures now emit both
+  // `Record::UpstreamResp` and `Record::UpstreamBody` before the
+  // pipeline surfaces the Send error.
   let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
@@ -720,10 +720,33 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
       "build_headers",
       "convert_request",
       "record",
+      "record",
       "error",
       "completed",
     ]
   );
+
+  let mut saw_upstream_resp = false;
+  let mut saw_upstream_body = false;
+  for event in &*events {
+    match &event.payload {
+      EventPayload::Record(RecordEvent::UpstreamResp { status, .. }) => {
+        saw_upstream_resp = true;
+        assert_eq!(*status, 401);
+      }
+      EventPayload::Record(RecordEvent::UpstreamBody { body, error }) => {
+        saw_upstream_body = true;
+        assert_eq!(
+          std::str::from_utf8(body.as_ref()).unwrap(),
+          r#"{"error":"unauthorized"}"#
+        );
+        assert!(error.is_none());
+      }
+      _ => {}
+    }
+  }
+  assert!(saw_upstream_resp, "expected UpstreamResp record on send failure");
+  assert!(saw_upstream_body, "expected UpstreamBody record on send failure");
 
   // Spot-check that each pre-Send stage's event carries its full output.
   let resolved_seen = events

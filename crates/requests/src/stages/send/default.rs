@@ -19,6 +19,7 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
+use bytes::Bytes;
 use smol_str::SmolStr;
 use tokn_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use tokn_core::request_event::RecordEvent;
@@ -135,6 +136,10 @@ impl SendStage for DefaultSend {
           ));
         }
       };
+      ctx.emit_record(RecordEvent::UpstreamBody {
+        body: Bytes::copy_from_slice(body_text.as_bytes()),
+        error: None,
+      });
       return Err(PipelineError::recoverable(
         Stage::Send,
         RequestsError::UpstreamStatus {
@@ -145,6 +150,10 @@ impl SendStage for DefaultSend {
     }
     if status >= 400 {
       let body_text = resp.text().await.unwrap_or_default();
+      ctx.emit_record(RecordEvent::UpstreamBody {
+        body: Bytes::copy_from_slice(body_text.as_bytes()),
+        error: None,
+      });
       return Err(PipelineError::permanent(
         Stage::Send,
         RequestsError::UpstreamStatus {
@@ -199,6 +208,7 @@ fn truncate(s: &str, max: usize) -> String {
 mod tests {
   use super::*;
   use crate::event::EventBus;
+  use crate::event::EventPayload;
   use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
@@ -324,6 +334,49 @@ mod tests {
       RequestsError::UpstreamStatus { status, .. } => assert_eq!(*status, 401),
       other => panic!("expected UpstreamStatus, got {other:?}"),
     }
+  }
+
+  #[tokio::test]
+  async fn upstream_error_emits_response_and_body_records() {
+    let events = Arc::new(EventBus::new(16));
+    let mut rx = events.subscribe();
+    let provider = MockProvider::new("mock").with_chat_response(ok_response(502, r#"{"error":"boom"}"#));
+    let handle = mock_handle_with_provider("acct", provider);
+    let send = DefaultSend::new(reqwest::Client::new());
+    let ctx = PipelineCtx::new("req-send-err", Endpoint::ChatCompletions, events);
+
+    let err = send
+      .send(&ctx, &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
+      .await
+      .unwrap_err();
+
+    assert!(matches!(err.inner(), RequestsError::UpstreamStatus { status: 502, .. }));
+
+    let first = rx.recv().await.unwrap();
+    let second = rx.recv().await.unwrap();
+
+    let mut saw_resp = false;
+    let mut saw_body = false;
+    for event in [&first, &second] {
+      match event.as_ref() {
+        tokn_core::event::Event::Requests(req) => match &req.payload {
+          EventPayload::Record(RecordEvent::UpstreamResp { status, .. }) => {
+            saw_resp = true;
+            assert_eq!(*status, 502);
+          }
+          EventPayload::Record(RecordEvent::UpstreamBody { body, error }) => {
+            saw_body = true;
+            assert_eq!(std::str::from_utf8(body.as_ref()).unwrap(), r#"{"error":"boom"}"#);
+            assert!(error.is_none());
+          }
+          other => panic!("unexpected request event: {other:?}"),
+        },
+        other => panic!("unexpected event: {other:?}"),
+      }
+    }
+
+    assert!(saw_resp, "missing UpstreamResp record");
+    assert!(saw_body, "missing UpstreamBody record");
   }
 
   #[tokio::test]
