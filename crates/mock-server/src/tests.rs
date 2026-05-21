@@ -113,12 +113,10 @@ async fn rejects_bodies_over_limit() {
 
 #[tokio::test]
 async fn last_configured_route_overrides_earlier_match() {
-  let server = MockLlmServer::start(
-    MockLlmConfig::default().with_route(MockRoute::new(
-      MockEndpoint::Responses,
-      MockResponse::json(serde_json::json!({"id": "resp-override"})),
-    )),
-  )
+  let server = MockLlmServer::start(MockLlmConfig::default().with_route(MockRoute::new(
+    MockEndpoint::Responses,
+    MockResponse::json(serde_json::json!({"id": "resp-override"})),
+  )))
   .await;
 
   let http = reqwest::Client::new();
