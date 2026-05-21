@@ -186,7 +186,11 @@ impl RequestEventHandler {
     conn.execute(
       "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
        VALUES (?1, ?2, ?3, '', '', '', '')
-       ON CONFLICT(request_id) DO NOTHING",
+       ON CONFLICT(request_id) DO UPDATE SET
+         endpoint = CASE
+           WHEN requests.endpoint = '' THEN excluded.endpoint
+           ELSE requests.endpoint
+         END",
       params![id, ts, endpoint],
     )?;
     self.db.pin_request(&id, ts);
