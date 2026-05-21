@@ -1,10 +1,10 @@
 use crate::common::{self, Credential};
 use async_trait::async_trait;
-use llm_core::account::AccountConfig;
-use llm_headers::HeaderMap;
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
+use tokn_core::account::AccountConfig;
+use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
 use crate::{
@@ -37,7 +37,7 @@ impl OpenAiProvider {
         auth_kind: AuthKind::StaticApiKey,
         default_models: crate::catalogue::default_models_for(ID_OPENAI),
         default_endpoints: crate::DEFAULT_ENDPOINTS_OPENAI,
-        model_cache: Arc::new(llm_core::provider::ModelCache::default()),
+        model_cache: Arc::new(tokn_core::provider::ModelCache::default()),
       },
     })
   }
@@ -161,8 +161,8 @@ impl Provider for OpenAiProvider {
 mod tests {
   use super::*;
   use crate::util::secret::Secret;
-  use llm_core::account::AccountTier;
-  use llm_mock_server::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
+  use tokn_core::account::AccountTier;
+  use tokn_mock_server::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {

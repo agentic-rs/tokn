@@ -1,9 +1,9 @@
 use arc_swap::ArcSwap;
-use llm_core::account::AccountConfig;
-use llm_core::provider::Provider;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokn_core::account::AccountConfig;
+use tokn_core::provider::Provider;
 use tracing::{debug, warn};
 
 pub struct AccountHandle {

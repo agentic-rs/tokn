@@ -1,8 +1,8 @@
 use super::{migrate, MessageRecord, PartRecord, Result};
-use llm_core::db::SessionSource;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use tokn_core::db::SessionSource;
 use tracing::{debug, trace};
 
 pub struct SessionRecord<'a> {
@@ -283,7 +283,7 @@ mod tests {
   }
 
   fn tempdir() -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!("llm-router-sessions-{}", uuid::Uuid::new_v4()));
+    let p = std::env::temp_dir().join(format!("tokn-router-sessions-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&p).unwrap();
     p
   }

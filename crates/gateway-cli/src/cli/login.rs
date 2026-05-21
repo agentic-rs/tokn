@@ -4,9 +4,9 @@ use crate::config::{Config, ProxyConfig};
 use crate::util::http::build_client;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use llm_auth::AuthStore;
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use tokn_auth::AuthStore;
 
 #[derive(Args, Debug)]
 pub struct LoginArgs {

@@ -1,4 +1,4 @@
-use llm_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
+use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 use serde_json::Value;
 use std::fs;
 use std::net::TcpListener;
@@ -98,7 +98,7 @@ fn write_auth(path: &Path, base_url: &str) {
 }
 
 fn spawn_gateway(config_path: &Path, xdg_config_home: PathBuf) -> Child {
-  Command::new(env!("CARGO_BIN_EXE_llm-gateway"))
+  Command::new(env!("CARGO_BIN_EXE_tokn-gateway"))
     .arg("--config")
     .arg(config_path)
     .arg("serve")
@@ -106,7 +106,7 @@ fn spawn_gateway(config_path: &Path, xdg_config_home: PathBuf) -> Child {
     .stdout(Stdio::null())
     .stderr(Stdio::piped())
     .spawn()
-    .expect("spawn llm-gateway")
+    .expect("spawn tokn-gateway")
 }
 
 async fn wait_for_gateway(url: &str) {

@@ -13,10 +13,10 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
-use llm_accounts::AccountHandle;
-use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_accounts::AccountHandle;
+use tokn_core::provider::Endpoint;
 
 /// Outcome of consulting an account pool for a given extracted request.
 pub enum SelectorOutcome {
@@ -93,7 +93,7 @@ mod tests {
   use crate::pipeline::stages::Extracted;
   use crate::test_support::mock_handle;
   use bytes::Bytes;
-  use llm_headers::HeaderMap;
+  use tokn_headers::HeaderMap;
 
   struct FixedSelector(SelectorOutcomeKind);
 

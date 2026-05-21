@@ -1,9 +1,9 @@
-use llm_core::provider::error;
 use reqwest::header::HeaderName;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use snafu::ResultExt;
 use std::collections::BTreeMap;
+use tokn_core::provider::error;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -70,7 +70,7 @@ fn default_openai_intent() -> String {
 }
 
 impl CopilotHeaders {
-  pub fn from_value(value: &Value) -> llm_core::provider::Result<Self> {
+  pub fn from_value(value: &Value) -> tokn_core::provider::Result<Self> {
     if value.is_null() {
       return Ok(Self::default());
     }
@@ -103,7 +103,7 @@ impl CopilotHeaders {
     }
   }
 
-  pub fn validate(&self) -> llm_core::provider::Result<()> {
+  pub fn validate(&self) -> tokn_core::provider::Result<()> {
     for name in self.extra_headers.keys() {
       if !is_token(name) {
         HeaderName::from_bytes(name.as_bytes()).context(error::HeaderNameSnafu { name: name.clone() })?;

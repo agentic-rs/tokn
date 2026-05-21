@@ -1,5 +1,5 @@
-use llm_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
 use serde_json::json;
+use tokn_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
 
 #[test]
 fn round_trip_request() {

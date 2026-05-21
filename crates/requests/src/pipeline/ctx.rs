@@ -10,10 +10,10 @@
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, RecordEvent, StageEvent};
 use crate::pipeline::config::RunConfig;
-use llm_core::event::Event as CoreEvent;
-use llm_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::provider::Endpoint;
 
 pub struct PipelineCtx {
   pub request_id: SmolStr,
@@ -37,7 +37,7 @@ pub struct PipelineCtx {
 
 impl PipelineCtx {
   pub fn new(request_id: impl Into<SmolStr>, endpoint: Endpoint, events: Arc<EventBus>) -> Self {
-    Self::new_with_config(request_id, endpoint, events, Arc::new(RunConfig::default()))
+    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, Arc::new(RunConfig::default()))
   }
 
   pub fn new_with_config(
@@ -46,9 +46,19 @@ impl PipelineCtx {
     events: Arc<EventBus>,
     config: Arc<RunConfig>,
   ) -> Self {
+    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, config)
+  }
+
+  pub fn new_with_attempt_and_config(
+    request_id: impl Into<SmolStr>,
+    attempt: u32,
+    endpoint: Endpoint,
+    events: Arc<EventBus>,
+    config: Arc<RunConfig>,
+  ) -> Self {
     Self {
       request_id: request_id.into(),
-      attempt: 0,
+      attempt,
       endpoint,
       events,
       config,
@@ -60,7 +70,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Stage(payload),
     }));
   }
@@ -73,7 +83,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Record(payload),
     }));
   }
@@ -83,7 +93,7 @@ impl PipelineCtx {
     self.events.emit(CoreEvent::Requests(Event {
       request_id: self.request_id.clone(),
       attempt: self.attempt,
-      ts: llm_core::util::now_unix_ms(),
+      ts: tokn_core::util::now_unix_ms(),
       payload: EventPayload::Custom(CustomEvent::new(kind, value)),
     }));
   }

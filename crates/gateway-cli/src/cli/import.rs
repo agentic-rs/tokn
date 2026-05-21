@@ -3,9 +3,9 @@ use crate::config::{Config, ProxyConfig};
 use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Result};
 use clap::Args;
-use llm_auth::{AuthStore, CredentialFlavor};
 use std::io::Read;
 use std::path::PathBuf;
+use tokn_auth::{AuthStore, CredentialFlavor};
 
 /// `account import` — non-interactive credential import.
 ///
@@ -153,7 +153,7 @@ pub(crate) fn build_source(args: &ImportArgs) -> Result<CredentialSource> {
   }
 }
 
-fn resolve_flavor(args: &ImportArgs, auth: &dyn llm_auth::ProviderAuth) -> CredentialFlavor {
+fn resolve_flavor(args: &ImportArgs, auth: &dyn tokn_auth::ProviderAuth) -> CredentialFlavor {
   if args.refresh_token {
     CredentialFlavor::RefreshToken
   } else if args.api_key {

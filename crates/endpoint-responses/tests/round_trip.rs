@@ -1,5 +1,5 @@
-use llm_endpoint_responses::{InputItem, ResponsesEvent, ResponsesRequest, ResponsesResponse};
 use serde_json::json;
+use tokn_endpoint_responses::{InputItem, ResponsesEvent, ResponsesRequest, ResponsesResponse};
 
 #[test]
 fn round_trip_request_with_mixed_input_items() {
@@ -18,7 +18,7 @@ fn round_trip_request_with_mixed_input_items() {
 
   let req: ResponsesRequest = serde_json::from_value(body).expect("parse");
   let items = match req.input {
-    llm_endpoint_responses::ResponsesInput::Items(items) => items,
+    tokn_endpoint_responses::ResponsesInput::Items(items) => items,
     _ => panic!("expected items"),
   };
   assert_eq!(items.len(), 4);
