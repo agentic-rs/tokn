@@ -162,7 +162,7 @@ mod tests {
   use super::*;
   use crate::util::secret::Secret;
   use llm_core::account::AccountTier;
-  use llm_test_support::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
+  use llm_mock_server::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 
   fn acct(key: Option<&str>) -> AccountConfig {
     AccountConfig {
