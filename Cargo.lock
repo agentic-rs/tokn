@@ -2828,8 +2828,13 @@ dependencies = [
  "axum",
  "bytes",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
+ "tokn-endpoint-chat-completions",
+ "tokn-endpoint-core",
+ "tokn-endpoint-messages",
+ "tokn-endpoint-responses",
 ]
 
 [[package]]
