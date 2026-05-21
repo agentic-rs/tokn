@@ -39,9 +39,11 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release
 
       - name: Build release binary
-        run: cargo build --release --locked --package tokn-gateway-cli --bin tokn-gateway
+        run: cargo build --locked --release --package tokn-gateway-cli --bin tokn-gateway
 
       - name: Package Unix artifact
         if: runner.os != 'Windows'
