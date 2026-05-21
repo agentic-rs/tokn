@@ -159,6 +159,9 @@ fn assert_case(case: DbCase) {
 
 fn run_incremental(path: &Path, case: DbCase) -> DbState {
   let mut conn = Connection::open(path).unwrap();
+  // The fixture seeding path already created the v0.0.0 schema and marked
+  // migration version 1 as applied, so `migrate::apply` skips the bootstrap
+  // branch here and only runs pending migrations.
   migrate::apply(
     &mut conn,
     path,
