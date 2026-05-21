@@ -150,12 +150,23 @@ fn assert_case(case: DbCase) {
   assert_eq!(squash_state.version, fixture.meta.expected_version);
   assert_expected_tables(&incremental_state.tables, &fixture);
   assert_expected_tables(&squash_state.tables, &fixture);
-  assert_eq!(incremental_state.tables, squash_state.tables, "{} migrated and squashed results diverged", case.name);
+  assert_eq!(
+    incremental_state.tables, squash_state.tables,
+    "{} migrated and squashed results diverged",
+    case.name
+  );
 }
 
 fn run_incremental(path: &Path, case: DbCase) -> DbState {
   let mut conn = Connection::open(path).unwrap();
-  migrate::apply(&mut conn, path, case.name, Bootstrap { sql: case.v0_1_1 }, case.migrations).unwrap();
+  migrate::apply(
+    &mut conn,
+    path,
+    case.name,
+    Bootstrap { sql: case.v0_1_1 },
+    case.migrations,
+  )
+  .unwrap();
   dump_state(&conn)
 }
 
@@ -185,7 +196,10 @@ fn insert_row(conn: &Connection, row: &FixtureRow, columns_by_table: &std::colle
   let columns = columns_by_table
     .get(&row.table)
     .unwrap_or_else(|| panic!("missing input columns for {}", row.table));
-  let placeholders = (1..=columns.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+  let placeholders = (1..=columns.len())
+    .map(|i| format!("?{i}"))
+    .collect::<Vec<_>>()
+    .join(", ");
   let sql = format!(
     "INSERT INTO \"{}\" ({}) VALUES ({})",
     row.table.replace('"', "\"\""),
@@ -281,7 +295,9 @@ fn value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
 
 fn assert_expected_tables(actual_tables: &Map<String, Value>, fixture: &Fixture) {
   for table in &fixture.meta.output_order {
-    let actual_rows = actual_tables.get(table).unwrap_or_else(|| panic!("missing table {table}"));
+    let actual_rows = actual_tables
+      .get(table)
+      .unwrap_or_else(|| panic!("missing table {table}"));
     let empty = Vec::new();
     let expected_rows = fixture.expected_rows.get(table).unwrap_or(&empty);
     let actual_rows = actual_rows.as_array().expect("actual row array");
@@ -305,7 +321,9 @@ fn assert_expected_row(
     .unwrap_or_else(|| panic!("missing output columns for {table}"))
   {
     let expected_value = expected.get(key).unwrap_or(&Value::Null);
-    let actual_value = actual.get(key).unwrap_or_else(|| panic!("missing column {table}.{key}"));
+    let actual_value = actual
+      .get(key)
+      .unwrap_or_else(|| panic!("missing column {table}.{key}"));
     assert_eq!(actual_value, expected_value, "value mismatch for {table}.{key}");
   }
 }
@@ -342,7 +360,10 @@ fn parse_fixture(case: DbCase) -> Fixture {
 
 fn parse_meta(meta: &Value) -> FixtureMeta {
   FixtureMeta {
-    expected_version: meta.get("expected_version").and_then(Value::as_u64).expect("expected_version") as u32,
+    expected_version: meta
+      .get("expected_version")
+      .and_then(Value::as_u64)
+      .expect("expected_version") as u32,
     input_columns: parse_table_columns(meta.get("input").and_then(Value::as_array).expect("input array")),
     output_columns: parse_table_columns(meta.get("output").and_then(Value::as_array).expect("output array")),
     output_order: meta
@@ -350,7 +371,13 @@ fn parse_meta(meta: &Value) -> FixtureMeta {
       .and_then(Value::as_array)
       .expect("output array")
       .iter()
-      .map(|entry| entry.get("table").and_then(Value::as_str).expect("output table").to_string())
+      .map(|entry| {
+        entry
+          .get("table")
+          .and_then(Value::as_str)
+          .expect("output table")
+          .to_string()
+      })
       .collect(),
   }
 }
@@ -359,7 +386,11 @@ fn parse_table_columns(entries: &[Value]) -> std::collections::HashMap<String, V
   entries
     .iter()
     .map(|entry| {
-      let table = entry.get("table").and_then(Value::as_str).expect("table name").to_string();
+      let table = entry
+        .get("table")
+        .and_then(Value::as_str)
+        .expect("table name")
+        .to_string();
       let columns = entry
         .get("columns")
         .and_then(Value::as_array)
@@ -379,7 +410,11 @@ fn parse_jsonl_rows(contents: &str) -> Vec<FixtureRow> {
     .map(|line| {
       let value: Value = serde_json::from_str(line).expect("valid jsonl row");
       FixtureRow {
-        table: value.get("table").and_then(Value::as_str).expect("row table").to_string(),
+        table: value
+          .get("table")
+          .and_then(Value::as_str)
+          .expect("row table")
+          .to_string(),
         values: value
           .get("values")
           .and_then(Value::as_object)
