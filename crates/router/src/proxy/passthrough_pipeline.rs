@@ -216,10 +216,10 @@ async fn proxy_via_pipeline_inner(
   // (e.g. logs) is sensible.
   let endpoint = Endpoint::infer_from(path_only).unwrap_or(Endpoint::ChatCompletions);
 
-  // Pre-decoded body matches raw body — `PassthroughConvertRequest`
-  // forwards bytes verbatim and never reads `decoded_body`. Same for
-  // `body_json` (kept as `Null`).
-  let decoded_body = raw_body.clone();
+  // Keep the wire body verbatim for passthrough forwarding, but decode a
+  // side-copy for best-effort model/stream peeking and event summaries.
+  let inbound_headers: tokn_headers::HeaderMap = (&parts.headers).into();
+  let decoded_body = decode_proxy_body(&inbound_headers, raw_body.clone());
   let body_json = serde_json::Value::Null;
 
   // Reconstruct the full URL the client targeted post-CONNECT.
@@ -297,7 +297,7 @@ async fn proxy_via_pipeline_inner(
 
   let raw = tokn_requests::RawInbound {
     endpoint,
-    headers: (&parts.headers).into(),
+    headers: inbound_headers,
     raw_body,
     decoded_body,
     body_json,
@@ -307,6 +307,23 @@ async fn proxy_via_pipeline_inner(
   match pipeline.run_with(raw, cfg).await {
     Ok(converted) => crate::api::response::converted_to_axum(converted),
     Err(err) => proxy_pipeline_error_to_api_error(&err, &host_with_port).into_response(),
+  }
+}
+
+fn decode_proxy_body(headers: &tokn_headers::HeaderMap, raw_body: Bytes) -> Bytes {
+  let encoding = match tokn_requests::utils::codec::request_content_encoding(headers) {
+    Ok(encoding) => encoding,
+    Err(err) => {
+      tracing::warn!(error = %err, "could not parse proxy request content-encoding; using raw body for inspection");
+      return raw_body;
+    }
+  };
+  match tokn_requests::utils::codec::decode_body_bytes(raw_body.clone(), encoding) {
+    Ok(decoded) => decoded,
+    Err(err) => {
+      tracing::warn!(error = %err, "could not decode proxy request body; using raw body for inspection");
+      raw_body
+    }
   }
 }
 

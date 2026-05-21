@@ -405,6 +405,123 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   );
 }
 
+#[tokio::test]
+async fn proxy_passthrough_pipeline_decodes_zstd_for_model_peek_and_forwards_raw_body() {
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RecordEvent, RequestEventPayload, StageEvent};
+
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let upstream_body = br#"{"id":"resp-zstd","ok":true}"#;
+  let (req_tx, req_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+
+  let server = tokio::spawn(async move {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut buf = vec![0_u8; 16384];
+    let n = stream.read(&mut buf).await.unwrap();
+    buf.truncate(n);
+    let resp = format!(
+      "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+      upstream_body.len()
+    );
+    stream.write_all(resp.as_bytes()).await.unwrap();
+    stream.write_all(upstream_body).await.unwrap();
+    stream.flush().await.unwrap();
+    let _ = req_tx.send(buf);
+  });
+
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Passthrough;
+  let events = Arc::new(EventBus::new(256));
+  let mut rx = events.subscribe();
+  let state = build_state(&cfg, &[], events).unwrap();
+
+  let decoded_body =
+    Bytes::from_static(br#"{"stream":false,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
+  let raw_body = Bytes::from(zstd::stream::encode_all(decoded_body.as_ref(), 0).unwrap());
+
+  let intercepted_host = addr.ip().to_string();
+  let intercepted_port = addr.port();
+  let req = Request::builder()
+    .method(Method::POST)
+    .uri("/v1/chat/completions")
+    .header("content-type", "application/json")
+    .header("content-encoding", "zstd")
+    .header("authorization", "Bearer client-bearer-zstd")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_passthrough_via_pipeline_inner(
+    &state,
+    &intercepted_host,
+    intercepted_port,
+    "http",
+    None,
+    Some(addr.to_string()),
+    parts,
+    raw_body.clone(),
+  )
+  .await;
+  assert_eq!(resp.status(), StatusCode::OK);
+  let resp_body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+  assert_eq!(resp_body.as_ref(), upstream_body);
+
+  server.await.unwrap();
+  let raw_req = req_rx.await.unwrap();
+  assert!(
+    raw_req
+      .windows(raw_body.len())
+      .any(|window| window == raw_body.as_ref()),
+    "upstream request must contain the compressed inbound body verbatim"
+  );
+  assert!(
+    !raw_req
+      .windows(decoded_body.len())
+      .any(|window| window == decoded_body.as_ref()),
+    "decoded body must only be used for inspection, not forwarded"
+  );
+
+  let mut collected: Vec<tokn_core::request_event::RequestEvent> = Vec::new();
+  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+  loop {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    if remaining.is_zero() {
+      break;
+    }
+    let Ok(Ok(ev)) = tokio::time::timeout(remaining, rx.recv()).await else {
+      break;
+    };
+    let CoreEvent::Requests(req) = &*ev else { continue };
+    let req = req.clone();
+    let done = matches!(&req.payload, RequestEventPayload::Stage(StageEvent::Completed { .. }));
+    collected.push(req);
+    if done {
+      break;
+    }
+  }
+
+  let resolved_model = collected.iter().find_map(|event| match &event.payload {
+    RequestEventPayload::Stage(StageEvent::Resolve(summary)) => Some(summary.model.as_str()),
+    _ => None,
+  });
+  assert_eq!(
+    resolved_model,
+    Some("glm-4.6"),
+    "proxy should decode zstd body for model peeking"
+  );
+
+  let upstream_req_body = collected.iter().find_map(|event| match &event.payload {
+    RequestEventPayload::Record(RecordEvent::UpstreamReq { body, .. }) => Some(body.clone()),
+    _ => None,
+  });
+  assert_eq!(
+    upstream_req_body.as_deref(),
+    Some(raw_body.as_ref()),
+    "wire-truth event should keep the compressed upstream request body"
+  );
+}
+
 /// Streaming SSE passthrough: the inner pipeline must spawn the
 /// shared accumulator so `RecordEvent::UpstreamBody`,
 /// `RecordEvent::ConvertedBody`, and `StageEvent::Completed` all fire
