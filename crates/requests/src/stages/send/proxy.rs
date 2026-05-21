@@ -199,7 +199,8 @@ impl SendStage for ProxySend {
       // "transparent forwarding" — wrapping a 4xx in our own envelope
       // would change semantics. Note: this differs from DefaultSend,
       // which converts 4xx to PipelineError::permanent. The legacy
-      // proxy passthrough also forwarded 4xx bodies verbatim.
+      // proxy passthrough also forwarded 4xx bodies verbatim, and the
+      // later ConvertResponse path will persist the drained body.
       warn!(%status, "proxy upstream 4xx — forwarding verbatim");
     }
 
