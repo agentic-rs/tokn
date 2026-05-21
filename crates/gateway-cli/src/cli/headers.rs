@@ -14,8 +14,8 @@ pub struct HeadersArgs {
 pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
   let (_cfg, path) = Config::load(cfg_path.as_deref())?;
   let store = AuthStore::load(None, Some(&path))?;
-  let headers = match args.account {
-    None => tokn_provider_copilot::config::CopilotHeaders::default(),
+  let (headers, behave_as) = match args.account {
+    None => (tokn_provider_copilot::config::CopilotHeaders::default(), None),
     Some(id) => {
       let a = store.get(&id).ok_or_else(|| anyhow!("no account with id '{id}'"))?;
       if a.provider != crate::provider::ID_GITHUB_COPILOT {
@@ -31,7 +31,14 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
       for (k, v) in &a.headers {
         headers.extra_headers.insert(k.clone(), v.clone());
       }
-      headers
+      let behave_as = a
+        .settings
+        .get("behave_as")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+      (headers, behave_as)
     }
   };
   println!("editor-version:         {}", headers.editor_version);
@@ -40,7 +47,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: HeadersArgs) -> Result<()> {
   println!("copilot-integration-id: {}", headers.copilot_integration_id);
   println!("openai-intent:          {}", headers.openai_intent);
   println!("initiator_mode:         {:?}", headers.initiator_mode);
-  match &headers.behave_as {
+  match behave_as.as_deref() {
     Some(p) => {
       let profiles = crate::provider::profiles::Profiles::global();
       let verified = profiles
