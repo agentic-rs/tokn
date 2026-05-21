@@ -127,6 +127,16 @@ fn missing_or_null(row: &Map<String, Value>, key: &str) -> bool {
   row.get(key).map(Value::is_null).unwrap_or(true)
 }
 
+fn body_text(row: &Map<String, Value>, key: &str) -> String {
+  let Some(value) = row.get(key) else {
+    panic!("{key} missing");
+  };
+  match value {
+    Value::String(body) => body.clone(),
+    other => panic!("{key} is not text: {other:?}"),
+  }
+}
+
 #[derive(Clone, Copy)]
 struct RouterCase {
   name: &'static str,
@@ -293,6 +303,80 @@ async fn router_modes_return_expected_results_and_persist_request_rows() {
     let row = harness.row(&request_id).await;
     assert_router_row(&row, case);
   }
+  mock.shutdown().await;
+}
+
+#[tokio::test]
+async fn router_stream_returns_sse_and_persists_drained_stream_row() {
+  let mock = MockLlmServer::start(MockLlmConfig::default().with_route(MockRoute::chat_completions_stream())).await;
+  let mut harness = RequestsHarness::new();
+  let cfg = cfg_for(&harness.requests_dir, RouteMode::Route);
+  let state = build_state(&cfg, &[zai_account(mock.base_url())], harness.events.clone()).unwrap();
+  let app = router(state);
+  let request_id = "router-stream-success";
+  let inbound_body = json!({
+    "model": "glm-4.7",
+    "messages": [{"role": "user", "content": "stream please"}],
+    "stream": true
+  });
+  let raw_body = serde_json::to_vec(&inbound_body).unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method(Method::POST)
+        .uri("/v1/chat/completions")
+        .header("accept", "text/event-stream")
+        .header("content-type", "application/json")
+        .header("x-request-id", request_id)
+        .body(Body::from(raw_body.clone()))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response
+      .headers()
+      .get("content-type")
+      .and_then(|value| value.to_str().ok()),
+    Some("text/event-stream")
+  );
+  let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+  let body = std::str::from_utf8(&body).unwrap();
+  assert!(body.contains("\"content\":\"hel\""), "{body}");
+  assert!(body.contains("\"content\":\"lo\""), "{body}");
+  assert!(body.contains("\"completion_tokens\":2"), "{body}");
+  assert!(body.contains("data: [DONE]"), "{body}");
+
+  let captured = mock.last_request().expect("upstream request captured");
+  assert_eq!(captured.header("accept"), Some("text/event-stream"));
+  let outbound: Value = serde_json::from_slice(&captured.body).unwrap();
+  assert_eq!(outbound["model"], "glm-4.7");
+  assert_eq!(outbound["stream"], true);
+
+  harness.shutdown().await;
+
+  let row = harness.row(request_id).await;
+  assert_eq!(text(&row, "mode").as_deref(), Some("route"));
+  assert_eq!(text(&row, "method").as_deref(), Some("requests"));
+  assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
+  assert_eq!(text(&row, "model").as_deref(), Some("glm-4.7"));
+  assert_eq!(int(&row, "stream"), Some(1));
+  assert_eq!(int(&row, "status"), Some(200));
+  assert_eq!(int(&row, "outbound_resp_status"), Some(200));
+  assert_eq!(int(&row, "inbound_resp_status"), Some(200));
+  assert_eq!(int(&row, "input_tok"), Some(3));
+  assert_eq!(int(&row, "output_tok"), Some(2));
+  let persisted_outbound = body_json(&row, "outbound_req_body");
+  assert_eq!(persisted_outbound["model"], "glm-4.7");
+  assert_eq!(persisted_outbound["stream"], true);
+  assert!(body_text(&row, "outbound_resp_body").contains("\"completion_tokens\":2"));
+  assert!(body_text(&row, "inbound_resp_body").contains("\"completion_tokens\":2"));
+  assert!(body_text(&row, "inbound_resp_body").contains("data: [DONE]"));
+  assert!(missing_or_null(&row, "request_error"));
+
   mock.shutdown().await;
 }
 

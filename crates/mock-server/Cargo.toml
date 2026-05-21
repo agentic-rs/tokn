@@ -11,7 +11,12 @@ license.workspace = true
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+tokn-endpoint-chat-completions = { workspace = true }
+tokn-endpoint-core = { workspace = true }
+tokn-endpoint-messages = { workspace = true }
+tokn-endpoint-responses = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
