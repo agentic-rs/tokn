@@ -22,6 +22,7 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
+use bytes::Bytes;
 use smol_str::SmolStr;
 use tokn_core::provider::HeaderPatchCtx;
 use tokn_headers::HeaderMap;
@@ -180,6 +181,10 @@ impl SendStage for ProxySend {
           ));
         }
       };
+      ctx.emit_record(tokn_core::request_event::RecordEvent::UpstreamBody {
+        body: Bytes::copy_from_slice(body_text.as_bytes()),
+        error: None,
+      });
       return Err(PipelineError::recoverable(
         Stage::Send,
         RequestsError::UpstreamStatus {
@@ -194,7 +199,8 @@ impl SendStage for ProxySend {
       // "transparent forwarding" — wrapping a 4xx in our own envelope
       // would change semantics. Note: this differs from DefaultSend,
       // which converts 4xx to PipelineError::permanent. The legacy
-      // proxy passthrough also forwarded 4xx bodies verbatim.
+      // proxy passthrough also forwarded 4xx bodies verbatim, and the
+      // later ConvertResponse path will persist the drained body.
       warn!(%status, "proxy upstream 4xx — forwarding verbatim");
     }
 
@@ -252,7 +258,7 @@ mod tests {
 
   fn fake_extracted() -> Extracted {
     Extracted {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("gpt-4"),
       stream: false,
       session_id: None,
@@ -299,7 +305,7 @@ mod tests {
   async fn missing_host_is_permanent_error() {
     let ctx = ctx_with(RunConfig::default());
     let resolved = Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Endpoint::ChatCompletions,
@@ -361,7 +367,7 @@ mod tests {
         .build(),
     );
     let resolved = Resolved {
-      client_id: None,
+      agent_id: None,
       model: SmolStr::new("gpt-4"),
       upstream_model: SmolStr::new("gpt-4"),
       upstream_endpoint: Endpoint::ChatCompletions,

@@ -3,7 +3,6 @@
 pub use crate::{headers, models, oauth, token, user};
 
 use crate::config::{CopilotHeaders, InitiatorMode};
-use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
 use parking_lot::RwLock;
@@ -264,7 +263,7 @@ fn headers_from_settings(a: &AccountConfig) -> Result<CopilotHeaders> {
 impl CopilotProvider {
   /// Shared upstream POST path used by every endpoint surface. The
   /// per-surface methods only differ in `path` and the wrapping error
-  /// context — auth, header construction, persona, and initiator handling
+  /// context — auth, header construction, client identity, and initiator handling
   /// are identical because Copilot proxies all three on the same host with
   /// the same auth scheme.
   #[instrument(
@@ -275,7 +274,6 @@ impl CopilotProvider {
       what,
       path,
       stream = ctx.stream,
-      behave_as = %BehaveAs(ctx.behave_as),
       initiator = tracing::field::Empty,
     ),
   )]
@@ -289,7 +287,7 @@ impl CopilotProvider {
       _ => self.resolve_initiator(ctx.body, ctx.inbound_headers, ctx.initiator),
     };
     tracing::Span::current().record("initiator", initiator.as_str());
-    let mut h = ctx.profile_headers.clone().unwrap_or_else(|| {
+    let mut h = ctx.client_headers.clone().unwrap_or_else(|| {
       headers::copilot_request_headers(token.expose(), &self.headers, ctx.stream, &initiator).unwrap_or_default()
     });
     self.patch_headers(

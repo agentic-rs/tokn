@@ -38,7 +38,9 @@ use smol_str::SmolStr;
 use tokn_accounts::routing::ResolveError;
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::provider::Endpoint;
-use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_core::request_event::{
+  ConvertedResponseSummary, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent,
+};
 use tokn_requests::pipeline::error::RequestsError;
 
 /// Dispatch an intercepted MITM request through the proxy-passthrough
@@ -230,6 +232,18 @@ async fn proxy_via_pipeline_inner(
     ProxyPipelineMode::Passthrough => "passthrough",
     ProxyPipelineMode::Switch => "switch",
   };
+  let hx = request_header_extract(&parts.headers);
+  let request_id = SmolStr::new(&hx.request_id);
+
+  emit_proxy_inbound(
+    state,
+    request_id.clone(),
+    local_addr.as_deref(),
+    peer_addr.as_deref(),
+    mode_name,
+    method.as_str(),
+    &full_url,
+  );
 
   let mut cfg_builder = tokn_requests::RunConfig::builder()
     .with_str(tokn_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
@@ -243,9 +257,14 @@ async fn proxy_via_pipeline_inner(
       // intercepted request to a concrete `account_id` + `provider_id`.
       // Pass the full URL so descriptors with path-based `matches_url`
       // discriminate correctly. Registry strips the port internally.
+      let identity_url = if is_default_intercept_host(&host_with_port) {
+        full_url.as_str()
+      } else {
+        ""
+      };
       let identity = state
         .identity
-        .resolve(&parts.headers, &full_url, &state.provider_registry);
+        .resolve(&parts.headers, identity_url, &state.provider_registry);
       // Fallback to the bare intercepted host (not host:port and not the
       // full URL) so the synthetic provider_id stays stable across
       // requests to different paths/ports on the same upstream.
@@ -261,10 +280,11 @@ async fn proxy_via_pipeline_inner(
     }
     ProxyPipelineMode::Switch => {
       let Some(provider_id) = state.provider_registry.provider_id_for_url(&full_url) else {
-        return ApiError::bad_request(format!(
+        let api_err = ApiError::bad_request(format!(
           "switch mode requires a recognized provider URL, got '{full_url}'"
-        ))
-        .into_response();
+        ));
+        emit_proxy_terminal_error(state, request_id, endpoint, &api_err);
+        return api_err.into_response();
       };
       cfg_builder = cfg_builder
         .with_str(tokn_requests::stages::resolve::proxy::keys::PROVIDER_ID, provider_id)
@@ -273,26 +293,6 @@ async fn proxy_via_pipeline_inner(
     }
   };
 
-  // Emit InboundConnection so persistence populates `local_addr`,
-  // `peer_addr`, `mode`, `method`, `inbound_req_method`, and
-  // `inbound_req_url` for the request row. Uses the same `request_id`
-  // the pipeline will derive from `parts.headers` (via
-  // `request_header_extract`) so the persistence UPDATE hits the same
-  // row the pipeline's `StageEvent::Started` INSERT creates.
-  let hx = request_header_extract(&parts.headers);
-  state.events.emit(CoreEvent::Requests(RequestEvent {
-    request_id: SmolStr::new(&hx.request_id),
-    attempt: 0,
-    ts: tokn_core::util::now_unix_ms(),
-    payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
-      local_addr: local_addr.map(SmolStr::from),
-      peer_addr: peer_addr.map(SmolStr::from),
-      mode: SmolStr::new(mode_name),
-      method: SmolStr::new("proxy"),
-      inbound_method: SmolStr::new(method.as_str()),
-      url: Some(SmolStr::from(full_url.as_str())),
-    }),
-  }));
   let cfg = cfg_builder.build();
 
   let raw = tokn_requests::RawInbound {
@@ -301,13 +301,91 @@ async fn proxy_via_pipeline_inner(
     raw_body,
     decoded_body,
     body_json,
-    request_id: Some(SmolStr::new(&hx.request_id)),
+    request_id: Some(request_id),
   };
 
   match pipeline.run_with(raw, cfg).await {
     Ok(converted) => crate::api::response::converted_to_axum(converted),
     Err(err) => proxy_pipeline_error_to_api_error(&err, &host_with_port).into_response(),
   }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_proxy_inbound(
+  state: &AppState,
+  request_id: SmolStr,
+  local_addr: Option<&str>,
+  peer_addr: Option<&str>,
+  mode: &str,
+  inbound_method: &str,
+  url: &str,
+) {
+  let ts = tokn_core::util::now_unix_ms();
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id,
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      local_addr: local_addr.map(SmolStr::new),
+      peer_addr: peer_addr.map(SmolStr::new),
+      mode: SmolStr::new(mode),
+      method: SmolStr::new("proxy"),
+      inbound_method: SmolStr::new(inbound_method),
+      url: Some(SmolStr::new(url)),
+    }),
+  }));
+}
+
+fn emit_proxy_terminal_error(state: &AppState, request_id: SmolStr, endpoint: Endpoint, api_err: &ApiError) {
+  let ts = tokn_core::util::now_unix_ms();
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Started {
+      endpoint: endpoint.into(),
+    }),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Error {
+      stage: Stage::Resolve,
+      message: SmolStr::new(api_err.to_string()),
+      recoverable: false,
+      stop: true,
+    }),
+  }));
+
+  let response_body = serde_json::from_slice(&api_err.body_bytes()).unwrap_or(serde_json::Value::Null);
+  let mut response_headers = tokn_headers::HeaderMap::new();
+  response_headers.insert("content-type", "application/json");
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id: request_id.clone(),
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::ConvertResponse(ConvertedResponseSummary {
+      status: api_err.status().as_u16(),
+      headers: response_headers,
+      body: Some(std::sync::Arc::new(response_body)),
+    })),
+  }));
+  state.events.emit(CoreEvent::Requests(RequestEvent {
+    request_id,
+    attempt: 0,
+    ts,
+    payload: RequestEventPayload::Stage(StageEvent::Completed {
+      success: false,
+      attempts: 1,
+    }),
+  }));
+}
+
+fn is_default_intercept_host(host_with_port: &str) -> bool {
+  let (host, _) = split_host_port(host_with_port);
+  let host = host.trim_matches(['[', ']']);
+  super::INTERCEPT_HOSTS.contains(&host)
 }
 
 fn proxy_pipeline_error_to_api_error(err: &tokn_requests::PipelineError, host_with_port: &str) -> ApiError {

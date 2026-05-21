@@ -14,6 +14,7 @@ pub use error::{Error, Result};
 
 pub const ID_GITHUB_COPILOT: &str = "github-copilot";
 pub const ID_DEEPSEEK: &str = "deepseek";
+pub const ID_LLAMA_CPP: &str = "llama-cpp";
 pub const ID_OPENAI: &str = "openai";
 pub const ID_CODEX: &str = "codex";
 pub const ID_ZAI_CODING_PLAN: &str = "zai-coding-plan";
@@ -25,6 +26,7 @@ pub const ZAI_PROVIDERS: &[&str] = &[ID_ZAI_CODING_PLAN, ID_ZAI, ID_ZHIPUAI_CODI
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthKind {
+  None,
   OAuthDeviceFlow,
   StaticApiKey,
 }
@@ -270,8 +272,7 @@ pub struct RequestCtx<'a> {
   pub stream: bool,
   pub initiator: &'a str,
   pub inbound_headers: &'a HeaderMap,
-  pub behave_as: Option<&'a str>,
-  pub profile_headers: Option<HeaderMap>,
+  pub client_headers: Option<HeaderMap>,
   pub outbound: Option<OutboundCapture>,
   pub vars: TemplateVars,
 }

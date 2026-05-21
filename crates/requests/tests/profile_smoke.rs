@@ -24,12 +24,12 @@ use tokn_core::account::AccountConfig;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
-use tokn_headers::{HeaderMap, HeaderValue};
-use tokn_requests::event::{EventPayload, Stage, StageEvent};
+use tokn_headers::HeaderMap;
+use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
-  AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
-  NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
+  AccountSelector, DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
@@ -150,11 +150,9 @@ fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
 fn raw_chat(model: &str) -> RawInbound {
   let body = serde_json::json!({"model": model, "messages": []});
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
-  let mut headers = HeaderMap::new();
-  headers.insert("x-behave-as", HeaderValue::from_static("codex"));
   RawInbound {
     endpoint: Endpoint::ChatCompletions,
-    headers,
+    headers: HeaderMap::new(),
     raw_body: decoded.clone(),
     decoded_body: decoded,
     body_json: body,
@@ -279,7 +277,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
       r.upstream_model.clone(),
       r.provider_id.clone(),
       r.account_id.clone(),
-      r.client_id.clone(),
+      r.agent_id.clone(),
     )),
     _ => None,
   });
@@ -287,7 +285,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
   assert_eq!(upstream, "glm-4");
   assert_eq!(provider, "zai-coding-plan");
   assert_eq!(account, "acct-1");
-  assert_eq!(client.as_ref().map(|c| c.as_str().to_string()), Some("codex".into()));
+  assert!(client.is_none());
 }
 
 #[tokio::test]
@@ -458,7 +456,7 @@ async fn full_pipeline_buffered_happy_path() {
     "smoke-full",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -681,7 +679,7 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     "smoke-fail",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -705,10 +703,10 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
   // Subscribers fold prior per-stage events to recover the partial state
   // — the runner does not carry it on the return value any more. Every
   // earlier stage must have fired exactly once before the Error. The
-  // single `record` is `Record::UpstreamResp` (status+headers from the
-  // 401) — the mock bypasses `util::http::send` so `Record::UpstreamReq`
-  // is skipped, and the error returns before ConvertResponse runs so
-  // there is no `Record::UpstreamBody` either.
+  // mock bypasses `util::http::send`, so `Record::UpstreamReq` is
+  // skipped, but buffered upstream status failures now emit both
+  // `Record::UpstreamResp` and `Record::UpstreamBody` before the
+  // pipeline surfaces the Send error.
   let events = drain_until_completed(&log).await;
   let kinds = known_kinds(&events);
   assert_eq!(
@@ -720,10 +718,33 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
       "build_headers",
       "convert_request",
       "record",
+      "record",
       "error",
       "completed",
     ]
   );
+
+  let mut saw_upstream_resp = false;
+  let mut saw_upstream_body = false;
+  for event in &*events {
+    match &event.payload {
+      EventPayload::Record(RecordEvent::UpstreamResp { status, .. }) => {
+        saw_upstream_resp = true;
+        assert_eq!(*status, 401);
+      }
+      EventPayload::Record(RecordEvent::UpstreamBody { body, error }) => {
+        saw_upstream_body = true;
+        assert_eq!(
+          std::str::from_utf8(body.as_ref()).unwrap(),
+          r#"{"error":"unauthorized"}"#
+        );
+        assert!(error.is_none());
+      }
+      _ => {}
+    }
+  }
+  assert!(saw_upstream_resp, "expected UpstreamResp record on send failure");
+  assert!(saw_upstream_body, "expected UpstreamBody record on send failure");
 
   // Spot-check that each pre-Send stage's event carries its full output.
   let resolved_seen = events
@@ -781,7 +802,7 @@ async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
     "smoke-retry-success",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -860,7 +881,7 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
     "smoke-retry-exhausted",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -911,7 +932,7 @@ async fn pipeline_does_not_retry_permanent_send_failures() {
     "smoke-retry-permanent",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),

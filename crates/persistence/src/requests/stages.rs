@@ -85,16 +85,12 @@ impl EventHandler for RequestEventHandler {
         StageEvent::Completed { .. } => self.on_completed(request_id, attempt, r2.ts),
       },
       // Record events capture transport-adjacent facts that live alongside
-      // the stage lifecycle. `UpstreamResp` duplicates `StageEvent::Send`
-      // (status + headers come from the same `reqwest::Response::headers()`)
-      // and so is intentionally a no-op here.
+      // the stage lifecycle. Some of them overlap with stage summaries, but
+      // they may still be the only persistence signal on error paths.
       RequestEventPayload::Record(record) => {
-        let bootstrap = !matches!(record, RecordEvent::UpstreamResp { .. });
-        if bootstrap {
-          if let Err(e) = self.ensure_started_for_record(request_id, attempt, r2.ts) {
-            tracing::warn!(error = %e, request_id, attempt, "requests record bootstrap failed");
-            return;
-          }
+        if let Err(e) = self.ensure_started_for_record(request_id, attempt, r2.ts) {
+          tracing::warn!(error = %e, request_id, attempt, "requests record bootstrap failed");
+          return;
         }
         match record {
           RecordEvent::InboundConnection {
@@ -122,7 +118,9 @@ impl EventHandler for RequestEventHandler {
             headers,
             body,
           } => self.on_upstream_req(request_id, attempt, method.as_str(), url.as_str(), headers, body),
-          RecordEvent::UpstreamResp { .. } => Ok(()),
+          RecordEvent::UpstreamResp { status, headers } => {
+            self.on_upstream_resp(request_id, attempt, r2.ts, *status, headers)
+          }
           RecordEvent::UpstreamBody { body, .. } => self.on_upstream_body(request_id, attempt, body),
           RecordEvent::ConvertedBody { body, .. } => self.on_converted_body(request_id, attempt, body),
           RecordEvent::Usage(usage) => self.on_usage(request_id, attempt, usage),
@@ -188,7 +186,11 @@ impl RequestEventHandler {
     conn.execute(
       "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
        VALUES (?1, ?2, ?3, '', '', '', '')
-       ON CONFLICT(request_id) DO NOTHING",
+       ON CONFLICT(request_id) DO UPDATE SET
+         endpoint = CASE
+           WHEN requests.endpoint = '' THEN excluded.endpoint
+           ELSE requests.endpoint
+         END",
       params![id, ts, endpoint],
     )?;
     self.db.pin_request(&id, ts);
@@ -322,7 +324,6 @@ impl RequestEventHandler {
       "UPDATE requests SET
          outbound_resp_status = ?2,
          outbound_resp_headers = ?3,
-         status = ?2,
          latency_header_ms = ?4
        WHERE request_id = ?1",
       params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
@@ -349,6 +350,7 @@ impl RequestEventHandler {
     };
     let updated = conn.execute(
       "UPDATE requests SET
+         status = ?2,
          inbound_resp_status = ?2,
          inbound_resp_headers = ?3,
          inbound_resp_body = ?4
@@ -429,6 +431,39 @@ impl RequestEventHandler {
     )?;
     if updated == 0 {
       tracing::warn!(request_id = %id, "requests UpstreamReq UPDATE matched no row");
+    }
+    Ok(())
+  }
+
+  /// Wire-truth upstream-response status + headers. This overlaps with
+  /// `StageEvent::Send` on successful requests, but error responses can fail
+  /// before the Send stage completes, making this record the only place where
+  /// we still learn the upstream status line.
+  pub fn on_upstream_resp(
+    &mut self,
+    request_id: &str,
+    attempt: u32,
+    ts: i64,
+    status: u16,
+    headers: &tokn_headers::HeaderMap,
+  ) -> Result<()> {
+    let id = composite_request_id(request_id, attempt);
+    let hdr_json = headers_json(headers);
+    let latency_header_ms = self.db.latency_since_start(&id, ts);
+    let Some(conn) = self.db.conn_for_request(&id) else {
+      tracing::warn!(request_id = %id, "requests UpstreamResp without prior Started");
+      return Ok(());
+    };
+    let updated = conn.execute(
+      "UPDATE requests SET
+         outbound_resp_status = ?2,
+         outbound_resp_headers = ?3,
+         latency_header_ms = ?4
+       WHERE request_id = ?1",
+      params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
+    )?;
+    if updated == 0 {
+      tracing::warn!(request_id = %id, "requests UpstreamResp UPDATE matched no row");
     }
     Ok(())
   }

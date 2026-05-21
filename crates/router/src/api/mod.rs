@@ -264,7 +264,7 @@ fn build_request_pipeline(
   events: Arc<EventBus>,
 ) -> Arc<tokn_requests::Pipeline> {
   use tokn_requests::stages::{
-    DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, PersonaBuildHeaders,
+    DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
     PoolAccountSelector, PoolResolve,
   };
   let selector = Arc::new(PoolAccountSelector::new(pool, route));
@@ -272,7 +272,7 @@ fn build_request_pipeline(
     "router-default",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(http)),
     Arc::new(DefaultConvertResponse::new()),

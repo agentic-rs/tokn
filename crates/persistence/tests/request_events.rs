@@ -46,7 +46,7 @@ fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> S
   let mut headers = HeaderMap::new();
   headers.insert("x-test", "1");
   StageEvent::Extract(ExtractedSummary {
-    client_id: None,
+    agent_id: None,
     model: SmolStr::new(model),
     stream,
     session_id: session.map(SmolStr::new),
@@ -63,7 +63,7 @@ fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> S
 
 fn resolved(account: &str, provider: &str) -> StageEvent {
   StageEvent::Resolve(ResolvedSummary {
-    client_id: None,
+    agent_id: None,
     model: SmolStr::new("client-model"),
     upstream_model: SmolStr::new("upstream-model"),
     upstream_endpoint: Endpoint::Responses,
@@ -256,6 +256,62 @@ fn error_before_send_leaves_status_null_and_records_error() {
   assert!(is_null(&row["status"]));
   assert!(is_null(&row["outbound_resp_status"]));
   assert_eq!(as_text(&row["request_error"]).as_deref(), Some("resolve: no account"));
+  assert!(!is_null(&row["latency_ms"]));
+}
+
+#[test]
+fn upstream_error_status_persists_response_snapshot_and_error() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-upstream-err";
+  let mut headers = HeaderMap::new();
+  headers.insert("content-type", "application/json");
+
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
+    },
+  ));
+  h.handle(&r2(req, 0, extracted("m", false, None, b"{\"in\":1}")));
+  h.handle(&r2(req, 0, resolved("acct", "prov")));
+  h.handle(&r2(req, 0, built_headers()));
+  h.handle(&r2(req, 0, converted_request(b"{\"out\":2}")));
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::UpstreamResp {
+      status: 502,
+      headers: headers.clone(),
+    },
+  ));
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::UpstreamBody {
+      body: Bytes::copy_from_slice(br#"{"error":"boom"}"#),
+      error: None,
+    },
+  ));
+  h.handle(&r2(req, 0, error(Stage::Send, "upstream 502: {\"error\":\"boom\"}")));
+  h.handle(&r2(req, 0, completed(false, 1)));
+
+  let row = fetch_row(&dir, req);
+  assert!(is_null(&row["status"]));
+  assert_eq!(as_int(&row["outbound_resp_status"]), Some(502));
+  assert!(as_text(&row["outbound_resp_headers"])
+    .unwrap()
+    .contains("\"content-type\":\"application/json\""));
+  assert_eq!(
+    as_text(&row["outbound_resp_body"]).as_deref(),
+    Some("{\"error\":\"boom\"}")
+  );
+  assert_eq!(
+    as_text(&row["request_error"]).as_deref(),
+    Some("send: upstream 502: {\"error\":\"boom\"}")
+  );
+  assert!(!is_null(&row["latency_header_ms"]));
   assert!(!is_null(&row["latency_ms"]));
 }
 
