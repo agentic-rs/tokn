@@ -22,7 +22,7 @@ pub mod stages;
 pub use stages::RequestEventHandler;
 
 const CACHE_CAP: usize = 3;
-pub(crate) const BOOTSTRAP: &str = include_str!("../../schemas/snapshot/requests/v0.1.1.sql");
+pub(crate) const BOOTSTRAP: &str = include_str!("../../schemas/snapshot/requests/v0.2.0.sql");
 pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
