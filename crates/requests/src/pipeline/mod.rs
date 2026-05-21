@@ -120,7 +120,10 @@ impl PipelineRunner {
     let mut attempt = 0;
 
     loop {
-      match self.run_attempt(raw.clone(), config.clone(), request_id.clone(), attempt).await {
+      match self
+        .run_attempt(raw.clone(), config.clone(), request_id.clone(), attempt)
+        .await
+      {
         Ok(response) => return Ok(response),
         Err(err) if self.retry_policy.should_retry(attempt, &err) => {
           let backoff = self.retry_policy.backoff_for(attempt);

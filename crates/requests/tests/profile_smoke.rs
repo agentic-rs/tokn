@@ -786,18 +786,21 @@ async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
   ));
-  let runner = PipelineRunner::new_with_retry(
-    profile,
-    bus,
-    RetryPolicy::new(2, Duration::from_millis(1)),
-  );
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
 
-  let converted = runner.run(raw_chat("glm-4")).await.expect("second attempt should succeed");
+  let converted = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect("second attempt should succeed");
   let events = drain_until_completed_attempts(&log, 2).await;
   let error_attempts: Vec<u32> = events
     .iter()
     .filter_map(|e| match &e.payload {
-      EventPayload::Stage(StageEvent::Error { stage: Stage::Send, recoverable, .. }) if *recoverable => Some(e.attempt),
+      EventPayload::Stage(StageEvent::Error {
+        stage: Stage::Send,
+        recoverable,
+        ..
+      }) if *recoverable => Some(e.attempt),
       _ => None,
     })
     .collect();
@@ -837,9 +840,18 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
     "zai-coding-plan",
     "acct-1",
     vec![
-      ScriptedResponse::Http { status: 503, body: "one" },
-      ScriptedResponse::Http { status: 503, body: "two" },
-      ScriptedResponse::Http { status: 503, body: "three" },
+      ScriptedResponse::Http {
+        status: 503,
+        body: "one",
+      },
+      ScriptedResponse::Http {
+        status: 503,
+        body: "two",
+      },
+      ScriptedResponse::Http {
+        status: 503,
+        body: "three",
+      },
     ],
   );
   let selector = Arc::new(CannedSelector { handle });
@@ -853,13 +865,12 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
   ));
-  let runner = PipelineRunner::new_with_retry(
-    profile,
-    bus,
-    RetryPolicy::new(2, Duration::from_millis(1)),
-  );
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
 
-  let err = runner.run(raw_chat("glm-4")).await.expect_err("retry budget should exhaust");
+  let err = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect_err("retry budget should exhaust");
   assert_eq!(err.stage, Stage::Send);
   assert!(err.recoverable);
 
@@ -905,13 +916,12 @@ async fn pipeline_does_not_retry_permanent_send_failures() {
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
   ));
-  let runner = PipelineRunner::new_with_retry(
-    profile,
-    bus,
-    RetryPolicy::new(2, Duration::from_millis(1)),
-  );
+  let runner = PipelineRunner::new_with_retry(profile, bus, RetryPolicy::new(2, Duration::from_millis(1)));
 
-  let err = runner.run(raw_chat("glm-4")).await.expect_err("401 should remain permanent");
+  let err = runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect_err("401 should remain permanent");
   assert_eq!(err.stage, Stage::Send);
   assert!(!err.recoverable);
 

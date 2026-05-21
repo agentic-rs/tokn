@@ -22,8 +22,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 
-const PIPELINE_RETRY_POLICY: llm_requests::RetryPolicy =
-  llm_requests::RetryPolicy::new(2, Duration::from_millis(100));
+const PIPELINE_RETRY_POLICY: llm_requests::RetryPolicy = llm_requests::RetryPolicy::new(2, Duration::from_millis(100));
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
