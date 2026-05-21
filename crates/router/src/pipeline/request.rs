@@ -259,7 +259,11 @@ fn is_router_controlled(name: &str) -> bool {
   ROUTER_CONTROLLED_HEADERS.contains(&n.as_str())
 }
 
-fn compose_with_schema(schema: &ResolvedSchema, vars: &TemplateVars, inbound: &tokn_headers::HeaderMap) -> tokn_headers::HeaderMap {
+fn compose_with_schema(
+  schema: &ResolvedSchema,
+  vars: &TemplateVars,
+  inbound: &tokn_headers::HeaderMap,
+) -> tokn_headers::HeaderMap {
   let agent_map = schema.agent.build_outbound(vars, inbound);
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {

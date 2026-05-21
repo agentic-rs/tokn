@@ -45,7 +45,9 @@ impl AgentId {
 
   pub fn provider_default(provider_id: &str) -> Option<Self> {
     match provider_id {
-      "openai" | "deepseek" | "zai" | "zai-coding-plan" | "zhipuai" | "zhipuai-coding-plan" => Some(Self::Opencode),
+      "openai" | "deepseek" | "llama-cpp" | "zai" | "zai-coding-plan" | "zhipuai" | "zhipuai-coding-plan" => {
+        Some(Self::Opencode)
+      }
       "codex" => Some(Self::CodexCli),
       "copilot" | "github-copilot" => Some(Self::CopilotCli),
       _ => None,
@@ -140,6 +142,7 @@ mod tests {
   #[test]
   fn provider_defaults_cover_known_providers() {
     assert_eq!(AgentId::provider_default("openai"), Some(AgentId::Opencode));
+    assert_eq!(AgentId::provider_default("llama-cpp"), Some(AgentId::Opencode));
     assert_eq!(AgentId::provider_default("codex"), Some(AgentId::CodexCli));
     assert_eq!(AgentId::provider_default("github-copilot"), Some(AgentId::CopilotCli));
     assert_eq!(AgentId::provider_default("nonesuch"), None);

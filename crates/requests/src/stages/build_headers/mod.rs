@@ -6,16 +6,16 @@
 //! - [`DefaultBuildHeaders`] composes the real outbound `HeaderMap` from the
 //!   inbound request via the [`tokn_headers`] agent + overlay registry.
 
-pub mod passthrough;
 pub mod default;
+pub mod passthrough;
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
 
-pub use passthrough::PassthroughBuildHeaders;
 pub use default::DefaultBuildHeaders;
+pub use passthrough::PassthroughBuildHeaders;
 
 /// No-op BuildHeaders stage. Returns an empty header set. Available as a
 /// placeholder for tests and profiles that short-circuit before Send.
