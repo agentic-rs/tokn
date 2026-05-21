@@ -21,7 +21,7 @@ async fn curl_script_reaches_mock_server_with_opencode_headers() {
 
   let port = unused_port();
   let temp_root = temp_path("opencode-e2e");
-  let config_dir = temp_root.join("xdg").join("llm-router");
+  let config_dir = temp_root.join("xdg").join("tokn-router");
   fs::create_dir_all(&config_dir).unwrap();
 
   let config_path = config_dir.join("config.toml");

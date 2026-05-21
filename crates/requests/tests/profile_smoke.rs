@@ -614,7 +614,7 @@ async fn full_pipeline_openai_mock_server_uses_opencode_headers() {
 
   let captured = server.last_request().expect("captured openai request");
   assert_eq!(captured.method, reqwest::Method::POST);
-  assert_eq!(captured.path, "/v1/chat/completions");
+  assert_eq!(captured.path, "/chat/completions");
   assert_eq!(captured.header("authorization"), Some("Bearer sk-test"));
   assert_eq!(
     captured.header("user-agent"),
