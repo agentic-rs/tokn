@@ -78,6 +78,50 @@ impl MockRoute {
     )
   }
 
+  pub fn chat_completions_stream() -> Self {
+    Self::new(
+      MockEndpoint::ChatCompletions,
+      MockResponse::sse_data([
+        json!({
+          "id": "chatcmpl-stream",
+          "object": "chat.completion.chunk",
+          "choices": [{
+            "index": 0,
+            "delta": {"role": "assistant", "content": "hel"},
+            "finish_reason": null
+          }]
+        })
+        .to_string(),
+        json!({
+          "id": "chatcmpl-stream",
+          "object": "chat.completion.chunk",
+          "choices": [{
+            "index": 0,
+            "delta": {"content": "lo"},
+            "finish_reason": null
+          }]
+        })
+        .to_string(),
+        json!({
+          "id": "chatcmpl-stream",
+          "object": "chat.completion.chunk",
+          "choices": [{
+            "index": 0,
+            "delta": {},
+            "finish_reason": "stop"
+          }],
+          "usage": {
+            "prompt_tokens": 3,
+            "completion_tokens": 2,
+            "total_tokens": 5
+          }
+        })
+        .to_string(),
+        "[DONE]".to_string(),
+      ]),
+    )
+  }
+
   pub fn responses() -> Self {
     Self::new(
       MockEndpoint::Responses,
@@ -121,5 +165,30 @@ impl MockResponse {
       headers: vec![("content-type".into(), "application/json".into())],
       body: Bytes::from(serde_json::to_vec(&value).expect("serialize mock JSON response")),
     }
+  }
+
+  pub fn sse(body: impl Into<Bytes>) -> Self {
+    Self {
+      status: StatusCode::OK,
+      headers: vec![
+        ("content-type".into(), "text/event-stream".into()),
+        ("cache-control".into(), "no-cache".into()),
+      ],
+      body: body.into(),
+    }
+  }
+
+  pub fn sse_data<I, S>(events: I) -> Self
+  where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+  {
+    let mut body = String::new();
+    for event in events {
+      body.push_str("data: ");
+      body.push_str(event.as_ref());
+      body.push_str("\n\n");
+    }
+    Self::sse(body)
   }
 }
