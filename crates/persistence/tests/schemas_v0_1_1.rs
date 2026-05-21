@@ -6,6 +6,7 @@ use tokn_persistence::migrate::{self, Bootstrap, Migration};
 const REQUESTS_V0_0_0: &str = include_str!("../schemas/snapshot/requests/v0.0.0.sql");
 const REQUESTS_V0_1_1: &str = include_str!("../schemas/snapshot/requests/v0.1.1.sql");
 const REQUESTS_V0_2_0: &str = include_str!("../schemas/snapshot/requests/v0.2.0.sql");
+const REQUESTS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/requests/v0.0.0_v0.1.1_0001_0006.sql");
 const REQUESTS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/requests/v0.1.1_v0.2.0_0006_0007.sql");
 const REQUESTS_MIGRATIONS: &[Migration] = &[
   Migration {
@@ -86,6 +87,7 @@ struct DbCase {
   v0_0_0: &'static str,
   target_snapshot: &'static str,
   target_squash: &'static str,
+  target_version: u32,
   squash_start_version: u32,
   migrations: &'static [Migration],
   meta_json: &'static str,
@@ -93,11 +95,25 @@ struct DbCase {
   expected_jsonl: &'static str,
 }
 
-const REQUESTS_CASE: DbCase = DbCase {
+const REQUESTS_V0_1_1_CASE: DbCase = DbCase {
+  name: "requests",
+  v0_0_0: REQUESTS_V0_0_0,
+  target_snapshot: REQUESTS_V0_1_1,
+  target_squash: REQUESTS_SQUASH_V0_1_1,
+  target_version: 6,
+  squash_start_version: 1,
+  migrations: REQUESTS_MIGRATIONS,
+  meta_json: include_str!("fixtures/requests_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/requests_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/requests_expected_v0.1.1.jsonl"),
+};
+
+const REQUESTS_V0_2_0_CASE: DbCase = DbCase {
   name: "requests",
   v0_0_0: REQUESTS_V0_0_0,
   target_snapshot: REQUESTS_V0_2_0,
   target_squash: REQUESTS_SQUASH_V0_2_0,
+  target_version: 7,
   squash_start_version: 6,
   migrations: REQUESTS_MIGRATIONS,
   meta_json: include_str!("fixtures/requests_meta_v0.2.0.json"),
@@ -110,6 +126,7 @@ const SESSIONS_CASE: DbCase = DbCase {
   v0_0_0: SESSIONS_V0_0_0,
   target_snapshot: SESSIONS_V0_1_1,
   target_squash: SESSIONS_SQUASH_V0_1_1,
+  target_version: 1,
   squash_start_version: 1,
   migrations: SESSIONS_MIGRATIONS,
   meta_json: include_str!("fixtures/sessions_meta_v0.1.1.json"),
@@ -122,6 +139,7 @@ const USAGE_CASE: DbCase = DbCase {
   v0_0_0: USAGE_V0_0_0,
   target_snapshot: USAGE_V0_1_1,
   target_squash: USAGE_SQUASH_V0_1_1,
+  target_version: 4,
   squash_start_version: 1,
   migrations: USAGE_MIGRATIONS,
   meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),
@@ -130,8 +148,13 @@ const USAGE_CASE: DbCase = DbCase {
 };
 
 #[test]
+fn requests_v0_1_1_migrations_and_squash_match_fixture() {
+  assert_case(REQUESTS_V0_1_1_CASE);
+}
+
+#[test]
 fn requests_v0_2_0_migrations_and_squash_match_fixture() {
-  assert_case(REQUESTS_CASE);
+  assert_case(REQUESTS_V0_2_0_CASE);
 }
 
 #[test]
@@ -179,7 +202,7 @@ fn run_incremental(path: &Path, case: DbCase) -> DbState {
     Bootstrap {
       sql: case.target_snapshot,
     },
-    case.migrations,
+    migrations_through(case),
   )
   .unwrap();
   dump_state(&conn)
@@ -193,13 +216,13 @@ fn run_squash(path: &Path, case: DbCase) -> DbState {
       path,
       case.name,
       Bootstrap { sql: REQUESTS_V0_1_1 },
-      &case.migrations[..case.squash_start_version as usize],
+      migrations_through_version(case.migrations, case.squash_start_version),
     )
     .unwrap();
   }
   let conn = Connection::open(path).unwrap();
   conn.execute_batch(case.target_squash).unwrap();
-  mark_versions_after(&conn, case.migrations, case.squash_start_version);
+  mark_versions_after(&conn, case);
   dump_state(&conn)
 }
 
@@ -247,8 +270,25 @@ fn ensure_schema_table(conn: &Connection) {
     .unwrap();
 }
 
-fn mark_versions_after(conn: &Connection, migrations: &[Migration], start_version: u32) {
-  for migration in migrations.iter().filter(|m| m.version > start_version) {
+fn migrations_through(case: DbCase) -> &'static [Migration] {
+  migrations_through_version(case.migrations, case.target_version)
+}
+
+fn migrations_through_version(migrations: &'static [Migration], version: u32) -> &'static [Migration] {
+  let end = migrations
+    .iter()
+    .position(|m| m.version == version)
+    .map(|idx| idx + 1)
+    .expect("target migration version must exist");
+  &migrations[..end]
+}
+
+fn mark_versions_after(conn: &Connection, case: DbCase) {
+  for migration in case
+    .migrations
+    .iter()
+    .filter(|m| m.version > case.squash_start_version && m.version <= case.target_version)
+  {
     conn
       .execute(
         "INSERT INTO schema_migrations (version, name, applied_ts) VALUES (?1, ?2, 0)",
