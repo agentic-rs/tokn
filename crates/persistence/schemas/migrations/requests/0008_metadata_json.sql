@@ -11,6 +11,7 @@ ALTER TABLE request_connection RENAME TO request_connection_legacy;
 CREATE TABLE request_connection (
   request_id TEXT PRIMARY KEY,
   ts INTEGER NOT NULL,
+  ver TEXT,
   endpoint TEXT,
   status INTEGER,
   request_error TEXT,
@@ -22,6 +23,7 @@ CREATE INDEX idx_request_connection_ts ON request_connection(ts);
 INSERT INTO request_connection (
   request_id,
   ts,
+  ver,
   endpoint,
   status,
   request_error,
@@ -31,6 +33,7 @@ INSERT INTO request_connection (
 SELECT
   request_id,
   ts,
+  NULL,
   endpoint,
   status,
   request_error,
@@ -145,6 +148,7 @@ SELECT
   c.ts,
   m.session_id,
   c.request_id,
+  c.ver,
   c.request_error,
   c.endpoint,
   m.account_id,

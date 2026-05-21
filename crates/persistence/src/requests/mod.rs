@@ -303,6 +303,7 @@ mod tests {
         &[
           "request_id",
           "ts",
+          "ver",
           "endpoint",
           "status",
           "request_error",

@@ -40,6 +40,7 @@
       "columns": [
         "request_id",
         "ts",
+        "ver",
         "endpoint",
         "status",
         "request_error",

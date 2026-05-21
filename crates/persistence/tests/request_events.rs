@@ -223,6 +223,7 @@ fn happy_path_persists_all_stages() {
   h.handle(&r2(req, 0, completed(true, 1)));
 
   let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["ver"]).as_deref(), Some(tokn_core::util::version::full()));
   assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("responses"));
   assert_eq!(as_text(&row["model"]).as_deref(), Some("client-model"));
   assert_eq!(

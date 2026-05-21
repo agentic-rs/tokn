@@ -181,14 +181,15 @@ impl RequestEventHandler {
     let id = composite_request_id(request_id, attempt);
     let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
-      "INSERT INTO request_connection (request_id, ts, endpoint)
-       VALUES (?1, ?2, ?3)
+      "INSERT INTO request_connection (request_id, ts, ver, endpoint)
+       VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(request_id) DO UPDATE SET
+         ver = COALESCE(request_connection.ver, excluded.ver),
          endpoint = CASE
            WHEN request_connection.endpoint = '' THEN excluded.endpoint
            ELSE request_connection.endpoint
          END",
-      params![id, ts, endpoint],
+      params![id, ts, tokn_core::util::version::full(), endpoint],
     )?;
     self.db.pin_request(&id, ts);
     Ok(())

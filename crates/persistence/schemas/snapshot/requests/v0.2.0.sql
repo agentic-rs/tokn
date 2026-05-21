@@ -6,6 +6,7 @@
 CREATE TABLE request_connection (
   request_id TEXT PRIMARY KEY,
   ts INTEGER NOT NULL,
+  ver TEXT,
   endpoint TEXT,
   status INTEGER,
   request_error TEXT,
@@ -55,6 +56,7 @@ SELECT
   c.ts,
   m.session_id,
   c.request_id,
+  c.ver,
   c.request_error,
   c.endpoint,
   m.account_id,
