@@ -18,27 +18,27 @@ pub struct UsageRecord<'a> {
   pub stream: bool,
 }
 
-const BOOTSTRAP: &str = include_str!("../migrations/usage/000_bootstrap.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
     name: "initial",
-    sql: include_str!("../migrations/usage/001_initial.sql"),
+    sql: include_str!("../schemas/snapshot/usage/v0.0.0.sql"),
   },
   migrate::Migration {
     version: 2,
     name: "add_correlation_ids",
-    sql: include_str!("../migrations/usage/002_add_correlation_ids.sql"),
+    sql: include_str!("../schemas/migrations/usage/0002_add_correlation_ids.sql"),
   },
   migrate::Migration {
     version: 3,
     name: "lifecycle_columns",
-    sql: include_str!("../migrations/usage/003_lifecycle_columns.sql"),
+    sql: include_str!("../schemas/migrations/usage/0003_lifecycle_columns.sql"),
   },
   migrate::Migration {
     version: 4,
     name: "add_usage_breakdown",
-    sql: include_str!("../migrations/usage/004_add_usage_breakdown.sql"),
+    sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
   },
 ];
 

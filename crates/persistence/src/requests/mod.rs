@@ -22,37 +22,37 @@ pub mod stages;
 pub use stages::RequestEventHandler;
 
 const CACHE_CAP: usize = 3;
-pub(crate) const BOOTSTRAP: &str = include_str!("../../migrations/requests/000_bootstrap.sql");
+pub(crate) const BOOTSTRAP: &str = include_str!("../../schemas/snapshot/requests/v0.1.1.sql");
 pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
     name: "initial",
-    sql: include_str!("../../migrations/requests/001_initial.sql"),
+    sql: include_str!("../../schemas/snapshot/requests/v0.0.0.sql"),
   },
   migrate::Migration {
     version: 2,
     name: "add_correlation_and_error",
-    sql: include_str!("../../migrations/requests/002_add_correlation_and_error.sql"),
+    sql: include_str!("../../schemas/migrations/requests/0002_add_correlation_and_error.sql"),
   },
   migrate::Migration {
     version: 3,
     name: "add_usage_breakdown",
-    sql: include_str!("../../migrations/requests/003_add_usage_breakdown.sql"),
+    sql: include_str!("../../schemas/migrations/requests/0003_add_usage_breakdown.sql"),
   },
   migrate::Migration {
     version: 4,
     name: "add_response_header_latency",
-    sql: include_str!("../../migrations/requests/004_add_response_header_latency.sql"),
+    sql: include_str!("../../schemas/migrations/requests/0004_add_response_header_latency.sql"),
   },
   migrate::Migration {
     version: 5,
     name: "add_source_and_method",
-    sql: include_str!("../../migrations/requests/005_add_source_and_method.sql"),
+    sql: include_str!("../../schemas/migrations/requests/0005_add_source_and_method.sql"),
   },
   migrate::Migration {
     version: 6,
     name: "add_context_and_metrics",
-    sql: include_str!("../../migrations/requests/006_add_context_and_metrics.sql"),
+    sql: include_str!("../../schemas/migrations/requests/0006_add_context_and_metrics.sql"),
   },
 ];
 

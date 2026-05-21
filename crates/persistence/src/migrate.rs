@@ -8,7 +8,7 @@
 //!
 //! Conventions enforced by `apply`:
 //!   * Versions in the slice must be strictly increasing and start at 1.
-//!   * Version 0 is reserved for `000_bootstrap.sql`, applied transparently
+//!   * Version 0 is reserved for the current snapshot SQL, applied transparently
 //!     when opening a structurally empty database (no user tables) — it
 //!     installs the canonical current schema in one shot and marks all
 //!     known migration versions as applied.
@@ -16,7 +16,7 @@
 //!     `migration --rollback` can restore the pre-sequence state. No
 //!     backup is taken when there is nothing to do.
 //!
-//! See `crates/persistence/migrations/<db>/{000_bootstrap,NNN_name}.sql` for the
+//! See `crates/persistence/schemas/{snapshot,migrations}/<db>/...` for the
 //! authoritative schema definitions.
 
 use rusqlite::{params, Connection};

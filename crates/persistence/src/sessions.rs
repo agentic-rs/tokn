@@ -16,11 +16,11 @@ pub struct SessionRecord<'a> {
   pub messages: &'a [MessageRecord],
 }
 
-const BOOTSTRAP: &str = include_str!("../migrations/sessions/000_bootstrap.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
   version: 1,
   name: "initial",
-  sql: include_str!("../migrations/sessions/001_initial.sql"),
+  sql: include_str!("../schemas/snapshot/sessions/v0.0.0.sql"),
 }];
 
 pub fn latest_version() -> u32 {
