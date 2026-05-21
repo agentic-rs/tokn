@@ -3,9 +3,10 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 COPY Cargo.toml ./
+COPY Cargo.lock ./
 COPY crates ./crates
 
-RUN cargo build --release --package tokn-gateway-cli --bin tokn-gateway
+RUN cargo build --locked --release --package tokn-gateway-cli --bin tokn-gateway
 
 FROM debian:bookworm-slim
 

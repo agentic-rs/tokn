@@ -12,6 +12,7 @@ members = [
   "crates/endpoint-chat-completions",
   "crates/endpoint-responses",
   "crates/endpoint-messages",
+  "crates/headers",
   "crates/router",
   "crates/requests",
   "crates/accounts",
