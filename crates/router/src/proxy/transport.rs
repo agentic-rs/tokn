@@ -253,16 +253,16 @@ async fn route_intercepted_request(
       }
       _ => unreachable!(),
     };
-    return Ok(
-      response
-        .inspect(|b| {
-          if !b.status().is_success() {
-            tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "proxy mode request failed");
-          }
-        })
-        .inspect_err(|err| tracing::warn!(%host, error = %err, "proxy mode failed"))
-        .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
-    );
+    let mut response = response
+      .inspect(|b| {
+        if !b.status().is_success() {
+          tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "proxy mode request failed");
+        }
+      })
+      .inspect_err(|err| tracing::warn!(%host, error = %err, "proxy mode failed"))
+      .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
+    close_intercepted_connection_on_error(&mut response);
+    return Ok(response);
   }
   if let Err(err) = &resolved_mode {
     return Ok(ApiError::bad_request(err.to_string()).into_response());
@@ -404,6 +404,15 @@ fn is_websocket_upgrade_headers(headers: &HeaderMap) -> bool {
     .unwrap_or(false)
 }
 
+fn close_intercepted_connection_on_error(response: &mut Response<Body>) {
+  if response.status().is_success() {
+    return;
+  }
+  response
+    .headers_mut()
+    .insert(CONNECTION, HeaderValue::from_static("close"));
+}
+
 fn websocket_upgrade_response() -> Response<Body> {
   let mut resp = Response::new(Body::empty());
   *resp.status_mut() = axum::http::StatusCode::UPGRADE_REQUIRED;
@@ -414,4 +423,33 @@ fn websocket_upgrade_response() -> Response<Body> {
     .headers_mut()
     .insert(UPGRADE, HeaderValue::from_static("websocket"));
   resp
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::http::StatusCode;
+
+  #[test]
+  fn error_responses_close_intercepted_connection() {
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::FORBIDDEN;
+
+    close_intercepted_connection_on_error(&mut resp);
+
+    assert_eq!(
+      resp.headers().get(CONNECTION).and_then(|v| v.to_str().ok()),
+      Some("close")
+    );
+  }
+
+  #[test]
+  fn success_responses_keep_existing_connection_policy() {
+    let mut resp = Response::new(Body::empty());
+    *resp.status_mut() = StatusCode::OK;
+
+    close_intercepted_connection_on_error(&mut resp);
+
+    assert!(resp.headers().get(CONNECTION).is_none());
+  }
 }
