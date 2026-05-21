@@ -6,10 +6,10 @@ use directories::ProjectDirs;
 pub use error::{Error, Result};
 pub use tokn_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
 
-use tokn_core::provider::ID_GITHUB_COPILOT;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::path::{Path, PathBuf};
+use tokn_core::provider::ID_GITHUB_COPILOT;
 
 pub const DEFAULT_PORT: u16 = 4141;
 pub const DEFAULT_HOST: &str = "127.0.0.1";

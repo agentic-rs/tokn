@@ -10,9 +10,9 @@
 //! depend on both.
 
 use async_trait::async_trait;
-use tokn_core::account::AccountConfig;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokn_core::account::AccountConfig;
 
 /// Outcome of a successful device-flow login (currently only used by
 /// github-copilot). The caller is responsible for assembling these fields

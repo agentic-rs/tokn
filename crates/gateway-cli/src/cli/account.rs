@@ -6,10 +6,10 @@ use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
-use tokn_auth::AuthStore;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
+use tokn_auth::AuthStore;
 
 #[derive(Subcommand, Debug)]
 pub enum AccountCmd {

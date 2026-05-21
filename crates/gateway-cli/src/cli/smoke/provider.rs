@@ -3,10 +3,10 @@ use super::OutputFormat;
 use crate::config::Config;
 use anyhow::{anyhow, Result};
 use clap::Args;
-use tokn_core::provider::{match_endpoint_rule, Endpoint, ModelInfo};
-use tokn_router::accounts::registry::Registry;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use tokn_core::provider::{match_endpoint_rule, Endpoint, ModelInfo};
+use tokn_router::accounts::registry::Registry;
 
 #[derive(Args, Debug)]
 pub struct ProviderArgs {

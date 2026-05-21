@@ -34,12 +34,12 @@ use axum::http::{HeaderValue, Request, Response};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::header::HOST;
+use smol_str::SmolStr;
 use tokn_accounts::routing::ResolveError;
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::provider::Endpoint;
 use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use tokn_requests::pipeline::error::RequestsError;
-use smol_str::SmolStr;
 
 /// Dispatch an intercepted MITM request through the proxy-passthrough
 /// pipeline.

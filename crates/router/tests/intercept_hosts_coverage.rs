@@ -6,8 +6,8 @@
 
 #[test]
 fn proxy_intercept_hosts_cover_all_descriptor_hosts() {
-  use tokn_accounts::registry::Registry;
   use std::collections::HashSet;
+  use tokn_accounts::registry::Registry;
 
   let registry = Registry::builtin();
   // `INTERCEPT_HOSTS` is `pub(crate)` in router; re-export it via a tiny

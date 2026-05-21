@@ -9,9 +9,9 @@ pub use tokn_core::{account as config, provider, util};
 
 pub use deepseek::*;
 
+use std::sync::Arc;
 use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use tokn_auth::provider::CredentialFlavor;
-use std::sync::Arc;
 
 pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Messages];
 

@@ -1,8 +1,8 @@
 use crate::config::Config;
 use anyhow::{anyhow, Result};
 use clap::Args;
-use tokn_auth::AuthStore;
 use std::path::PathBuf;
+use tokn_auth::AuthStore;
 
 #[derive(Args, Debug)]
 pub struct HeadersArgs {

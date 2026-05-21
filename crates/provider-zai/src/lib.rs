@@ -13,9 +13,9 @@ pub use tokn_core::{account as config, provider, util};
 
 pub use zai::*;
 
+use std::sync::Arc;
 use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use tokn_auth::provider::CredentialFlavor;
-use std::sync::Arc;
 
 const ZAI_HOSTS: &[&str] = &["api.z.ai"];
 const ZHIPU_HOSTS: &[&str] = &["open.bigmodel.cn"];

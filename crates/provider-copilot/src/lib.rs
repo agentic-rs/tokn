@@ -18,9 +18,9 @@ pub use tokn_core::{provider, util};
 
 pub use github_copilot::*;
 
+use std::sync::Arc;
 use tokn_auth::descriptor::{EndpointSpec, ProviderDescriptor};
 use tokn_auth::provider::CredentialFlavor;
-use std::sync::Arc;
 
 pub const COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 pub const COPILOT_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";

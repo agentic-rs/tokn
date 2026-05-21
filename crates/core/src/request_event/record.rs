@@ -24,8 +24,8 @@
 
 use crate::db::Usage;
 use bytes::Bytes;
-use tokn_headers::HeaderMap;
 use smol_str::SmolStr;
+use tokn_headers::HeaderMap;
 
 /// Wire-truth capture from the actual outbound HTTP call (via
 /// [`OutboundCapture`](crate::provider::OutboundCapture)).

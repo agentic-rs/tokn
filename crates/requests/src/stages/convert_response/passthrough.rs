@@ -218,10 +218,10 @@ mod tests {
   use crate::event::{EventBus, EventPayload};
   use bytes::Bytes;
   use futures_util::StreamExt;
-  use tokn_core::provider::Endpoint;
-  use tokn_headers::HeaderMap;
   use std::sync::Arc;
   use std::time::Duration;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::HeaderMap;
 
   fn ctx() -> (PipelineCtx, Arc<EventBus>) {
     let events = Arc::new(EventBus::new(128));

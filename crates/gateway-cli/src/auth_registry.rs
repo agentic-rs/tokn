@@ -6,9 +6,9 @@
 //! on every [`tokn_auth::ProviderDescriptor`]. Adding a new provider only
 //! requires registering its descriptor; this module needs no edits.
 
+use std::sync::OnceLock;
 use tokn_auth::ProviderAuth;
 use tokn_router::accounts::registry::Registry;
-use std::sync::OnceLock;
 
 fn registry() -> &'static Registry {
   static R: OnceLock<Registry> = OnceLock::new();

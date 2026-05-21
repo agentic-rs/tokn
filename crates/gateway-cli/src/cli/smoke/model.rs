@@ -2,11 +2,11 @@ use super::provider::endpoints_for_model;
 use super::OutputFormat;
 use anyhow::Result;
 use clap::Args;
-use tokn_core::provider::{Capabilities, Cost, Limits, Modalities, ModelInfo};
-use tokn_router::accounts::registry::Registry;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
+use tokn_core::provider::{Capabilities, Cost, Limits, Modalities, ModelInfo};
+use tokn_router::accounts::registry::Registry;
 
 #[derive(Args, Debug)]
 pub struct ModelArgs {

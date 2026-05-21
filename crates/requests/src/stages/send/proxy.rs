@@ -22,9 +22,9 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
+use smol_str::SmolStr;
 use tokn_core::provider::HeaderPatchCtx;
 use tokn_headers::HeaderMap;
-use smol_str::SmolStr;
 use tracing::{debug, instrument, warn};
 
 use crate::stages::resolve::proxy::keys;
@@ -235,11 +235,11 @@ mod tests {
   use crate::stages::resolve::proxy::ProxyResolve;
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
-  use tokn_core::provider::Endpoint;
-  use tokn_headers::{HeaderName, HeaderValue};
   use serde_json::Value;
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::{HeaderName, HeaderValue};
 
   fn ctx_with(config: RunConfig) -> PipelineCtx {
     PipelineCtx::new_with_config(

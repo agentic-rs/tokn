@@ -28,11 +28,11 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
+use smol_str::SmolStr;
+use std::collections::HashMap;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tokn_headers::{HeaderMap, Persona, TemplateVars};
-use smol_str::SmolStr;
-use std::collections::HashMap;
 
 /// Inbound header names (lowercase) scanned, in order, to populate
 /// [`TemplateVars::session_id`]. Mirrors `tokn_router::api::SESSION_ID_HEADERS`.
@@ -191,10 +191,10 @@ mod tests {
   use crate::pipeline::ctx::PipelineCtx;
   use crate::pipeline::stages::Extracted;
   use bytes::Bytes;
-  use tokn_core::provider::Endpoint;
-  use tokn_headers::{keys, HeaderValue};
   use serde_json::json;
   use std::sync::Arc;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::{keys, HeaderValue};
 
   fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
     let mut m = HeaderMap::new();

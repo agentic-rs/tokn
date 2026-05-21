@@ -17,9 +17,9 @@
 //! can carry a `build_auth: fn() -> &'static dyn ProviderAuth` field
 //! without creating a `core ↔ auth` dependency cycle.
 
+use std::sync::Arc;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{Endpoint, EndpointRule, Provider, Result};
-use std::sync::Arc;
 
 use crate::provider::{CredentialFlavor, ProviderAuth};
 

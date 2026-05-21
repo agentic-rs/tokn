@@ -1,14 +1,14 @@
 use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
 use crate::routing::{RouteResolution, RouteSelector};
-use tokn_config::Config;
-use tokn_core::account::{AccountConfig, AccountTier};
-use tokn_core::provider::{Endpoint, Provider};
 use snafu::{ResultExt, Snafu};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokn_config::Config;
+use tokn_core::account::{AccountConfig, AccountTier};
+use tokn_core::provider::{Endpoint, Provider};
 use tracing::{debug, info};
 
 /// Errors that can occur while constructing or querying an [`AccountPool`].
@@ -494,10 +494,10 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 mod tests {
   use super::*;
   use async_trait::async_trait;
+  use serde_json::Value;
   use tokn_core::provider::{
     AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
   };
-  use serde_json::Value;
 
   struct MockProvider {
     info: ProviderInfo,

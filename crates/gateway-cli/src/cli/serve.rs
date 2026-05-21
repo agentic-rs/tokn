@@ -2,9 +2,9 @@ use crate::cli::config_cmd::RouteModeArg;
 use crate::config::Config;
 use anyhow::{Context, Result};
 use clap::Args;
-use tokn_config::RouteMode;
 use std::path::PathBuf;
 use tokio::sync::watch;
+use tokn_config::RouteMode;
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {

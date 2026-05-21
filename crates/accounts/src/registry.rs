@@ -1,8 +1,8 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
 use tokn_auth::descriptor::{ProviderDescriptor, RewriteTarget};
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{error, Endpoint, Provider, Result};
-use std::collections::BTreeMap;
-use std::sync::Arc;
 
 pub struct Registry {
   descriptors: BTreeMap<&'static str, &'static ProviderDescriptor>,

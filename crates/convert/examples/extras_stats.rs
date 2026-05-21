@@ -19,11 +19,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use rusqlite::{Connection, OpenFlags};
 use tokn_endpoint_chat_completions::{ChatEvent, ChatRequest, ChatResponse};
 use tokn_endpoint_core::ExtraKeys;
 use tokn_endpoint_messages::{MessagesEvent, MessagesRequest, MessagesResponse};
 use tokn_endpoint_responses::{ResponsesEvent, ResponsesRequest, ResponsesResponse};
-use rusqlite::{Connection, OpenFlags};
 
 const DEFAULT_LIMIT: usize = 1000;
 const ENDPOINTS: &[&str] = &["chat_completions", "responses", "messages"];

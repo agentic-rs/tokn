@@ -25,11 +25,11 @@ use bytes::Bytes;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use tokn_headers::keys::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
-use tokn_headers::{HeaderMap, HeaderValue};
 use serde_json::Value;
 use snafu::Snafu;
 use std::io::{Read, Write};
+use tokn_headers::keys::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH};
+use tokn_headers::{HeaderMap, HeaderValue};
 
 /// `Vary` is not currently exported from `tokn_headers::keys`; keep a
 /// module-local constant so we stay aligned with the legacy router

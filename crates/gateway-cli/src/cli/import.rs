@@ -3,9 +3,9 @@ use crate::config::{Config, ProxyConfig};
 use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Result};
 use clap::Args;
-use tokn_auth::{AuthStore, CredentialFlavor};
 use std::io::Read;
 use std::path::PathBuf;
+use tokn_auth::{AuthStore, CredentialFlavor};
 
 /// `account import` — non-interactive credential import.
 ///

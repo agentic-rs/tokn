@@ -29,9 +29,9 @@
 //! verify the new file. The next loader pass will ignore it (yaml wins).
 
 use anyhow::{Context, Result};
-use tokn_core::account::AccountConfig;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tokn_core::account::AccountConfig;
 
 const CURRENT_VERSION: u32 = 1;
 const AUTH_FILE_NAME: &str = "auth.yaml";

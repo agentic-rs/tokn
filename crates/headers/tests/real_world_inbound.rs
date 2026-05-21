@@ -14,8 +14,8 @@
 
 use std::collections::BTreeSet;
 
-use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 
 const FIXTURE_JSON: &str = include_str!("fixtures/inbound_real_world.json");
 const USER_AGENTS_JSON: &str = include_str!("fixtures/user_agents.json");

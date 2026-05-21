@@ -1,8 +1,8 @@
 use super::{migrate, MessageRecord, PartRecord, Result};
-use tokn_core::db::SessionSource;
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::path::Path;
+use tokn_core::db::SessionSource;
 use tracing::{debug, trace};
 
 pub struct SessionRecord<'a> {

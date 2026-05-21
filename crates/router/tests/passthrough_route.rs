@@ -22,14 +22,14 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokn_core::account::{AccountConfig, AccountTier, AuthType};
 use tokn_core::event::EventBus;
 use tokn_router::api::build_state;
 use tokn_router::api::router;
 use tokn_router::config::{Account as AccountCfg, Config};
 use tokn_router::util::secret::Secret;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 fn test_account(base_url: String) -> AccountCfg {

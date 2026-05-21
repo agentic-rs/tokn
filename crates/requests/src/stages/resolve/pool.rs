@@ -16,9 +16,9 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::Extracted;
 use async_trait::async_trait;
-use tokn_accounts::{AccountPool, EndpointAcquire, RouteResolver};
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_accounts::{AccountPool, EndpointAcquire, RouteResolver};
 
 pub struct PoolAccountSelector {
   pool: Arc<AccountPool>,

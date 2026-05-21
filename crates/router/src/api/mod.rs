@@ -11,6 +11,9 @@ use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
 use axum::routing::{get, post};
 use axum::Router;
+use parking_lot::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
 use tokn_accounts::registry::Registry as ProviderRegistry;
 use tokn_accounts::routing::RouteResolver;
 use tokn_accounts::AccountPool;
@@ -18,11 +21,9 @@ use tokn_config::Config;
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
 use tokn_core::event::EventBus;
-use parking_lot::Mutex;
-use std::sync::Arc;
-use std::time::Duration;
 
-const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy = tokn_requests::RetryPolicy::new(2, Duration::from_millis(100));
+const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy =
+  tokn_requests::RetryPolicy::new(2, Duration::from_millis(100));
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};

@@ -6,15 +6,15 @@ use crate::config::{CopilotHeaders, InitiatorMode};
 use crate::util::redact::BehaveAs;
 use crate::util::secret::Secret;
 use async_trait::async_trait;
-use tokn_core::account::AccountConfig;
-use tokn_core::pipeline::InputTransformer;
-use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
-use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use parking_lot::RwLock;
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex as AsyncMutex;
+use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
+use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
+use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{debug, instrument};
 
 use crate::{

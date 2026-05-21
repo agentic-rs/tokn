@@ -2,13 +2,13 @@ use crate::cli::config_cmd::RouteModeArg;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use tokn_config::RouteMode;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use tokn_config::RouteMode;
 
 #[derive(Args, Debug)]
 pub struct ProxyArgs {

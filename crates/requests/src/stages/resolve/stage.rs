@@ -13,10 +13,10 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
-use tokn_accounts::AccountHandle;
-use tokn_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_accounts::AccountHandle;
+use tokn_core::provider::Endpoint;
 
 /// Outcome of consulting an account pool for a given extracted request.
 pub enum SelectorOutcome {

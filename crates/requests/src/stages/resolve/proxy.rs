@@ -24,13 +24,13 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
 use async_trait::async_trait;
+use serde_json::Value;
+use smol_str::SmolStr;
+use std::sync::Arc;
 use tokn_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector};
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
-use serde_json::Value;
-use smol_str::SmolStr;
-use std::sync::Arc;
 
 /// Config keys consumed by [`ProxyResolve`]. The proxy transport layer
 /// is responsible for populating these before calling

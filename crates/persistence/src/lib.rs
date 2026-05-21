@@ -7,10 +7,10 @@ pub mod usage;
 pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
+use snafu::Snafu;
 pub use tokn_core::db::{DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
 pub(crate) use tokn_core::db::{Usage, UsageDetails};
-use snafu::Snafu;
 pub use usage::UsageDb;
 
 /// Serialise an HTTP header map to JSON bytes, redacting values whose name

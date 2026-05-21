@@ -19,6 +19,8 @@
 use axum::body::to_bytes;
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokn_config::RouteMode;
 use tokn_core::account::{AccountTier, AuthType};
 use tokn_core::event::EventBus;
@@ -26,8 +28,6 @@ use tokn_router::api::build_state;
 use tokn_router::config::Config;
 use tokn_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
 use tokn_router::util::secret::Secret;
-use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn openai_account() -> tokn_router::config::Account {
   tokn_router::config::Account {

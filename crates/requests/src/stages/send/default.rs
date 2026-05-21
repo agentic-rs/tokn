@@ -19,10 +19,10 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
 use async_trait::async_trait;
+use smol_str::SmolStr;
 use tokn_core::provider::{new_outbound_capture, Endpoint, RequestCtx};
 use tokn_core::request_event::RecordEvent;
 use tokn_headers::HeaderMap;
-use smol_str::SmolStr;
 use tracing::{debug, instrument, warn};
 
 pub struct DefaultSend {
@@ -202,10 +202,10 @@ mod tests {
   use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
-  use tokn_core::provider::{Endpoint, Result as ProviderResult};
   use serde_json::Value;
   use smol_str::SmolStr;
   use std::sync::Arc;
+  use tokn_core::provider::{Endpoint, Result as ProviderResult};
 
   fn ctx() -> PipelineCtx {
     PipelineCtx::new("req-send", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))

@@ -1,11 +1,11 @@
 use crate::common::{self, Credential};
 use async_trait::async_trait;
-use tokn_core::account::AccountConfig;
-use tokn_headers::keys::CHATGPT_ACCOUNT_ID;
-use tokn_headers::{HeaderMap, HeaderValue};
 use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
+use tokn_core::account::AccountConfig;
+use tokn_headers::keys::CHATGPT_ACCOUNT_ID;
+use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
 
 use crate::{

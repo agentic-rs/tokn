@@ -7,9 +7,9 @@ use crate::util::http::build_client;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use inquire::{Confirm, Select, Text};
+use std::path::PathBuf;
 use tokn_auth::AuthStore;
 use tokn_config::RouteMode;
-use std::path::PathBuf;
 use toml_edit::{value, Array, DocumentMut, Item, Table, Value as EditValue};
 
 #[derive(Args, Debug)]

@@ -19,11 +19,11 @@
 use crate::provider::Endpoint;
 use crate::ClientId;
 use bytes::Bytes;
-use tokn_headers::{HeaderMap, TemplateVars};
 use serde::Serialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_headers::{HeaderMap, TemplateVars};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]

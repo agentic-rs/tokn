@@ -1,5 +1,5 @@
-use tokn_endpoint_responses::{InputItem, ResponsesEvent, ResponsesRequest, ResponsesResponse};
 use serde_json::json;
+use tokn_endpoint_responses::{InputItem, ResponsesEvent, ResponsesRequest, ResponsesResponse};
 
 #[test]
 fn round_trip_request_with_mixed_input_items() {

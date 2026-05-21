@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
+use std::collections::HashMap;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::ID_GITHUB_COPILOT;
-use std::collections::HashMap;
 
 use tokn_accounts::registry::Registry;
 

@@ -42,11 +42,11 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use bytes::Bytes;
-  use tokn_core::provider::Endpoint;
-  use tokn_headers::HeaderMap;
   use serde_json::json;
   use smol_str::SmolStr;
   use std::sync::Arc;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::HeaderMap;
 
   fn ctx() -> PipelineCtx {
     PipelineCtx::new("req", Endpoint::ChatCompletions, Arc::new(EventBus::new(16)))

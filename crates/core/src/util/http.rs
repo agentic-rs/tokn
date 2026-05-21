@@ -1,10 +1,10 @@
 use anyhow::Result;
 use bytes::Bytes;
-use tokn_headers::HeaderMap;
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use snafu::ResultExt;
 use std::time::Duration;
+use tokn_headers::HeaderMap;
 
 #[derive(Debug, Clone, Default)]
 pub struct HttpClientOptions {

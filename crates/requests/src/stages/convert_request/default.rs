@@ -101,10 +101,10 @@ mod tests {
   use crate::pipeline::stages::{Extracted, Resolved};
   use crate::test_support::{mock_handle, mock_handle_with_provider, MockProvider};
   use crate::utils::codec::{decode_body_bytes, encode_body_bytes, ContentEncodingKind};
+  use std::sync::Arc;
   use tokn_core::pipeline::InputTransformer;
   use tokn_core::provider::{Endpoint, Result as ProviderResult};
   use tokn_headers::HeaderMap;
-  use std::sync::Arc;
 
   fn ctx_at(endpoint: Endpoint) -> PipelineCtx {
     PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))

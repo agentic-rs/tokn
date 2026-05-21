@@ -1,5 +1,5 @@
-use tokn_config::profiles::{is_router_controlled, normalize_header_name, warn_if_unverified, Profiles, TemplateVars};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use tokn_config::profiles::{is_router_controlled, normalize_header_name, warn_if_unverified, Profiles, TemplateVars};
 
 #[derive(Debug, Clone)]
 pub struct HeaderPipelineInput<'a> {

@@ -120,11 +120,11 @@ mod tests {
   use crate::event::EventBus;
   use crate::pipeline::ctx::PipelineCtx;
   use bytes::Bytes;
-  use tokn_core::provider::Endpoint;
-  use tokn_headers::{HeaderName, HeaderValue};
   use serde_json::json;
   use smol_str::SmolStr;
   use std::sync::Arc;
+  use tokn_core::provider::Endpoint;
+  use tokn_headers::{HeaderName, HeaderValue};
 
   fn header_map(pairs: &[(&str, &str)]) -> HeaderMap {
     let mut m = HeaderMap::new();

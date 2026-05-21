@@ -1,6 +1,11 @@
 //! Integration tests for the requests event-driven persistence handler.
 
 use bytes::Bytes;
+use rusqlite::{params, Connection};
+use serde_json::Value;
+use smol_str::SmolStr;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokn_core::db::{Usage, UsageDetails};
 use tokn_core::event::{Event, EventHandler};
 use tokn_core::provider::Endpoint;
@@ -12,11 +17,6 @@ use tokn_core::request_event::RecordEvent;
 use tokn_core::request_event::{EndpointLabel, RequestEvent, RequestEventPayload};
 use tokn_headers::{HeaderMap, TemplateVars};
 use tokn_persistence::RequestEventHandler;
-use rusqlite::{params, Connection};
-use serde_json::Value;
-use smol_str::SmolStr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 fn tempdir() -> PathBuf {
   let p = std::env::temp_dir().join(format!("tokn-router-r2-evt-{}", uuid::Uuid::new_v4()));

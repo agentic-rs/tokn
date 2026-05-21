@@ -13,6 +13,12 @@
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use serde_json::Value;
+use smol_str::SmolStr;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokn_accounts::AccountHandle;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{
@@ -26,12 +32,6 @@ use tokn_requests::stages::{
   NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
-use serde_json::Value;
-use smol_str::SmolStr;
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Minimal `Provider` used only to satisfy the new typed
 /// `AccountHandle` requirement on `SelectorOutcome::Selected`.

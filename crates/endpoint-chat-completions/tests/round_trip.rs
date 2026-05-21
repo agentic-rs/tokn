@@ -1,5 +1,5 @@
-use tokn_endpoint_chat_completions::{ChatChunk, ChatEvent, ChatRequest, ChatResponse};
 use serde_json::json;
+use tokn_endpoint_chat_completions::{ChatChunk, ChatEvent, ChatRequest, ChatResponse};
 
 #[test]
 fn round_trip_request() {

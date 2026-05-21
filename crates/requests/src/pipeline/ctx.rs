@@ -10,10 +10,10 @@
 
 use crate::event::{CustomEvent, Event, EventBus, EventPayload, RecordEvent, StageEvent};
 use crate::pipeline::config::RunConfig;
-use tokn_core::event::Event as CoreEvent;
-use tokn_core::provider::Endpoint;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::provider::Endpoint;
 
 pub struct PipelineCtx {
   pub request_id: SmolStr,

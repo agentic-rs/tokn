@@ -19,14 +19,14 @@ use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use tokn_accounts::AccountHandle;
-use tokn_core::provider::Endpoint;
-use tokn_core::ClientId;
-use tokn_headers::{HeaderMap, TemplateVars};
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokn_accounts::AccountHandle;
+use tokn_core::provider::Endpoint;
+use tokn_core::ClientId;
+use tokn_headers::{HeaderMap, TemplateVars};
 
 #[derive(Clone)]
 pub(crate) struct AccumHelper {

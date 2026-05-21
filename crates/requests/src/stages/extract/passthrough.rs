@@ -21,12 +21,12 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{ExtractStage, Extracted, RawInbound};
 use crate::utils::codec::request_content_encoding;
 use async_trait::async_trait;
-use tokn_core::ClientId;
-use tokn_headers::HeaderMap;
 use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_core::ClientId;
+use tokn_headers::HeaderMap;
 
 const SESSION_ID_HEADERS: &[&str] = &[
   "x-session-id",
@@ -141,8 +141,8 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use bytes::Bytes;
-  use tokn_core::provider::Endpoint;
   use std::sync::Arc;
+  use tokn_core::provider::Endpoint;
 
   fn ctx() -> PipelineCtx {
     PipelineCtx::new(

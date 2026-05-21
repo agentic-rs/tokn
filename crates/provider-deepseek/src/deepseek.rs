@@ -1,12 +1,12 @@
 use crate::util::secret::Secret;
 use async_trait::async_trait;
+use reqwest::Method;
+use serde_json::{json, Value};
+use std::sync::Arc;
 use tokn_core::account::AccountConfig;
 use tokn_core::pipeline::InputTransformer;
 use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use tokn_headers::{HeaderMap, HeaderValue};
-use reqwest::Method;
-use serde_json::{json, Value};
-use std::sync::Arc;
 use tracing::{debug, instrument, warn};
 
 use crate::{error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_DEEPSEEK};

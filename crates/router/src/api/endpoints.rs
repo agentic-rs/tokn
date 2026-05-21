@@ -5,11 +5,11 @@ use axum::body::Bytes;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use smol_str::SmolStr;
 use tokn_accounts::routing::{route_mode_as_str, ResolveError};
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
 use tokn_requests::pipeline::error::RequestsError;
-use smol_str::SmolStr;
 use tracing::instrument;
 
 async fn handle(

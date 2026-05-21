@@ -12,10 +12,10 @@
 
 use super::{composite_request_id, RequestsDb};
 use crate::{headers_json, Result};
-use tokn_core::event::{Event, EventHandler};
-use tokn_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
 use rusqlite::params;
 use std::path::PathBuf;
+use tokn_core::event::{Event, EventHandler};
+use tokn_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
 
 /// `EventHandler` that persists requests stage events into the requests DB.
 /// Construct once and register alongside the legacy `DbEventHandler` —

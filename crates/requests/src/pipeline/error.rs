@@ -16,10 +16,10 @@
 
 use crate::event::Stage;
 use crate::utils::codec::CodecError;
-use tokn_convert::error::ConvertError;
-use tokn_core::provider::Endpoint;
 use smol_str::SmolStr;
 use snafu::Snafu;
+use tokn_convert::error::ConvertError;
+use tokn_core::provider::Endpoint;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 

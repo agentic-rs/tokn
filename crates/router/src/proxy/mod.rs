@@ -9,15 +9,15 @@ use anyhow::{Context, Result};
 use axum::http::Method;
 use axum::Router;
 pub use ca::{load_or_generate_ca, ProxyCa};
-use tokn_accounts::registry::Registry;
-use tokn_auth::descriptor::RewriteTarget;
-use tokn_core::util::http::HttpClientOptions;
 use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokn_accounts::registry::Registry;
+use tokn_auth::descriptor::RewriteTarget;
+use tokn_core::util::http::HttpClientOptions;
 use transport::handle_client;
 
 /// Full built-in intercept set. Keep this explicit so default interception

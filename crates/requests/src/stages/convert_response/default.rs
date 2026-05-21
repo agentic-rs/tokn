@@ -20,13 +20,13 @@ use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResp
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
+use serde_json::Value;
+use std::sync::Arc;
 use tokn_convert::sse::{observer_channel, EndpointTranslator, ObserverMsg, SsePipeline};
 use tokn_convert::usage::{parse_usage_any_value, usage_has_any};
 use tokn_core::provider::Endpoint;
 use tokn_core::request_event::RecordEvent;
 use tokn_headers::HeaderMap;
-use serde_json::Value;
-use std::sync::Arc;
 use tracing::{debug, instrument};
 
 pub struct DefaultConvertResponse;
@@ -183,10 +183,10 @@ mod tests {
   use crate::event::{EventBus, EventPayload};
   use crate::pipeline::stages::SentResponse;
   use futures_util::StreamExt;
+  use std::sync::Arc;
   use tokn_core::provider::Endpoint;
   use tokn_core::request_event::RecordEvent;
   use tokn_headers::HeaderMap;
-  use std::sync::Arc;
 
   fn ctx(endpoint: Endpoint) -> PipelineCtx {
     PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))

@@ -23,12 +23,12 @@
 //! invocation.
 
 use async_trait::async_trait;
+use serde::Deserialize;
+use std::time::Duration;
 use tokn_auth::{
   AuthError, DeviceCodeHandle, DeviceFlowOutcome, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome,
 };
 use tokn_core::account::AccountConfig;
-use serde::Deserialize;
-use std::time::Duration;
 
 use crate::jwt;
 use crate::{

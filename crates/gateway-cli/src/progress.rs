@@ -11,9 +11,6 @@
 use crate::db::archive::{ArchiveEvent, ArchiveEventHandler};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressDrawTarget, ProgressStyle};
-use tokn_core::db::Usage;
-use tokn_core::event::{Event, EventHandler};
-use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
@@ -21,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use time::{macros::format_description, OffsetDateTime};
+use tokn_core::db::Usage;
+use tokn_core::event::{Event, EventHandler};
+use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
 
 /// Process-wide [`MultiProgress`] shared between [`ProgressEventHandler`]
 /// and the tracing log writer (so log lines suspend the bars during

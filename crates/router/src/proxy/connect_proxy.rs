@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use ipnet::IpNet;
-use tokn_core::util::http::HttpClientOptions;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
+use tokn_core::util::http::HttpClientOptions;
 
 #[derive(Clone, Debug)]
 pub(super) struct ConnectProxy {
