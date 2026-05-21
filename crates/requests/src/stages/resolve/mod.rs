@@ -17,5 +17,5 @@ pub mod proxy;
 mod stage;
 
 pub use pool::PoolAccountSelector;
-pub use proxy::{ProxyResolve, ProxyStubProvider};
+pub use proxy::{ProxyProviderResolve, ProxyResolve, ProxyStubProvider};
 pub use stage::{AccountSelector, PoolResolve, SelectorOutcome};

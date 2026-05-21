@@ -34,9 +34,11 @@ use axum::http::{HeaderValue, Request, Response};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::header::HOST;
+use llm_accounts::routing::ResolveError;
 use llm_core::event::Event as CoreEvent;
 use llm_core::provider::Endpoint;
 use llm_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use llm_requests::pipeline::error::RequestsError;
 use smol_str::SmolStr;
 
 /// Dispatch an intercepted MITM request through the proxy-passthrough
@@ -82,6 +84,35 @@ pub(super) async fn proxy_passthrough_via_pipeline(
   )
 }
 
+pub(super) async fn proxy_switch_via_pipeline(
+  state: &AppState,
+  intercepted_host: &str,
+  intercepted_port: u16,
+  scheme: &str,
+  peer_addr: Option<String>,
+  local_addr: Option<String>,
+  req: Request<hyper::body::Incoming>,
+) -> Result<Response<Body>> {
+  let (parts, body) = req.into_parts();
+  let raw_body = axum::body::to_bytes(Body::new(body), usize::MAX)
+    .await
+    .context("read proxy switch request body")?;
+  Ok(
+    proxy_via_pipeline_inner(
+      state,
+      intercepted_host,
+      intercepted_port,
+      scheme,
+      peer_addr,
+      local_addr,
+      parts,
+      raw_body,
+      ProxyPipelineMode::Switch,
+    )
+    .await,
+  )
+}
+
 /// Inner core that does identity resolution, `RunConfig` construction,
 /// pipeline invocation, and response conversion. Split from the public
 /// wrapper so integration tests (which can't construct a real
@@ -96,8 +127,65 @@ pub async fn proxy_passthrough_via_pipeline_inner(
   scheme: &str,
   peer_addr: Option<String>,
   local_addr: Option<String>,
+  parts: Parts,
+  raw_body: Bytes,
+) -> Response<Body> {
+  proxy_via_pipeline_inner(
+    state,
+    intercepted_host,
+    intercepted_port,
+    scheme,
+    peer_addr,
+    local_addr,
+    parts,
+    raw_body,
+    ProxyPipelineMode::Passthrough,
+  )
+  .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn proxy_switch_via_pipeline_inner(
+  state: &AppState,
+  intercepted_host: &str,
+  intercepted_port: u16,
+  scheme: &str,
+  peer_addr: Option<String>,
+  local_addr: Option<String>,
+  parts: Parts,
+  raw_body: Bytes,
+) -> Response<Body> {
+  proxy_via_pipeline_inner(
+    state,
+    intercepted_host,
+    intercepted_port,
+    scheme,
+    peer_addr,
+    local_addr,
+    parts,
+    raw_body,
+    ProxyPipelineMode::Switch,
+  )
+  .await
+}
+
+#[derive(Clone, Copy)]
+enum ProxyPipelineMode {
+  Passthrough,
+  Switch,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn proxy_via_pipeline_inner(
+  state: &AppState,
+  intercepted_host: &str,
+  intercepted_port: u16,
+  scheme: &str,
+  peer_addr: Option<String>,
+  local_addr: Option<String>,
   mut parts: Parts,
   raw_body: Bytes,
+  mode: ProxyPipelineMode,
 ) -> Response<Body> {
   let path_and_query = parts
     .uri
@@ -138,19 +226,52 @@ pub async fn proxy_passthrough_via_pipeline_inner(
   // `Registry::provider_id_for_url`); `RecordEvent::InboundConnection`
   // persists it for the `requests.inbound_req_url` column.
   let full_url = format!("{scheme}://{host_with_port}{path_and_query}");
+  let mode_name = match mode {
+    ProxyPipelineMode::Passthrough => "passthrough",
+    ProxyPipelineMode::Switch => "switch",
+  };
 
-  // Identity resolution — fingerprint the inbound bearer against
-  // locally-known accounts so DB rows / events attribute the
-  // intercepted request to a concrete `account_id` + `provider_id`.
-  // Pass the full URL so descriptors with path-based `matches_url`
-  // discriminate correctly. Registry strips the port internally.
-  let identity = state
-    .identity
-    .resolve(&parts.headers, &full_url, &state.provider_registry);
-  // Fallback to the bare intercepted host (not host:port and not the
-  // full URL) so the synthetic provider_id stays stable across
-  // requests to different paths/ports on the same upstream.
-  let resolved_provider_id = identity.provider_id.unwrap_or_else(|| intercepted_host.to_string());
+  let mut cfg_builder = llm_requests::RunConfig::builder()
+    .with_str(llm_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
+    .with_str(llm_requests::stages::send::proxy::send_keys::PATH, &path_and_query)
+    .with_str(llm_requests::stages::send::proxy::send_keys::METHOD, method.as_str())
+    .with_str(llm_requests::stages::send::proxy::send_keys::SCHEME, scheme);
+  let pipeline = match mode {
+    ProxyPipelineMode::Passthrough => {
+      // Identity resolution — fingerprint the inbound bearer against
+      // locally-known accounts so DB rows / events attribute the
+      // intercepted request to a concrete `account_id` + `provider_id`.
+      // Pass the full URL so descriptors with path-based `matches_url`
+      // discriminate correctly. Registry strips the port internally.
+      let identity = state
+        .identity
+        .resolve(&parts.headers, &full_url, &state.provider_registry);
+      // Fallback to the bare intercepted host (not host:port and not the
+      // full URL) so the synthetic provider_id stays stable across
+      // requests to different paths/ports on the same upstream.
+      let resolved_provider_id = identity.provider_id.unwrap_or_else(|| intercepted_host.to_string());
+      cfg_builder = cfg_builder.with_str(
+        llm_requests::stages::resolve::proxy::keys::PROVIDER_ID,
+        &resolved_provider_id,
+      );
+      if let Some(account_id) = identity.account_id.as_deref() {
+        cfg_builder = cfg_builder.with_str(llm_requests::stages::resolve::proxy::keys::ACCOUNT_ID, account_id);
+      }
+      &state.proxy_passthrough_pipeline
+    }
+    ProxyPipelineMode::Switch => {
+      let Some(provider_id) = state.provider_registry.provider_id_for_url(&full_url) else {
+        return ApiError::bad_request(format!(
+          "switch mode requires a recognized provider URL, got '{full_url}'"
+        ))
+        .into_response();
+      };
+      cfg_builder = cfg_builder
+        .with_str(llm_requests::stages::resolve::proxy::keys::PROVIDER_ID, provider_id)
+        .with(llm_requests::stages::send::proxy::send_keys::INJECT_AUTH, true);
+      &state.proxy_switch_pipeline
+    }
+  };
 
   // Emit InboundConnection so persistence populates `local_addr`,
   // `peer_addr`, `mode`, `method`, `inbound_req_method`, and
@@ -166,25 +287,12 @@ pub async fn proxy_passthrough_via_pipeline_inner(
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
       local_addr: local_addr.map(SmolStr::from),
       peer_addr: peer_addr.map(SmolStr::from),
-      mode: SmolStr::new("passthrough"),
+      mode: SmolStr::new(mode_name),
       method: SmolStr::new("proxy"),
       inbound_method: SmolStr::new(method.as_str()),
       url: Some(SmolStr::from(full_url.as_str())),
     }),
   }));
-
-  let mut cfg_builder = llm_requests::RunConfig::builder()
-    .with_str(llm_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
-    .with_str(llm_requests::stages::send::proxy::send_keys::PATH, &path_and_query)
-    .with_str(llm_requests::stages::send::proxy::send_keys::METHOD, method.as_str())
-    .with_str(llm_requests::stages::send::proxy::send_keys::SCHEME, scheme)
-    .with_str(
-      llm_requests::stages::resolve::proxy::keys::PROVIDER_ID,
-      &resolved_provider_id,
-    );
-  if let Some(account_id) = identity.account_id.as_deref() {
-    cfg_builder = cfg_builder.with_str(llm_requests::stages::resolve::proxy::keys::ACCOUNT_ID, account_id);
-  }
   let cfg = cfg_builder.build();
 
   let raw = llm_requests::RawInbound {
@@ -196,12 +304,28 @@ pub async fn proxy_passthrough_via_pipeline_inner(
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
 
-  match state.proxy_passthrough_pipeline.run_with(raw, cfg).await {
+  match pipeline.run_with(raw, cfg).await {
     Ok(converted) => crate::api::response::converted_to_axum(converted),
-    Err(err) => {
-      tracing::warn!(host = %host_with_port, error = %err.message(), "proxy passthrough pipeline failed");
-      ApiError::bad_gateway(err.message().into_owned()).into_response()
+    Err(err) => proxy_pipeline_error_to_api_error(&err, &host_with_port).into_response(),
+  }
+}
+
+fn proxy_pipeline_error_to_api_error(err: &llm_requests::PipelineError, host_with_port: &str) -> ApiError {
+  tracing::warn!(host = %host_with_port, error = %err.message(), "proxy pipeline failed");
+  match err.inner() {
+    RequestsError::Resolve {
+      source: ResolveError::InvalidRouteMode { .. },
     }
+    | RequestsError::Resolve {
+      source: ResolveError::InvalidExactModel { .. },
+    } => ApiError::bad_request(err.message().into_owned()),
+    RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
+    RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
+    RequestsError::UpstreamStatus { status, body } => match http::StatusCode::from_u16(*status) {
+      Ok(status) => ApiError::upstream(status, body.clone()),
+      Err(_) => ApiError::bad_gateway(body.clone()),
+    },
+    _ => ApiError::bad_gateway(err.message().into_owned()),
   }
 }
 

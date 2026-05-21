@@ -13,6 +13,7 @@ use llm_core::account::AccountConfig;
 use llm_core::pipeline::InputTransformer;
 use llm_core::provider::error;
 use llm_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx};
+use llm_headers::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +28,7 @@ pub struct MockProvider {
   info: ProviderInfo,
   transformer: Option<Box<dyn InputTransformer>>,
   chat_script: Mutex<Option<ChatScript>>,
+  header_patch: Vec<(String, String)>,
 }
 
 impl MockProvider {
@@ -48,6 +50,7 @@ impl MockProvider {
       },
       transformer: None,
       chat_script: Mutex::new(None),
+      header_patch: Vec::new(),
     }
   }
 
@@ -70,6 +73,11 @@ impl MockProvider {
     *self.chat_script.lock().unwrap() = Some(ChatScript::Error(Box::new(f)));
     self
   }
+
+  pub fn with_header(mut self, name: &str, value: &str) -> Self {
+    self.header_patch.push((name.to_string(), value.to_string()));
+    self
+  }
 }
 
 #[async_trait]
@@ -82,6 +90,12 @@ impl Provider for MockProvider {
   }
   fn input_transformer(&self) -> Option<&dyn InputTransformer> {
     self.transformer.as_deref()
+  }
+  fn patch_headers(&self, headers: &mut HeaderMap, _ctx: &llm_core::provider::HeaderPatchCtx<'_>) -> error::Result<()> {
+    for (name, value) in &self.header_patch {
+      headers.insert(HeaderName::new(name.clone()), HeaderValue::from_string(value.clone()));
+    }
+    Ok(())
   }
   async fn list_models(&self, _http: &reqwest::Client) -> error::Result<Value> {
     Ok(Value::Null)

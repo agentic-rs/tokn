@@ -48,6 +48,9 @@ async fn handle(
       url: None,
     }),
   }));
+  if matches!(mode, Some(llm_config::RouteMode::Switch)) {
+    return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
+  }
   let decoded = super::codec::decode_json_request(&inbound, body)?;
   let raw = llm_requests::RawInbound {
     endpoint: parser.endpoint(),

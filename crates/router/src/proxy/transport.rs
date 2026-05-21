@@ -225,25 +225,43 @@ async fn route_intercepted_request(
 
   let resolved_mode = route_resolver.resolve_mode(route_mode);
   tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
-  if matches!(resolved_mode, Ok(RouteMode::Passthrough)) {
+  if matches!(resolved_mode, Ok(RouteMode::Passthrough | RouteMode::Switch)) {
+    let response = match resolved_mode {
+      Ok(RouteMode::Passthrough) => {
+        super::passthrough_pipeline::proxy_passthrough_via_pipeline(
+          state.as_ref(),
+          &intercepted_host,
+          intercepted_port,
+          "https",
+          Some(peer.to_string()),
+          Some(local.to_string()),
+          req,
+        )
+        .await
+      }
+      Ok(RouteMode::Switch) => {
+        super::passthrough_pipeline::proxy_switch_via_pipeline(
+          state.as_ref(),
+          &intercepted_host,
+          intercepted_port,
+          "https",
+          Some(peer.to_string()),
+          Some(local.to_string()),
+          req,
+        )
+        .await
+      }
+      _ => unreachable!(),
+    };
     return Ok(
-      super::passthrough_pipeline::proxy_passthrough_via_pipeline(
-        state.as_ref(),
-        &intercepted_host,
-        intercepted_port,
-        "https",
-        Some(peer.to_string()),
-        Some(local.to_string()),
-        req,
-      )
-      .await
-      .inspect(|b| {
-        if !b.status().is_success() {
-          tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "passthrough request failed");
-        }
-      })
-      .inspect_err(|err| tracing::warn!(%host, error = %err, "passthrough failed"))
-      .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
+      response
+        .inspect(|b| {
+          if !b.status().is_success() {
+            tracing::warn!(%host, path = %path, method = %method, status = %b.status(), "proxy mode request failed");
+          }
+        })
+        .inspect_err(|err| tracing::warn!(%host, error = %err, "proxy mode failed"))
+        .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response()),
     );
   }
   if let Err(err) = &resolved_mode {

@@ -122,7 +122,7 @@ pub(super) fn extract_proxy_auth_mode(header_value: &str) -> Option<String> {
   }
   // Validate it's a known mode
   match username {
-    "route" | "passthrough" | "exact" | "fuzzy" => Some(username.to_string()),
+    "route" | "passthrough" | "switch" | "exact" | "fuzzy" => Some(username.to_string()),
     _ => None,
   }
 }

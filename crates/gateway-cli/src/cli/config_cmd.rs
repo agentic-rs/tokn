@@ -46,6 +46,7 @@ pub enum ConfigCmd {
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
 pub enum RouteModeArg {
   Passthrough,
+  Switch,
   Exact,
   Route,
   Fuzzy,
@@ -55,6 +56,7 @@ impl From<RouteModeArg> for RouteMode {
   fn from(value: RouteModeArg) -> Self {
     match value {
       RouteModeArg::Passthrough => RouteMode::Passthrough,
+      RouteModeArg::Switch => RouteMode::Switch,
       RouteModeArg::Exact => RouteMode::Exact,
       RouteModeArg::Route => RouteMode::Route,
       RouteModeArg::Fuzzy => RouteMode::Fuzzy,
@@ -404,12 +406,13 @@ fn apply_runtime_overrides(cfg: &mut Config, args: &InitArgs) {
 }
 
 fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
-  let route_options = vec!["route", "passthrough", "exact", "fuzzy"];
+  let route_options = vec!["route", "passthrough", "switch", "exact", "fuzzy"];
   let default_idx = match cfg.server.route_mode {
     RouteMode::Route => 0,
     RouteMode::Passthrough => 1,
-    RouteMode::Exact => 2,
-    RouteMode::Fuzzy => 3,
+    RouteMode::Switch => 2,
+    RouteMode::Exact => 3,
+    RouteMode::Fuzzy => 4,
   };
   let selected = Select::new("Route mode:", route_options.clone())
     .with_starting_cursor(default_idx)
@@ -418,6 +421,7 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
   cfg.server.route_mode = match selected {
     "route" => RouteMode::Route,
     "passthrough" => RouteMode::Passthrough,
+    "switch" => RouteMode::Switch,
     "exact" => RouteMode::Exact,
     "fuzzy" => RouteMode::Fuzzy,
     _ => RouteMode::Route,
@@ -426,8 +430,9 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
   let proxy_default_idx = match cfg.proxy_mode.route_mode {
     RouteMode::Route => 0,
     RouteMode::Passthrough => 1,
-    RouteMode::Exact => 2,
-    RouteMode::Fuzzy => 3,
+    RouteMode::Switch => 2,
+    RouteMode::Exact => 3,
+    RouteMode::Fuzzy => 4,
   };
   let proxy_selected = Select::new("Proxy route mode:", route_options)
     .with_starting_cursor(proxy_default_idx)
@@ -436,6 +441,7 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
   cfg.proxy_mode.route_mode = match proxy_selected {
     "route" => RouteMode::Route,
     "passthrough" => RouteMode::Passthrough,
+    "switch" => RouteMode::Switch,
     "exact" => RouteMode::Exact,
     "fuzzy" => RouteMode::Fuzzy,
     _ => RouteMode::Route,

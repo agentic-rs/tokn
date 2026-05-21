@@ -120,6 +120,7 @@ async fn wait_for_shutdown(mut shutdown: watch::Receiver<bool>) {
 fn route_mode_name(mode: RouteMode) -> &'static str {
   match mode {
     RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",
