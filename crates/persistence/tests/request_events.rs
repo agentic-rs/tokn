@@ -298,7 +298,7 @@ fn upstream_error_status_persists_response_snapshot_and_error() {
   h.handle(&r2(req, 0, completed(false, 1)));
 
   let row = fetch_row(&dir, req);
-  assert_eq!(as_int(&row["status"]), Some(502));
+  assert!(is_null(&row["status"]));
   assert_eq!(as_int(&row["outbound_resp_status"]), Some(502));
   assert!(as_text(&row["outbound_resp_headers"])
     .unwrap()

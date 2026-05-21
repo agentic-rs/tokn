@@ -320,7 +320,6 @@ impl RequestEventHandler {
       "UPDATE requests SET
          outbound_resp_status = ?2,
          outbound_resp_headers = ?3,
-         status = ?2,
          latency_header_ms = ?4
        WHERE request_id = ?1",
       params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
@@ -347,6 +346,7 @@ impl RequestEventHandler {
     };
     let updated = conn.execute(
       "UPDATE requests SET
+         status = ?2,
          inbound_resp_status = ?2,
          inbound_resp_headers = ?3,
          inbound_resp_body = ?4
@@ -454,7 +454,6 @@ impl RequestEventHandler {
       "UPDATE requests SET
          outbound_resp_status = ?2,
          outbound_resp_headers = ?3,
-         status = ?2,
          latency_header_ms = ?4
        WHERE request_id = ?1",
       params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
