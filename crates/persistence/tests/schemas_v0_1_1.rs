@@ -297,6 +297,12 @@ fn value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
 }
 
 fn assert_expected_tables(actual_tables: &Map<String, Value>, fixture: &Fixture) {
+  let mut actual_table_names: Vec<&str> = actual_tables.keys().map(String::as_str).collect();
+  let mut expected_table_names: Vec<&str> = fixture.meta.output_order.iter().map(String::as_str).collect();
+  actual_table_names.sort_unstable();
+  expected_table_names.sort_unstable();
+  assert_eq!(actual_table_names, expected_table_names, "table set mismatch");
+
   for table in &fixture.meta.output_order {
     let actual_rows = actual_tables
       .get(table)
@@ -319,10 +325,16 @@ fn assert_expected_row(
 ) {
   let actual = actual.as_object().expect("actual row object");
   let expected = expected.as_object().expect("expected row object");
-  for key in output_columns
+  let expected_columns = output_columns
     .get(table)
-    .unwrap_or_else(|| panic!("missing output columns for {table}"))
-  {
+    .unwrap_or_else(|| panic!("missing output columns for {table}"));
+  let mut actual_columns: Vec<&str> = actual.keys().map(String::as_str).collect();
+  let mut expected_columns_refs: Vec<&str> = expected_columns.iter().map(String::as_str).collect();
+  actual_columns.sort_unstable();
+  expected_columns_refs.sort_unstable();
+  assert_eq!(actual_columns, expected_columns_refs, "column set mismatch for {table}");
+
+  for key in expected_columns {
     let expected_value = expected.get(key).unwrap_or(&Value::Null);
     let actual_value = actual
       .get(key)
