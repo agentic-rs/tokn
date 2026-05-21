@@ -1,0 +1,3 @@
+-- v0.2.0 keeps the sessions schema unchanged.
+-- This migration records that existing sessions.db files have been reviewed
+-- for the v0.2.0 release line.

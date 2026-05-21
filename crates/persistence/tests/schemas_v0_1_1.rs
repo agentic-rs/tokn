@@ -48,16 +48,27 @@ const REQUESTS_MIGRATIONS: &[Migration] = &[
 
 const SESSIONS_V0_0_0: &str = include_str!("../schemas/snapshot/sessions/v0.0.0.sql");
 const SESSIONS_V0_1_1: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
+const SESSIONS_V0_2_0: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const SESSIONS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/sessions/v0.0.0_v0.1.1_0001_0001.sql");
-const SESSIONS_MIGRATIONS: &[Migration] = &[Migration {
-  version: 1,
-  name: "initial",
-  sql: SESSIONS_V0_0_0,
-}];
+const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0002.sql");
+const SESSIONS_MIGRATIONS: &[Migration] = &[
+  Migration {
+    version: 1,
+    name: "initial",
+    sql: SESSIONS_V0_0_0,
+  },
+  Migration {
+    version: 2,
+    name: "mark_v0_2_0",
+    sql: include_str!("../schemas/migrations/sessions/0002_mark_v0_2_0.sql"),
+  },
+];
 
 const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
 const USAGE_V0_1_1: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
+const USAGE_V0_2_0: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
 const USAGE_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/usage/v0.0.0_v0.1.1_0001_0004.sql");
+const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0005.sql");
 const USAGE_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -78,6 +89,11 @@ const USAGE_MIGRATIONS: &[Migration] = &[
     version: 4,
     name: "add_usage_breakdown",
     sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
+  },
+  Migration {
+    version: 5,
+    name: "mark_v0_2_0",
+    sql: include_str!("../schemas/migrations/usage/0005_mark_v0_2_0.sql"),
   },
 ];
 
@@ -134,6 +150,19 @@ const SESSIONS_CASE: DbCase = DbCase {
   expected_jsonl: include_str!("fixtures/sessions_expected_v0.1.1.jsonl"),
 };
 
+const SESSIONS_V0_2_0_CASE: DbCase = DbCase {
+  name: "sessions",
+  v0_0_0: SESSIONS_V0_0_0,
+  target_snapshot: SESSIONS_V0_2_0,
+  target_squash: SESSIONS_SQUASH_V0_2_0,
+  target_version: 2,
+  squash_start_version: 1,
+  migrations: SESSIONS_MIGRATIONS,
+  meta_json: include_str!("fixtures/sessions_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/sessions_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/sessions_expected_v0.1.1.jsonl"),
+};
+
 const USAGE_CASE: DbCase = DbCase {
   name: "usage",
   v0_0_0: USAGE_V0_0_0,
@@ -141,6 +170,19 @@ const USAGE_CASE: DbCase = DbCase {
   target_squash: USAGE_SQUASH_V0_1_1,
   target_version: 4,
   squash_start_version: 1,
+  migrations: USAGE_MIGRATIONS,
+  meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/usage_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/usage_expected_v0.1.1.jsonl"),
+};
+
+const USAGE_V0_2_0_CASE: DbCase = DbCase {
+  name: "usage",
+  v0_0_0: USAGE_V0_0_0,
+  target_snapshot: USAGE_V0_2_0,
+  target_squash: USAGE_SQUASH_V0_2_0,
+  target_version: 5,
+  squash_start_version: 4,
   migrations: USAGE_MIGRATIONS,
   meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),
   seed_jsonl: include_str!("fixtures/usage_seed_v0.1.1.jsonl"),
@@ -163,8 +205,18 @@ fn sessions_v0_1_1_migrations_and_squash_match_fixture() {
 }
 
 #[test]
+fn sessions_v0_2_0_migrations_and_squash_match_fixture() {
+  assert_case(SESSIONS_V0_2_0_CASE);
+}
+
+#[test]
 fn usage_v0_1_1_migrations_and_squash_match_fixture() {
   assert_case(USAGE_CASE);
+}
+
+#[test]
+fn usage_v0_2_0_migrations_and_squash_match_fixture() {
+  assert_case(USAGE_V0_2_0_CASE);
 }
 
 fn assert_case(case: DbCase) {
@@ -179,8 +231,8 @@ fn assert_case(case: DbCase) {
   seed_v0_db(&squash_path, case, &fixture);
   let squash_state = run_squash(&squash_path, case);
 
-  assert_eq!(incremental_state.version, fixture.meta.expected_version);
-  assert_eq!(squash_state.version, fixture.meta.expected_version);
+  assert_eq!(incremental_state.version, case.target_version);
+  assert_eq!(squash_state.version, case.target_version);
   assert_expected_tables(&incremental_state.tables, &fixture);
   assert_expected_tables(&squash_state.tables, &fixture);
   assert_eq!(
@@ -415,7 +467,6 @@ struct Fixture {
 
 #[derive(Debug)]
 struct FixtureMeta {
-  expected_version: u32,
   input_columns: std::collections::HashMap<String, Vec<String>>,
   output_columns: std::collections::HashMap<String, Vec<String>>,
   output_order: Vec<String>,
@@ -438,10 +489,6 @@ fn parse_fixture(case: DbCase) -> Fixture {
 
 fn parse_meta(meta: &Value) -> FixtureMeta {
   FixtureMeta {
-    expected_version: meta
-      .get("expected_version")
-      .and_then(Value::as_u64)
-      .expect("expected_version") as u32,
     input_columns: parse_table_columns(meta.get("input").and_then(Value::as_array).expect("input array")),
     output_columns: parse_table_columns(meta.get("output").and_then(Value::as_array).expect("output array")),
     output_order: meta

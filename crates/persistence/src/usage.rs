@@ -18,7 +18,7 @@ pub struct UsageRecord<'a> {
   pub stream: bool,
 }
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
@@ -39,6 +39,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     version: 4,
     name: "add_usage_breakdown",
     sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
+  },
+  migrate::Migration {
+    version: 5,
+    name: "mark_v0_2_0",
+    sql: include_str!("../schemas/migrations/usage/0005_mark_v0_2_0.sql"),
   },
 ];
 
