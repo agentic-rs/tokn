@@ -1,0 +1,31 @@
+{
+  "expected_version": 1,
+  "input": [
+    {
+      "table": "sessions",
+      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model", "message_count", "part_count"]
+    },
+    {
+      "table": "part_blobs",
+      "columns": ["hash", "part_type", "content"]
+    },
+    {
+      "table": "session_parts",
+      "columns": ["session_id", "part_seq", "message_seq", "part_index", "ts", "endpoint", "role", "status", "part_hash"]
+    }
+  ],
+  "output": [
+    {
+      "table": "part_blobs",
+      "columns": ["hash", "part_type", "content"]
+    },
+    {
+      "table": "session_parts",
+      "columns": ["session_id", "part_seq", "message_seq", "part_index", "ts", "endpoint", "role", "status", "part_hash"]
+    },
+    {
+      "table": "sessions",
+      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model", "message_count", "part_count"]
+    }
+  ]
+}

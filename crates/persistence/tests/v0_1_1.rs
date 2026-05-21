@@ -1,9 +1,7 @@
 use llm_persistence::migrate::{self, Bootstrap, Migration};
-use rusqlite::Connection;
+use rusqlite::{params_from_iter, types::Value as SqlValue, Connection};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
-
-const FIXTURE_JSON: &str = include_str!("fixtures/v0.1.1.json");
 
 const REQUESTS_V0_0_0: &str = include_str!("../schemas/snapshot/requests/v0.0.0.sql");
 const REQUESTS_V0_1_1: &str = include_str!("../schemas/snapshot/requests/v0.1.1.sql");
@@ -83,6 +81,9 @@ struct DbCase {
   v0_1_1: &'static str,
   squash_v0_1_1: &'static str,
   migrations: &'static [Migration],
+  meta_json: &'static str,
+  seed_jsonl: &'static str,
+  expected_jsonl: &'static str,
 }
 
 const REQUESTS_CASE: DbCase = DbCase {
@@ -91,6 +92,9 @@ const REQUESTS_CASE: DbCase = DbCase {
   v0_1_1: REQUESTS_V0_1_1,
   squash_v0_1_1: REQUESTS_SQUASH_V0_1_1,
   migrations: REQUESTS_MIGRATIONS,
+  meta_json: include_str!("fixtures/requests_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/requests_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/requests_expected_v0.1.1.jsonl"),
 };
 
 const SESSIONS_CASE: DbCase = DbCase {
@@ -99,6 +103,9 @@ const SESSIONS_CASE: DbCase = DbCase {
   v0_1_1: SESSIONS_V0_1_1,
   squash_v0_1_1: SESSIONS_SQUASH_V0_1_1,
   migrations: SESSIONS_MIGRATIONS,
+  meta_json: include_str!("fixtures/sessions_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/sessions_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/sessions_expected_v0.1.1.jsonl"),
 };
 
 const USAGE_CASE: DbCase = DbCase {
@@ -107,6 +114,9 @@ const USAGE_CASE: DbCase = DbCase {
   v0_1_1: USAGE_V0_1_1,
   squash_v0_1_1: USAGE_SQUASH_V0_1_1,
   migrations: USAGE_MIGRATIONS,
+  meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),
+  seed_jsonl: include_str!("fixtures/usage_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/usage_expected_v0.1.1.jsonl"),
 };
 
 #[test]
@@ -125,22 +135,21 @@ fn usage_v0_1_1_migrations_and_squash_match_fixture() {
 }
 
 fn assert_case(case: DbCase) {
-  let fixture = fixture_case(case.name);
+  let fixture = parse_fixture(case);
   let dir = tempdir(case.name);
 
   let incremental_path = dir.join("incremental.db");
-  seed_v0_db(&incremental_path, case, fixture);
+  seed_v0_db(&incremental_path, case, &fixture);
   let incremental_state = run_incremental(&incremental_path, case);
 
   let squash_path = dir.join("squash.db");
-  seed_v0_db(&squash_path, case, fixture);
+  seed_v0_db(&squash_path, case, &fixture);
   let squash_state = run_squash(&squash_path, case);
 
-  let expected = fixture.get("expected_rows").and_then(Value::as_object).expect("expected_rows object");
-  assert_eq!(incremental_state.version, fixture_expected_version(fixture));
-  assert_eq!(squash_state.version, fixture_expected_version(fixture));
-  assert_expected_tables(&incremental_state.tables, expected);
-  assert_expected_tables(&squash_state.tables, expected);
+  assert_eq!(incremental_state.version, fixture.meta.expected_version);
+  assert_eq!(squash_state.version, fixture.meta.expected_version);
+  assert_expected_tables(&incremental_state.tables, &fixture);
+  assert_expected_tables(&squash_state.tables, &fixture);
   assert_eq!(incremental_state.tables, squash_state.tables, "{} migrated and squashed results diverged", case.name);
 }
 
@@ -157,16 +166,12 @@ fn run_squash(path: &Path, case: DbCase) -> DbState {
   dump_state(&conn)
 }
 
-fn seed_v0_db(path: &Path, case: DbCase, fixture: &Value) {
+fn seed_v0_db(path: &Path, case: DbCase, fixture: &Fixture) {
   let conn = Connection::open(path).unwrap();
   ensure_schema_table(&conn);
   conn.execute_batch(case.v0_0_0).unwrap();
-  for sql in fixture
-    .get("seed_sql")
-    .and_then(Value::as_array)
-    .expect("seed_sql array")
-  {
-    conn.execute_batch(sql.as_str().expect("seed SQL string")).unwrap();
+  for row in &fixture.seed_rows {
+    insert_row(&conn, row, &fixture.meta.input_columns);
   }
   conn
     .execute(
@@ -174,6 +179,24 @@ fn seed_v0_db(path: &Path, case: DbCase, fixture: &Value) {
       [case.migrations[0].name],
     )
     .unwrap();
+}
+
+fn insert_row(conn: &Connection, row: &FixtureRow, columns_by_table: &std::collections::HashMap<String, Vec<String>>) {
+  let columns = columns_by_table
+    .get(&row.table)
+    .unwrap_or_else(|| panic!("missing input columns for {}", row.table));
+  let placeholders = (1..=columns.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+  let sql = format!(
+    "INSERT INTO \"{}\" ({}) VALUES ({})",
+    row.table.replace('"', "\"\""),
+    columns.join(", "),
+    placeholders
+  );
+  let values = columns
+    .iter()
+    .map(|column| json_to_sql(row.values.get(column).unwrap_or(&Value::Null)))
+    .collect::<Vec<_>>();
+  conn.execute(&sql, params_from_iter(values)).unwrap();
 }
 
 fn ensure_schema_table(conn: &Connection) {
@@ -256,40 +279,141 @@ fn value_to_json(value: rusqlite::types::ValueRef<'_>) -> Value {
   }
 }
 
-fn assert_expected_tables(actual_tables: &Map<String, Value>, expected_tables: &Map<String, Value>) {
-  for (table, expected_rows) in expected_tables {
+fn assert_expected_tables(actual_tables: &Map<String, Value>, fixture: &Fixture) {
+  for table in &fixture.meta.output_order {
     let actual_rows = actual_tables.get(table).unwrap_or_else(|| panic!("missing table {table}"));
-    let expected_rows = expected_rows.as_array().expect("expected row array");
+    let empty = Vec::new();
+    let expected_rows = fixture.expected_rows.get(table).unwrap_or(&empty);
     let actual_rows = actual_rows.as_array().expect("actual row array");
     assert_eq!(actual_rows.len(), expected_rows.len(), "row count mismatch for {table}");
     for (actual, expected) in actual_rows.iter().zip(expected_rows) {
-      assert_expected_row(table, actual, expected);
+      assert_expected_row(table, actual, expected, &fixture.meta.output_columns);
     }
   }
 }
 
-fn assert_expected_row(table: &str, actual: &Value, expected: &Value) {
+fn assert_expected_row(
+  table: &str,
+  actual: &Value,
+  expected: &Value,
+  output_columns: &std::collections::HashMap<String, Vec<String>>,
+) {
   let actual = actual.as_object().expect("actual row object");
   let expected = expected.as_object().expect("expected row object");
-  for (key, expected_value) in expected {
+  for key in output_columns
+    .get(table)
+    .unwrap_or_else(|| panic!("missing output columns for {table}"))
+  {
+    let expected_value = expected.get(key).unwrap_or(&Value::Null);
     let actual_value = actual.get(key).unwrap_or_else(|| panic!("missing column {table}.{key}"));
     assert_eq!(actual_value, expected_value, "value mismatch for {table}.{key}");
   }
 }
 
-fn fixture_case(name: &str) -> &'static Value {
-  static FIXTURE: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
-  FIXTURE
-    .get_or_init(|| serde_json::from_str(FIXTURE_JSON).expect("valid fixture JSON"))
-    .get(name)
-    .unwrap_or_else(|| panic!("missing fixture case {name}"))
+#[derive(Debug)]
+struct Fixture {
+  meta: FixtureMeta,
+  seed_rows: Vec<FixtureRow>,
+  expected_rows: std::collections::HashMap<String, Vec<Value>>,
 }
 
-fn fixture_expected_version(fixture: &Value) -> u32 {
-  fixture
-    .get("expected_version")
-    .and_then(Value::as_u64)
-    .expect("expected_version") as u32
+#[derive(Debug)]
+struct FixtureMeta {
+  expected_version: u32,
+  input_columns: std::collections::HashMap<String, Vec<String>>,
+  output_columns: std::collections::HashMap<String, Vec<String>>,
+  output_order: Vec<String>,
+}
+
+#[derive(Debug)]
+struct FixtureRow {
+  table: String,
+  values: Map<String, Value>,
+}
+
+fn parse_fixture(case: DbCase) -> Fixture {
+  let meta_json: Value = serde_json::from_str(case.meta_json).expect("valid metadata json");
+  Fixture {
+    meta: parse_meta(&meta_json),
+    seed_rows: parse_jsonl_rows(case.seed_jsonl),
+    expected_rows: group_expected_rows(parse_jsonl_rows(case.expected_jsonl)),
+  }
+}
+
+fn parse_meta(meta: &Value) -> FixtureMeta {
+  FixtureMeta {
+    expected_version: meta.get("expected_version").and_then(Value::as_u64).expect("expected_version") as u32,
+    input_columns: parse_table_columns(meta.get("input").and_then(Value::as_array).expect("input array")),
+    output_columns: parse_table_columns(meta.get("output").and_then(Value::as_array).expect("output array")),
+    output_order: meta
+      .get("output")
+      .and_then(Value::as_array)
+      .expect("output array")
+      .iter()
+      .map(|entry| entry.get("table").and_then(Value::as_str).expect("output table").to_string())
+      .collect(),
+  }
+}
+
+fn parse_table_columns(entries: &[Value]) -> std::collections::HashMap<String, Vec<String>> {
+  entries
+    .iter()
+    .map(|entry| {
+      let table = entry.get("table").and_then(Value::as_str).expect("table name").to_string();
+      let columns = entry
+        .get("columns")
+        .and_then(Value::as_array)
+        .expect("columns array")
+        .iter()
+        .map(|value| value.as_str().expect("column name").to_string())
+        .collect();
+      (table, columns)
+    })
+    .collect()
+}
+
+fn parse_jsonl_rows(contents: &str) -> Vec<FixtureRow> {
+  contents
+    .lines()
+    .filter(|line| !line.trim().is_empty())
+    .map(|line| {
+      let value: Value = serde_json::from_str(line).expect("valid jsonl row");
+      FixtureRow {
+        table: value.get("table").and_then(Value::as_str).expect("row table").to_string(),
+        values: value
+          .get("values")
+          .and_then(Value::as_object)
+          .expect("row values object")
+          .clone(),
+      }
+    })
+    .collect()
+}
+
+fn group_expected_rows(rows: Vec<FixtureRow>) -> std::collections::HashMap<String, Vec<Value>> {
+  let mut grouped = std::collections::HashMap::<String, Vec<Value>>::new();
+  for row in rows {
+    grouped.entry(row.table).or_default().push(Value::Object(row.values));
+  }
+  grouped
+}
+
+fn json_to_sql(value: &Value) -> SqlValue {
+  match value {
+    Value::Null => SqlValue::Null,
+    Value::Bool(v) => SqlValue::Text(if *v { "true" } else { "false" }.to_string()),
+    Value::Number(n) => {
+      if let Some(i) = n.as_i64() {
+        SqlValue::Integer(i)
+      } else if let Some(f) = n.as_f64() {
+        SqlValue::Real(f)
+      } else {
+        SqlValue::Null
+      }
+    }
+    Value::String(s) => SqlValue::Text(s.clone()),
+    Value::Array(_) | Value::Object(_) => SqlValue::Text(serde_json::to_string(value).unwrap()),
+  }
 }
 
 fn tempdir(name: &str) -> PathBuf {

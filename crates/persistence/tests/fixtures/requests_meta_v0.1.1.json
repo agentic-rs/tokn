@@ -1,0 +1,82 @@
+{
+  "expected_version": 6,
+  "input": [
+    {
+      "table": "requests",
+      "columns": [
+        "id",
+        "ts",
+        "session_id",
+        "endpoint",
+        "account_id",
+        "provider_id",
+        "model",
+        "initiator",
+        "status",
+        "stream",
+        "latency_ms",
+        "prompt_tok",
+        "completion_tok",
+        "inbound_req_method",
+        "inbound_req_url",
+        "inbound_req_headers",
+        "inbound_req_body",
+        "outbound_req_method",
+        "outbound_req_url",
+        "outbound_req_headers",
+        "outbound_req_body",
+        "outbound_resp_status",
+        "outbound_resp_headers",
+        "outbound_resp_body",
+        "inbound_resp_status",
+        "inbound_resp_headers",
+        "inbound_resp_body"
+      ]
+    }
+  ],
+  "output": [
+    {
+      "table": "metrics",
+      "columns": []
+    },
+    {
+      "table": "requests",
+      "columns": [
+        "id",
+        "ts",
+        "session_id",
+        "request_id",
+        "request_error",
+        "endpoint",
+        "account_id",
+        "provider_id",
+        "model",
+        "initiator",
+        "status",
+        "stream",
+        "latency_ms",
+        "latency_header_ms",
+        "input_tok",
+        "output_tok",
+        "cached_tok",
+        "reasoning_tok",
+        "peer_addr",
+        "method",
+        "user",
+        "local_addr",
+        "mode",
+        "behave_as",
+        "inbound_req_headers",
+        "inbound_req_body",
+        "outbound_req_headers",
+        "outbound_req_body",
+        "outbound_resp_status",
+        "outbound_resp_headers",
+        "outbound_resp_body",
+        "inbound_resp_status",
+        "inbound_resp_headers",
+        "inbound_resp_body"
+      ]
+    }
+  ]
+}
