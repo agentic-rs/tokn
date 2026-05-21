@@ -22,7 +22,7 @@ pub mod stages;
 pub use stages::RequestEventHandler;
 
 const CACHE_CAP: usize = 3;
-pub(crate) const BOOTSTRAP: &str = include_str!("../../schemas/snapshot/requests/v0.1.1.sql");
+pub(crate) const BOOTSTRAP: &str = include_str!("../../schemas/snapshot/requests/v0.2.0.sql");
 pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
@@ -53,6 +53,11 @@ pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
     version: 6,
     name: "add_context_and_metrics",
     sql: include_str!("../../schemas/migrations/requests/0006_add_context_and_metrics.sql"),
+  },
+  migrate::Migration {
+    version: 7,
+    name: "split_requests",
+    sql: include_str!("../../schemas/migrations/requests/0007_split_requests.sql"),
   },
 ];
 
@@ -285,73 +290,106 @@ mod tests {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("2099-01-01.db");
     let conn = open_day_db(&path).unwrap();
-    for col in [
-      "request_id",
-      "request_error",
-      "user",
-      "local_addr",
-      "mode",
-      "behave_as",
-      "input_tok",
-      "output_tok",
-      "cached_tok",
-      "reasoning_tok",
-      "latency_header_ms",
-      "peer_addr",
-      "method",
-      "inbound_req_headers",
-      "inbound_req_body",
-      "outbound_req_headers",
-      "outbound_req_body",
-      "outbound_resp_headers",
-      "outbound_resp_body",
-      "inbound_resp_headers",
-      "inbound_resp_body",
+    for (table, columns) in [
+      (
+        "request_connection",
+        &[
+          "request_id",
+          "ts",
+          "endpoint",
+          "status",
+          "request_error",
+          "latency_ms",
+          "latency_header_ms",
+          "user",
+          "peer_addr",
+          "local_addr",
+          "mode",
+          "behave_as",
+          "method",
+        ][..],
+      ),
+      (
+        "request_metadata",
+        &[
+          "request_id",
+          "session_id",
+          "account_id",
+          "provider_id",
+          "model",
+          "initiator",
+          "stream",
+          "input_tok",
+          "output_tok",
+          "cached_tok",
+          "reasoning_tok",
+        ][..],
+      ),
+      (
+        "request_downstream",
+        &[
+          "request_id",
+          "inbound_req_method",
+          "inbound_req_url",
+          "inbound_req_headers",
+          "inbound_req_body",
+          "inbound_resp_status",
+          "inbound_resp_headers",
+          "inbound_resp_body",
+        ][..],
+      ),
+      (
+        "request_upstream",
+        &[
+          "request_id",
+          "outbound_req_method",
+          "outbound_req_url",
+          "outbound_req_headers",
+          "outbound_req_body",
+          "outbound_resp_status",
+          "outbound_resp_headers",
+          "outbound_resp_body",
+        ][..],
+      ),
     ] {
-      let exists: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")
+      let table_exists: bool = conn
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1")
         .unwrap()
-        .exists(params![col])
+        .exists(params![table])
         .unwrap();
-      assert!(exists, "missing column {col}");
+      assert!(table_exists, "missing table {table}");
+      for col in columns {
+        let exists: bool = conn
+          .prepare("SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2")
+          .unwrap()
+          .exists(params![table, col])
+          .unwrap();
+        assert!(exists, "missing column {table}.{col}");
+      }
     }
+    let requests_view_exists: bool = conn
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'view' AND name = 'requests'")
+      .unwrap()
+      .exists([])
+      .unwrap();
+    assert!(requests_view_exists, "missing requests compatibility view");
+    let idx_exists: bool = conn
+      .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = 'idx'")
+      .unwrap()
+      .exists([])
+      .unwrap();
+    assert!(idx_exists, "missing requests.idx compatibility column");
     let metrics_exists: bool = conn
       .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metrics'")
       .unwrap()
       .exists([])
       .unwrap();
-    assert!(metrics_exists, "missing metrics table");
-    for col in [
-      "request_id",
-      "user",
-      "local_addr",
-      "mode",
-      "behave_as",
-      "peer_addr",
-      "method",
-      "path",
-      "url",
-      "status",
-      "request_error",
-      "account_id",
-      "provider_id",
-      "latency_ms",
-      "inbound_req_headers",
-      "inbound_resp_headers",
-      "inbound_resp_body",
-    ] {
-      let exists: bool = conn
-        .prepare("SELECT 1 FROM pragma_table_info('metrics') WHERE name = ?1")
-        .unwrap()
-        .exists(params![col])
-        .unwrap();
-      assert!(exists, "missing metrics column {col}");
-    }
+    assert!(!metrics_exists, "metrics table should be removed");
     let v: i64 = conn
       .prepare("SELECT MAX(version) FROM schema_migrations")
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 6);
+    assert_eq!(v, 7);
   }
 }

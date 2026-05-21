@@ -16,8 +16,8 @@ schema unless a migration is intentionally added.
 
 - `snapshot/<db>/v0.0.0.sql` is the original released schema and still maps to
   migration version `1` in Rust.
-- `snapshot/<db>/v0.1.1.sql` is the latest equivalent schema for fresh
-  databases and replaces the old `000_bootstrap.sql` files.
+- `snapshot/requests/v0.2.0.sql` is the latest requests schema for fresh
+  databases. `usage` and `sessions` currently still use `v0.1.1`.
 - `squash/<db>/...` files are derived artifacts for review and maintenance, not
   runtime inputs.
 

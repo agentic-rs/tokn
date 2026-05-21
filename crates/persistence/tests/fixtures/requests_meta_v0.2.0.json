@@ -1,0 +1,99 @@
+{
+  "expected_version": 7,
+  "input": [
+    {
+      "table": "requests",
+      "columns": [
+        "id",
+        "ts",
+        "session_id",
+        "endpoint",
+        "account_id",
+        "provider_id",
+        "model",
+        "initiator",
+        "status",
+        "stream",
+        "latency_ms",
+        "prompt_tok",
+        "completion_tok",
+        "inbound_req_method",
+        "inbound_req_url",
+        "inbound_req_headers",
+        "inbound_req_body",
+        "outbound_req_method",
+        "outbound_req_url",
+        "outbound_req_headers",
+        "outbound_req_body",
+        "outbound_resp_status",
+        "outbound_resp_headers",
+        "outbound_resp_body",
+        "inbound_resp_status",
+        "inbound_resp_headers",
+        "inbound_resp_body"
+      ]
+    }
+  ],
+  "output": [
+    {
+      "table": "request_connection",
+      "columns": [
+        "request_id",
+        "ts",
+        "endpoint",
+        "status",
+        "request_error",
+        "latency_ms",
+        "latency_header_ms",
+        "user",
+        "peer_addr",
+        "local_addr",
+        "mode",
+        "behave_as",
+        "method"
+      ]
+    },
+    {
+      "table": "request_downstream",
+      "columns": [
+        "request_id",
+        "inbound_req_method",
+        "inbound_req_url",
+        "inbound_req_headers",
+        "inbound_req_body",
+        "inbound_resp_status",
+        "inbound_resp_headers",
+        "inbound_resp_body"
+      ]
+    },
+    {
+      "table": "request_metadata",
+      "columns": [
+        "request_id",
+        "session_id",
+        "account_id",
+        "provider_id",
+        "model",
+        "initiator",
+        "stream",
+        "input_tok",
+        "output_tok",
+        "cached_tok",
+        "reasoning_tok"
+      ]
+    },
+    {
+      "table": "request_upstream",
+      "columns": [
+        "request_id",
+        "outbound_req_method",
+        "outbound_req_url",
+        "outbound_req_headers",
+        "outbound_req_body",
+        "outbound_resp_status",
+        "outbound_resp_headers",
+        "outbound_resp_body"
+      ]
+    }
+  ]
+}

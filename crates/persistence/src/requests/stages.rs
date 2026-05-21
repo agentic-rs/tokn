@@ -153,43 +153,38 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests InboundConnection bootstrap failed");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
+    conn.execute(
+      "UPDATE request_connection SET
          local_addr = COALESCE(?2, local_addr),
          peer_addr = COALESCE(?3, peer_addr),
          mode = COALESCE(?4, mode),
-         method = COALESCE(?5, method),
-         inbound_req_method = COALESCE(?6, inbound_req_method),
-         inbound_req_url = COALESCE(?7, inbound_req_url)
+         method = COALESCE(?5, method)
         WHERE request_id = ?1",
-      params![
-        id,
-        update.local_addr,
-        update.peer_addr,
-        update.mode,
-        update.method,
-        update.inbound_method,
-        update.url
-      ],
+      params![id, update.local_addr, update.peer_addr, update.mode, update.method],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests InboundConnection UPDATE matched no row");
-    }
+    conn.execute(
+      "INSERT INTO request_downstream (request_id, inbound_req_method, inbound_req_url)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(request_id) DO UPDATE SET
+         inbound_req_method = COALESCE(excluded.inbound_req_method, request_downstream.inbound_req_method),
+         inbound_req_url = COALESCE(excluded.inbound_req_url, request_downstream.inbound_req_url)",
+      params![id, update.inbound_method, update.url],
+    )?;
     Ok(())
   }
 
-  /// Single INSERT for a fresh request. All subsequent stage handlers are
-  /// UPDATEs that assume this row exists.
+  /// Single anchor INSERT for a fresh request. Later handlers lazily upsert
+  /// metadata and wire payload rows as those facts become available.
   pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &str) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
-      "INSERT INTO requests (request_id, ts, endpoint, account_id, provider_id, model, initiator)
-       VALUES (?1, ?2, ?3, '', '', '', '')
+      "INSERT INTO request_connection (request_id, ts, endpoint)
+       VALUES (?1, ?2, ?3)
        ON CONFLICT(request_id) DO UPDATE SET
          endpoint = CASE
-           WHEN requests.endpoint = '' THEN excluded.endpoint
-           ELSE requests.endpoint
+           WHEN request_connection.endpoint = '' THEN excluded.endpoint
+           ELSE request_connection.endpoint
          END",
       params![id, ts, endpoint],
     )?;
@@ -215,28 +210,24 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Extract without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         model = ?2,
-         stream = ?3,
-         session_id = COALESCE(?4, session_id),
-         initiator = ?5,
-         inbound_req_headers = ?6,
-         inbound_req_body = ?7
-       WHERE request_id = ?1",
-      params![
-        id,
-        model,
-        stream as i64,
-        session_id,
-        initiator,
-        hdr_json.as_ref(),
-        inbound_req_body.as_ref()
-      ],
+    conn.execute(
+      "INSERT INTO request_metadata (request_id, model, stream, session_id, initiator)
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(request_id) DO UPDATE SET
+         model = excluded.model,
+         stream = excluded.stream,
+         session_id = COALESCE(excluded.session_id, request_metadata.session_id),
+         initiator = excluded.initiator",
+      params![id, model, stream as i64, session_id, initiator],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Extract UPDATE matched no row");
-    }
+    conn.execute(
+      "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(request_id) DO UPDATE SET
+         inbound_req_headers = excluded.inbound_req_headers,
+         inbound_req_body = excluded.inbound_req_body",
+      params![id, hdr_json.as_ref(), inbound_req_body.as_ref()],
+    )?;
     Ok(())
   }
 
@@ -253,17 +244,18 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Resolve without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         account_id = ?2,
-         provider_id = ?3,
-         endpoint = ?4
-       WHERE request_id = ?1",
-      params![id, account_id, provider_id, upstream_endpoint],
+    conn.execute(
+      "INSERT INTO request_metadata (request_id, account_id, provider_id)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(request_id) DO UPDATE SET
+         account_id = excluded.account_id,
+         provider_id = excluded.provider_id",
+      params![id, account_id, provider_id],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Resolve UPDATE matched no row");
-    }
+    conn.execute(
+      "UPDATE request_connection SET endpoint = ?2 WHERE request_id = ?1",
+      params![id, upstream_endpoint],
+    )?;
     Ok(())
   }
 
@@ -279,13 +271,13 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests BuildHeaders without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET outbound_req_headers = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_upstream (request_id, outbound_req_headers)
+       VALUES (?1, ?2)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_req_headers = excluded.outbound_req_headers",
       params![id, hdr_json.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests BuildHeaders UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -295,13 +287,13 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests ConvertRequest without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET outbound_req_body = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_upstream (request_id, outbound_req_body)
+       VALUES (?1, ?2)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_req_body = excluded.outbound_req_body",
       params![id, outbound_req_body.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests ConvertRequest UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -320,17 +312,18 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Send without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         outbound_resp_status = ?2,
-         outbound_resp_headers = ?3,
-         latency_header_ms = ?4
-       WHERE request_id = ?1",
-      params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
+    conn.execute(
+      "INSERT INTO request_upstream (request_id, outbound_resp_status, outbound_resp_headers)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_resp_status = excluded.outbound_resp_status,
+         outbound_resp_headers = excluded.outbound_resp_headers",
+      params![id, status as i64, hdr_json.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Send UPDATE matched no row");
-    }
+    conn.execute(
+      "UPDATE request_connection SET latency_header_ms = ?2 WHERE request_id = ?1",
+      params![id, latency_header_ms],
+    )?;
     Ok(())
   }
 
@@ -348,18 +341,19 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests ConvertResponse without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         status = ?2,
-         inbound_resp_status = ?2,
-         inbound_resp_headers = ?3,
-         inbound_resp_body = ?4
-       WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_downstream (request_id, inbound_resp_status, inbound_resp_headers, inbound_resp_body)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(request_id) DO UPDATE SET
+         inbound_resp_status = excluded.inbound_resp_status,
+         inbound_resp_headers = excluded.inbound_resp_headers,
+         inbound_resp_body = excluded.inbound_resp_body",
       params![id, status as i64, hdr_json.as_ref(), inbound_resp_body.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests ConvertResponse UPDATE matched no row");
-    }
+    conn.execute(
+      "UPDATE request_connection SET status = ?2 WHERE request_id = ?1",
+      params![id, status as i64],
+    )?;
     Ok(())
   }
 
@@ -370,13 +364,10 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Error without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET request_error = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "UPDATE request_connection SET request_error = ?2 WHERE request_id = ?1",
       params![id, formatted],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Error UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -387,14 +378,11 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Completed without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET latency_ms = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "UPDATE request_connection SET latency_ms = ?2 WHERE request_id = ?1",
       params![id, latency_ms],
     )?;
     self.db.clear_request(&id);
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Completed UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -420,18 +408,22 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests UpstreamReq without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         outbound_req_method = ?2,
-         outbound_req_url = ?3,
-         outbound_req_headers = ?4,
-         outbound_req_body = ?5
-       WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_upstream (
+         request_id,
+         outbound_req_method,
+         outbound_req_url,
+         outbound_req_headers,
+         outbound_req_body
+       )
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_req_method = excluded.outbound_req_method,
+         outbound_req_url = excluded.outbound_req_url,
+         outbound_req_headers = excluded.outbound_req_headers,
+         outbound_req_body = excluded.outbound_req_body",
       params![id, method, url, hdr_json.as_ref(), body.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests UpstreamReq UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -454,17 +446,18 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests UpstreamResp without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         outbound_resp_status = ?2,
-         outbound_resp_headers = ?3,
-         latency_header_ms = ?4
-       WHERE request_id = ?1",
-      params![id, status as i64, hdr_json.as_ref(), latency_header_ms],
+    conn.execute(
+      "INSERT INTO request_upstream (request_id, outbound_resp_status, outbound_resp_headers)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_resp_status = excluded.outbound_resp_status,
+         outbound_resp_headers = excluded.outbound_resp_headers",
+      params![id, status as i64, hdr_json.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests UpstreamResp UPDATE matched no row");
-    }
+    conn.execute(
+      "UPDATE request_connection SET latency_header_ms = ?2 WHERE request_id = ?1",
+      params![id, latency_header_ms],
+    )?;
     Ok(())
   }
 
@@ -479,13 +472,13 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests UpstreamBody without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET outbound_resp_body = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_upstream (request_id, outbound_resp_body)
+       VALUES (?1, ?2)
+       ON CONFLICT(request_id) DO UPDATE SET
+         outbound_resp_body = excluded.outbound_resp_body",
       params![id, body.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests UpstreamBody UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -499,13 +492,13 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests ConvertedBody without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET inbound_resp_body = ?2 WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_downstream (request_id, inbound_resp_body)
+       VALUES (?1, ?2)
+       ON CONFLICT(request_id) DO UPDATE SET
+         inbound_resp_body = excluded.inbound_resp_body",
       params![id, body.as_ref()],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests ConvertedBody UPDATE matched no row");
-    }
     Ok(())
   }
 
@@ -515,13 +508,14 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Usage without prior Started");
       return Ok(());
     };
-    let updated = conn.execute(
-      "UPDATE requests SET
-         input_tok = ?2,
-         output_tok = ?3,
-         cached_tok = ?4,
-         reasoning_tok = ?5
-       WHERE request_id = ?1",
+    conn.execute(
+      "INSERT INTO request_metadata (request_id, input_tok, output_tok, cached_tok, reasoning_tok)
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(request_id) DO UPDATE SET
+         input_tok = excluded.input_tok,
+         output_tok = excluded.output_tok,
+         cached_tok = excluded.cached_tok,
+         reasoning_tok = excluded.reasoning_tok",
       params![
         id,
         usage.input_tokens.map(|v| v as i64),
@@ -530,9 +524,6 @@ impl RequestEventHandler {
         usage.details.reasoning.map(|v| v as i64),
       ],
     )?;
-    if updated == 0 {
-      tracing::warn!(request_id = %id, "requests Usage UPDATE matched no row");
-    }
     Ok(())
   }
 }
