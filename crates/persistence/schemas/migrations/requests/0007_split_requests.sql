@@ -1,7 +1,4 @@
--- Canonical current schema for requests/<YYYY-MM-DD>.db.
--- Regenerated whenever a new NNN_*.sql migration is added so that fresh
--- day files can jump straight here instead of replaying history.
--- Must remain equivalent to the cumulative effect of 001..NNN.
+ALTER TABLE requests RENAME TO requests_legacy;
 
 CREATE TABLE request_connection (
   request_id TEXT PRIMARY KEY,
@@ -59,6 +56,111 @@ CREATE TABLE request_upstream (
   outbound_resp_headers BLOB,
   outbound_resp_body BLOB
 );
+
+INSERT INTO request_connection (
+  rowid,
+  request_id,
+  ts,
+  endpoint,
+  status,
+  request_error,
+  latency_ms,
+  latency_header_ms,
+  user,
+  peer_addr,
+  local_addr,
+  mode,
+  behave_as,
+  method
+)
+SELECT
+  id,
+  CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END,
+  ts,
+  endpoint,
+  status,
+  request_error,
+  latency_ms,
+  latency_header_ms,
+  user,
+  peer_addr,
+  local_addr,
+  mode,
+  behave_as,
+  method
+FROM requests_legacy;
+
+INSERT INTO request_metadata (
+  request_id,
+  session_id,
+  account_id,
+  provider_id,
+  model,
+  initiator,
+  stream,
+  input_tok,
+  output_tok,
+  cached_tok,
+  reasoning_tok
+)
+SELECT
+  CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END,
+  session_id,
+  account_id,
+  provider_id,
+  model,
+  initiator,
+  stream,
+  input_tok,
+  output_tok,
+  cached_tok,
+  reasoning_tok
+FROM requests_legacy;
+
+INSERT INTO request_downstream (
+  request_id,
+  inbound_req_method,
+  inbound_req_url,
+  inbound_req_headers,
+  inbound_req_body,
+  inbound_resp_status,
+  inbound_resp_headers,
+  inbound_resp_body
+)
+SELECT
+  CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END,
+  inbound_req_method,
+  inbound_req_url,
+  inbound_req_headers,
+  inbound_req_body,
+  inbound_resp_status,
+  inbound_resp_headers,
+  inbound_resp_body
+FROM requests_legacy;
+
+INSERT INTO request_upstream (
+  request_id,
+  outbound_req_method,
+  outbound_req_url,
+  outbound_req_headers,
+  outbound_req_body,
+  outbound_resp_status,
+  outbound_resp_headers,
+  outbound_resp_body
+)
+SELECT
+  CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END,
+  outbound_req_method,
+  outbound_req_url,
+  outbound_req_headers,
+  outbound_req_body,
+  outbound_resp_status,
+  outbound_resp_headers,
+  outbound_resp_body
+FROM requests_legacy;
+
+DROP TABLE requests_legacy;
+DROP TABLE IF EXISTS metrics;
 
 CREATE VIEW requests AS
 SELECT

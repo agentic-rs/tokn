@@ -5,7 +5,7 @@ use tokn_persistence::migrate::{self, Bootstrap, Migration};
 
 const REQUESTS_V0_0_0: &str = include_str!("../schemas/snapshot/requests/v0.0.0.sql");
 const REQUESTS_V0_1_1: &str = include_str!("../schemas/snapshot/requests/v0.1.1.sql");
-const REQUESTS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/requests/v0.0.0_v0.1.1_0001_0006.sql");
+const REQUESTS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/requests/v0.0.0_v0.1.1_0001_0007.sql");
 const REQUESTS_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -36,6 +36,11 @@ const REQUESTS_MIGRATIONS: &[Migration] = &[
     version: 6,
     name: "add_context_and_metrics",
     sql: include_str!("../schemas/migrations/requests/0006_add_context_and_metrics.sql"),
+  },
+  Migration {
+    version: 7,
+    name: "split_requests",
+    sql: include_str!("../schemas/migrations/requests/0007_split_requests.sql"),
   },
 ];
 
