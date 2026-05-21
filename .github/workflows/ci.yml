@@ -118,6 +118,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      IMAGE_NAME: llm-gateway-cli:ci
+      IMAGE_TAR: /tmp/llm-gateway-cli-image.tar
 
     steps:
       - name: Checkout
@@ -131,5 +134,12 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          load: true
-          tags: llm-gateway-cli:ci
+          tags: ${{ env.IMAGE_NAME }}
+          outputs: type=docker,dest=${{ env.IMAGE_TAR }}
+
+      - name: Upload llm-gateway image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-gateway-cli-image
+          path: ${{ env.IMAGE_TAR }}
+          retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
