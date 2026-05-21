@@ -1,6 +1,13 @@
 use axum::body::Bytes;
 use axum::http::{Method, StatusCode};
+use serde::Serialize;
 use serde_json::{json, Value};
+use tokn_endpoint_chat_completions::{
+  ChatChoice, ChatChunk, ChatContent, ChatDelta, ChatMessage, ChatResponse, ChatUsage, ChunkChoice,
+};
+use tokn_endpoint_core::{Extras, FinishReason, Role};
+use tokn_endpoint_messages::{ContentBlock, MessagesResponse};
+use tokn_endpoint_responses::{OutputContentPart, OutputItem, OutputMessage, ResponsesResponse, TaggedOutputMessage};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MockEndpoint {
@@ -65,16 +72,35 @@ impl MockRoute {
   pub fn chat_completions() -> Self {
     Self::new(
       MockEndpoint::ChatCompletions,
-      MockResponse::json(json!({
-        "id": "chatcmpl-mock",
-        "object": "chat.completion",
-        "choices": [{
-          "index": 0,
-          "message": {"role": "assistant", "content": "mock response"},
-          "finish_reason": "stop"
+      MockResponse::json(ChatResponse {
+        id: Some("chatcmpl-mock".into()),
+        object: Some("chat.completion".into()),
+        created: None,
+        model: None,
+        choices: vec![ChatChoice {
+          index: 0,
+          message: ChatMessage {
+            role: Role::Assistant,
+            content: Some(ChatContent::Text("mock response".into())),
+            name: None,
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            reasoning_content: None,
+            extras: Extras::default(),
+          },
+          finish_reason: Some(FinishReason::Stop),
+          extras: Extras::default(),
         }],
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-      })),
+        usage: Some(ChatUsage {
+          prompt_tokens: Some(1),
+          completion_tokens: Some(1),
+          total_tokens: Some(2),
+          prompt_tokens_details: None,
+          completion_tokens_details: None,
+          extras: Extras::default(),
+        }),
+        extras: Extras::default(),
+      }),
     )
   }
 
@@ -82,41 +108,21 @@ impl MockRoute {
     Self::new(
       MockEndpoint::ChatCompletions,
       MockResponse::sse_data([
-        json!({
-          "id": "chatcmpl-stream",
-          "object": "chat.completion.chunk",
-          "choices": [{
-            "index": 0,
-            "delta": {"role": "assistant", "content": "hel"},
-            "finish_reason": null
-          }]
-        })
-        .to_string(),
-        json!({
-          "id": "chatcmpl-stream",
-          "object": "chat.completion.chunk",
-          "choices": [{
-            "index": 0,
-            "delta": {"content": "lo"},
-            "finish_reason": null
-          }]
-        })
-        .to_string(),
-        json!({
-          "id": "chatcmpl-stream",
-          "object": "chat.completion.chunk",
-          "choices": [{
-            "index": 0,
-            "delta": {},
-            "finish_reason": "stop"
-          }],
-          "usage": {
-            "prompt_tokens": 3,
-            "completion_tokens": 2,
-            "total_tokens": 5
-          }
-        })
-        .to_string(),
+        sse_chat_chunk(Some(Role::Assistant), Some("hel"), None, None),
+        sse_chat_chunk(None, Some("lo"), None, None),
+        sse_chat_chunk(
+          None,
+          None,
+          Some(FinishReason::Stop),
+          Some(ChatUsage {
+            prompt_tokens: Some(3),
+            completion_tokens: Some(2),
+            total_tokens: Some(5),
+            prompt_tokens_details: None,
+            completion_tokens_details: None,
+            extras: Extras::default(),
+          }),
+        ),
         "[DONE]".to_string(),
       ]),
     )
@@ -125,30 +131,92 @@ impl MockRoute {
   pub fn responses() -> Self {
     Self::new(
       MockEndpoint::Responses,
-      MockResponse::json(json!({
-        "id": "resp-mock",
-        "object": "response",
-        "status": "completed",
-        "output": [{
-          "type": "message",
-          "role": "assistant",
-          "content": [{"type": "output_text", "text": "mock response"}]
-        }]
-      })),
+      MockResponse::json(ResponsesResponse {
+        id: Some("resp-mock".into()),
+        object: Some("response".into()),
+        created_at: None,
+        completed_at: None,
+        status: Some("completed".into()),
+        model: None,
+        instructions: None,
+        output: vec![OutputItem::Message(TaggedOutputMessage {
+          kind: "message".into(),
+          message: OutputMessage {
+            id: None,
+            status: None,
+            role: Role::Assistant,
+            content: vec![OutputContentPart::OutputText {
+              text: "mock response".into(),
+              annotations: Vec::new(),
+              logprobs: None,
+              extras: Extras::default(),
+            }],
+            extras: Extras::default(),
+          },
+        })],
+        output_text: None,
+        tools: Vec::new(),
+        metadata: None,
+        usage: None,
+        error: None,
+        incomplete_details: None,
+        params: Default::default(),
+        extra_params: Default::default(),
+        extras: Extras::default(),
+      }),
     )
   }
 
   pub fn messages() -> Self {
     Self::new(
       MockEndpoint::Messages,
-      MockResponse::json(json!({
-        "id": "msg-mock",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "output_text", "text": "mock response"}]
-      })),
+      MockResponse::json(MessagesResponse {
+        id: Some("msg-mock".into()),
+        kind: Some("message".into()),
+        role: Some(Role::Assistant),
+        model: None,
+        content: vec![ContentBlock::Text {
+          text: "mock response".into(),
+          cache_control: None,
+          extras: Extras::default(),
+        }],
+        stop_reason: None,
+        stop_sequence: None,
+        stop_details: None,
+        usage: None,
+        extras: Extras::default(),
+      }),
     )
   }
+}
+
+fn sse_chat_chunk(
+  role: Option<Role>,
+  content: Option<&str>,
+  finish_reason: Option<FinishReason>,
+  usage: Option<ChatUsage>,
+) -> String {
+  serde_json::to_string(&ChatChunk {
+    id: Some("chatcmpl-stream".into()),
+    object: Some("chat.completion.chunk".into()),
+    created: None,
+    model: None,
+    choices: vec![ChunkChoice {
+      index: 0,
+      delta: ChatDelta {
+        role,
+        content: content.map(str::to_string),
+        reasoning_content: None,
+        tool_calls: Vec::new(),
+        extras: Extras::default(),
+      },
+      finish_reason,
+      extras: Extras::default(),
+    }],
+    usage,
+    extras: Extras::default(),
+  })
+  .expect("serialize mock chat chunk")
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +227,7 @@ pub struct MockResponse {
 }
 
 impl MockResponse {
-  pub fn json(value: Value) -> Self {
+  pub fn json(value: impl Serialize) -> Self {
     Self {
       status: StatusCode::OK,
       headers: vec![("content-type".into(), "application/json".into())],
