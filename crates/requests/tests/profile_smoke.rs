@@ -24,12 +24,12 @@ use tokn_core::account::AccountConfig;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
-use tokn_headers::{HeaderMap, HeaderValue};
+use tokn_headers::HeaderMap;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
-  AccountSelector, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend, NoopBuildHeaders,
-  NoopConvertRequest, PersonaBuildHeaders, PoolResolve, SelectorOutcome,
+  AccountSelector, ClientIdBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
+  NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
@@ -150,11 +150,9 @@ fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
 fn raw_chat(model: &str) -> RawInbound {
   let body = serde_json::json!({"model": model, "messages": []});
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
-  let mut headers = HeaderMap::new();
-  headers.insert("x-behave-as", HeaderValue::from_static("codex"));
   RawInbound {
     endpoint: Endpoint::ChatCompletions,
-    headers,
+    headers: HeaderMap::new(),
     raw_body: decoded.clone(),
     decoded_body: decoded,
     body_json: body,
@@ -287,7 +285,7 @@ async fn pre_send_happy_path_emits_expected_event_sequence() {
   assert_eq!(upstream, "glm-4");
   assert_eq!(provider, "zai-coding-plan");
   assert_eq!(account, "acct-1");
-  assert_eq!(client.as_ref().map(|c| c.as_str().to_string()), Some("codex".into()));
+  assert!(client.is_none());
 }
 
 #[tokio::test]
@@ -458,7 +456,7 @@ async fn full_pipeline_buffered_happy_path() {
     "smoke-full",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -681,7 +679,7 @@ async fn pipeline_send_failure_preserves_partial_outcome() {
     "smoke-fail",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -804,7 +802,7 @@ async fn pipeline_retries_recoverable_send_failures_and_succeeds() {
     "smoke-retry-success",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -883,7 +881,7 @@ async fn pipeline_stops_after_retry_budget_exhausted() {
     "smoke-retry-exhausted",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),
@@ -934,7 +932,7 @@ async fn pipeline_does_not_retry_permanent_send_failures() {
     "smoke-retry-permanent",
     Arc::new(DefaultExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PersonaBuildHeaders::with_opencode_default()),
+    Arc::new(ClientIdBuildHeaders::with_provider_defaults()),
     Arc::new(DefaultConvertRequest),
     Arc::new(DefaultSend::new(reqwest::Client::new())),
     Arc::new(DefaultConvertResponse::new()),

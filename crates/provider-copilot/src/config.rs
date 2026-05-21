@@ -29,8 +29,6 @@ pub struct CopilotHeaders {
   #[serde(default)]
   pub initiator_mode: InitiatorMode,
   #[serde(default)]
-  pub behave_as: Option<String>,
-  #[serde(default)]
   pub extra_headers: BTreeMap<String, String>,
 }
 
@@ -43,7 +41,6 @@ impl Default for CopilotHeaders {
       copilot_integration_id: default_integration_id(),
       openai_intent: default_openai_intent(),
       initiator_mode: InitiatorMode::default(),
-      behave_as: None,
       extra_headers: BTreeMap::new(),
     }
   }
@@ -96,7 +93,6 @@ impl CopilotHeaders {
           copilot_integration_id: o.copilot_integration_id.clone(),
           openai_intent: o.openai_intent.clone(),
           initiator_mode: o.initiator_mode,
-          behave_as: o.behave_as.clone().or_else(|| self.behave_as.clone()),
           extra_headers: extra,
         }
       }
