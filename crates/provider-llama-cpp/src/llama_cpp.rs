@@ -322,4 +322,51 @@ mod tests {
     assert_eq!(captured.path, "/chat/completions");
     assert_eq!(captured.header("authorization"), Some("Bearer sk-test"));
   }
+
+  #[tokio::test]
+  #[ignore = "requires LLAMA_CPP_LIVE_BASE_URL"]
+  async fn live_server_lists_models_and_accepts_chat() {
+    let base_url = std::env::var("LLAMA_CPP_LIVE_BASE_URL").expect("LLAMA_CPP_LIVE_BASE_URL must be set");
+    let mut account = acct(None);
+    account.base_url = Some(base_url);
+    let provider = LlamaCppProvider::from_account(Arc::new(account)).unwrap();
+    let http = reqwest::Client::new();
+
+    let models = provider.list_models(&http).await.unwrap();
+    let model = models["data"]
+      .as_array()
+      .and_then(|models| models.first())
+      .and_then(|model| model["id"].as_str())
+      .expect("live llama.cpp server should expose at least one model");
+
+    let body = serde_json::json!({
+      "model": model,
+      "messages": [{"role": "user", "content": "Reply with exactly: llama live ok"}],
+      "stream": false,
+      "max_tokens": 16,
+      "temperature": 0
+    });
+    let inbound = HeaderMap::new();
+    let response = provider
+      .chat(RequestCtx {
+        endpoint: Endpoint::ChatCompletions,
+        http: &http,
+        body: &body,
+        body_bytes: None,
+        content_encoding: None,
+        stream: false,
+        initiator: "user",
+        inbound_headers: &inbound,
+        client_headers: None,
+        outbound: None,
+        vars: TemplateVars::default(),
+      })
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let payload: Value = response.json().await.unwrap();
+    assert!(payload["choices"].as_array().is_some_and(|choices| !choices.is_empty()));
+    assert_eq!(payload["model"].as_str(), Some(model));
+  }
 }
