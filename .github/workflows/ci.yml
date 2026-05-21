@@ -119,8 +119,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      IMAGE_NAME: llm-gateway-cli:ci
-      IMAGE_TAR: /tmp/llm-gateway-cli-image.tar
+      IMAGE_NAME: tokn-gateway-cli:ci
+      IMAGE_TAR: /tmp/tokn-gateway-cli-image.tar
 
     steps:
       - name: Checkout
@@ -129,7 +129,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build llm-gateway image
+      - name: Build tokn-gateway image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -137,9 +137,9 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}
           outputs: type=docker,dest=${{ env.IMAGE_TAR }}
 
-      - name: Upload llm-gateway image artifact
+      - name: Upload tokn-gateway image artifact
         uses: actions/upload-artifact@v4
         with:
-          name: llm-gateway-cli-image
+          name: tokn-gateway-cli-image
           path: ${{ env.IMAGE_TAR }}
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
