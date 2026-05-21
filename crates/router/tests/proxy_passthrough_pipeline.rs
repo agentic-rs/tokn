@@ -562,6 +562,87 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
 }
 
 #[tokio::test]
+async fn proxy_passthrough_4xx_stream_request_completes_before_downstream_body_drain() {
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RequestEventPayload, StageEvent};
+
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let upstream_body = br#"{"error":{"message":"forbidden"}}"#;
+
+  let server = tokio::spawn(async move {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut buf = vec![0_u8; 16384];
+    let _ = stream.read(&mut buf).await.unwrap();
+    let header = format!(
+      "HTTP/1.1 403 Forbidden\r\ncontent-length: {}\r\n\r\n",
+      upstream_body.len()
+    );
+    stream.write_all(header.as_bytes()).await.unwrap();
+    stream.write_all(upstream_body).await.unwrap();
+    stream.flush().await.unwrap();
+  });
+
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Passthrough;
+  let events = Arc::new(EventBus::new(256));
+  let mut rx = events.subscribe();
+  let state = build_state(&cfg, &[], events).unwrap();
+
+  let inbound_body =
+    Bytes::from_static(br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
+
+  let intercepted_host = addr.ip().to_string();
+  let intercepted_port = addr.port();
+  let req = Request::builder()
+    .method(Method::POST)
+    .uri("/v1/chat/completions")
+    .header("content-type", "application/json")
+    .header("accept", "text/event-stream")
+    .header("authorization", "Bearer client-bearer-stream-403")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_passthrough_via_pipeline_inner(
+    &state,
+    &intercepted_host,
+    intercepted_port,
+    "http",
+    None,
+    Some(addr.to_string()),
+    parts,
+    inbound_body,
+  )
+  .await;
+
+  assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+
+  let mut saw_completed = false;
+  for _ in 0..32 {
+    let ev = tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await;
+    let Ok(Ok(ev)) = ev else { break };
+    let CoreEvent::Requests(req) = &*ev else { continue };
+    if matches!(
+      &req.payload,
+      RequestEventPayload::Stage(StageEvent::Completed { success: true, .. })
+    ) {
+      saw_completed = true;
+      break;
+    }
+  }
+  assert!(
+    saw_completed,
+    "4xx proxy responses should be buffered so the pipeline completes before the client drains the body"
+  );
+
+  let resp_body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+  assert_eq!(resp_body.as_ref(), upstream_body);
+
+  server.await.unwrap();
+}
+
+#[tokio::test]
 async fn proxy_switch_rejects_unrecognized_provider_url() {
   let mut cfg = Config::default();
   cfg.server.route_mode = RouteMode::Switch;
