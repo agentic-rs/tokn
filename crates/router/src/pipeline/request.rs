@@ -9,6 +9,10 @@ use tokn_accounts::{AccountHandle, EndpointAcquire};
 use tokn_config::RouteMode;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use tokn_core::provider::TemplateVars;
+use tokn_core::ClientId;
+use tokn_headers::persona::Persona;
+use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
+use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tracing::warn;
 
 pub struct DryRunOutput {
@@ -43,7 +47,7 @@ struct PreparedDryRun {
   debug_outbound_body: Bytes,
   content_encoding: Option<crate::api::codec::ContentEncodingKind>,
   provider_headers: reqwest::header::HeaderMap,
-  profile_headers: Option<reqwest::header::HeaderMap>,
+  client_headers: Option<reqwest::header::HeaderMap>,
   vars: TemplateVars,
   account: Arc<AccountHandle>,
 }
@@ -128,72 +132,46 @@ fn prepare_dry_run(
   };
   let inbound_compat: reqwest::header::HeaderMap = meta.inbound_headers.clone().into();
   let provider_headers = provider_headers(&inbound_compat);
-  let vars = crate::proxy::header_pipeline::parse_inbound_vars(&inbound_compat);
-  let profile_headers = build_profile_headers(&meta, &account, &inbound_compat, &vars);
+  let vars = parse_inbound_vars(&inbound_compat);
+  let client_headers = build_client_headers(&account, &inbound_compat, &vars);
   Ok(PreparedDryRun {
     meta,
     upstream_body,
     debug_outbound_body,
     content_encoding,
     provider_headers,
-    profile_headers,
+    client_headers,
     vars,
     account,
   })
 }
 
-fn build_profile_headers(
-  meta: &RequestMeta,
+fn build_client_headers(
   account: &Arc<AccountHandle>,
   inbound: &reqwest::header::HeaderMap,
   vars: &TemplateVars,
 ) -> Option<reqwest::header::HeaderMap> {
-  let persona = selected_persona(meta, account)?;
-  crate::proxy::header_pipeline::build_headers(crate::proxy::header_pipeline::HeaderPipelineInput {
-    profiles: tokn_config::profiles::Profiles::global(),
-    persona: persona.as_str(),
-    provider_id: account.provider.info().id.as_str(),
-    inbound,
-    provider_patch: Some(&account_extra_headers(&account.config.load().headers)),
-    vars,
-  })
-  .map(|out| out.headers)
+  let client_id = selected_client_id(account)?;
+  let persona = persona_from_client_id(&client_id);
+  let provider_id = account.provider.info().id.as_str();
+  let inbound_headers: tokn_headers::HeaderMap = inbound.into();
+  let mut headers = match lookup(provider_id, &persona) {
+    Some(schema) => compose_with_schema(&schema, &client_id, vars, &inbound_headers),
+    None => build_outbound(&client_id, vars, &inbound_headers),
+  };
+  let patch: tokn_headers::HeaderMap = (&account_extra_headers(&account.config.load().headers)).into();
+  headers.merge_replacing(patch);
+  Some(headers.into())
 }
 
-fn selected_persona(meta: &RequestMeta, account: &Arc<AccountHandle>) -> Option<String> {
-  meta
-    .behave_as
-    .clone()
-    .or_else(|| settings_behave_as(&account.config.load().settings))
-    .or_else(|| default_persona(account.provider.info().id.as_str()).map(str::to_string))
-}
-
-fn settings_behave_as(settings: &toml::Table) -> Option<String> {
-  settings
-    .get("behave_as")
-    .and_then(|v| v.as_str())
-    .map(str::trim)
-    .filter(|s| !s.is_empty())
-    .map(ToOwned::to_owned)
-}
-
-fn default_persona(provider_id: &str) -> Option<&'static str> {
-  match provider_id {
-    crate::provider::ID_CODEX => Some("codex"),
-    crate::provider::ID_DEEPSEEK | crate::provider::ID_LLAMA_CPP | crate::provider::ID_OPENAI => Some("opencode"),
-    crate::provider::ID_GITHUB_COPILOT => Some("copilot"),
-    crate::provider::ID_ZAI
-    | crate::provider::ID_ZAI_CODING_PLAN
-    | crate::provider::ID_ZHIPUAI
-    | crate::provider::ID_ZHIPUAI_CODING_PLAN => Some("opencode"),
-    _ => None,
-  }
+fn selected_client_id(account: &Arc<AccountHandle>) -> Option<ClientId> {
+  ClientId::provider_default(account.provider.info().id.as_str())
 }
 
 fn account_extra_headers(headers: &std::collections::BTreeMap<String, String>) -> reqwest::header::HeaderMap {
   let mut out = reqwest::header::HeaderMap::new();
   for (name, value) in headers {
-    if tokn_config::profiles::is_router_controlled(name) {
+    if is_router_controlled(name) {
       continue;
     }
     let Ok(name) = reqwest::header::HeaderName::from_bytes(name.as_bytes()) else {
@@ -231,7 +209,7 @@ pub fn dry_run_request(
   let (meta, body, account, _) = resolve_request(state, parsed, 0)?;
   let prepared = prepare_dry_run(meta, body, account, raw_body, content_encoding)
     .map_err(|e| ApiError::bad_gateway(e.to_string()))?;
-  let mut headers: tokn_headers::HeaderMap = prepared.profile_headers.as_ref().map(|h| h.into()).unwrap_or_default();
+  let mut headers: tokn_headers::HeaderMap = prepared.client_headers.as_ref().map(|h| h.into()).unwrap_or_default();
   let inbound_lh: tokn_headers::HeaderMap = (&prepared.provider_headers).into();
   prepared
     .account
@@ -261,10 +239,161 @@ pub fn dry_run_request(
   })
 }
 
+const ROUTER_CONTROLLED_HEADERS: &[&str] = &[
+  "accept",
+  "accept-encoding",
+  "authorization",
+  "connection",
+  "content-length",
+  "content-type",
+  "host",
+  "te",
+  "transfer-encoding",
+];
+
+fn normalize_header_name(name: &str) -> String {
+  name.trim().to_ascii_lowercase()
+}
+
+fn is_router_controlled(name: &str) -> bool {
+  let n = normalize_header_name(name);
+  ROUTER_CONTROLLED_HEADERS.contains(&n.as_str())
+}
+
+fn persona_from_client_id(client_id: &ClientId) -> Persona {
+  match client_id {
+    ClientId::Opencode => Persona::Opencode,
+    ClientId::CodexCli => Persona::CodexCli,
+    ClientId::ClaudeCode => Persona::ClaudeCode,
+    ClientId::Cline => Persona::Cline,
+    ClientId::CopilotCli => Persona::CopilotCli,
+    ClientId::Other(value) => Persona::Custom(value.clone()),
+  }
+}
+
+fn build_outbound(
+  client_id: &ClientId,
+  vars: &TemplateVars,
+  inbound: &tokn_headers::HeaderMap,
+) -> tokn_headers::HeaderMap {
+  persona_from_client_id(client_id).build_outbound(vars, inbound)
+}
+
+fn compose_with_schema(
+  schema: &ResolvedSchema,
+  client_id: &ClientId,
+  vars: &TemplateVars,
+  inbound: &tokn_headers::HeaderMap,
+) -> tokn_headers::HeaderMap {
+  let client_id_map = build_outbound(client_id, vars, inbound);
+  let overlay_map = schema.overlay.map(|kind| match kind {
+    OverlayKind::Copilot => {
+      use tokn_headers::HeaderSchema as _;
+      CopilotOverlay::build(vars, inbound).dump()
+    }
+    OverlayKind::Codex => {
+      use tokn_headers::HeaderSchema as _;
+      CodexOverlay::build(vars, inbound).dump()
+    }
+  });
+  ResolvedSchema::compose(client_id_map, overlay_map)
+}
+
+fn parse_inbound_vars(inbound: &reqwest::header::HeaderMap) -> TemplateVars {
+  TemplateVars {
+    session_id: header_value(inbound, "x-session-affinity").or_else(|| header_value(inbound, "session_id")),
+    request_id: header_value(inbound, "x-request-id"),
+    project_cwd: header_value(inbound, "x-project-cwd"),
+    interaction_id: header_value(inbound, "x-interaction-id"),
+    account_id: header_value(inbound, "chatgpt-account-id"),
+  }
+}
+
+fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<smol_str::SmolStr> {
+  headers
+    .get(name)
+    .and_then(|value| value.to_str().ok())
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(smol_str::SmolStr::from)
+}
+
 fn provider_headers(headers: &reqwest::header::HeaderMap) -> reqwest::header::HeaderMap {
   headers
     .iter()
     .filter(|(name, _)| !crate::api::is_router_owned_header(name))
     .map(|(name, value)| (name.clone(), value.clone()))
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::api::build_state;
+  use crate::config::{Account as AccountCfg, Config};
+  use crate::util::secret::Secret;
+  use std::sync::Arc;
+  use tokn_core::account::AccountConfig;
+  use tokn_core::event::EventBus;
+
+  fn openai_account() -> AccountCfg {
+    AccountCfg {
+      id: "acct".into(),
+      provider: crate::provider::ID_OPENAI.into(),
+      enabled: true,
+      tier: tokn_core::account::AccountTier::Active,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: Some(Secret::new("sk-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
+
+  fn core_account(cfg: AccountCfg) -> AccountConfig {
+    let raw = toml::to_string(&cfg).unwrap();
+    toml::from_str(&raw).unwrap()
+  }
+
+  #[test]
+  fn dry_run_ignores_account_behave_as_setting() {
+    let cfg = Config::default();
+    let mut account = openai_account();
+    account
+      .settings
+      .insert("behave_as".into(), toml::Value::String("codex".into()));
+    let state = build_state(&cfg, &[core_account(account)], Arc::new(EventBus::noop())).unwrap();
+
+    let out = dry_run_request(
+      &state,
+      DryRunEndpoint::ChatCompletions,
+      reqwest::header::HeaderMap::new(),
+      serde_json::json!({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "hi"}]
+      }),
+      Bytes::from_static(br#"{"model":"gpt-4.1","messages":[{"role":"user","content":"hi"}]}"#),
+      None,
+    )
+    .unwrap();
+
+    let user_agent = out.headers.get("user-agent").and_then(|value| value.to_str().ok());
+    assert_eq!(
+      user_agent,
+      Some("opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
+    );
+    assert!(out.headers.get("originator").is_none());
+  }
 }

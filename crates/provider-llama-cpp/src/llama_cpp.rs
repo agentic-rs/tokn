@@ -138,7 +138,7 @@ impl Provider for LlamaCppProvider {
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response> {
     let url = self.url("/chat/completions");
     debug!(%url, "POST llama.cpp chat");
-    let mut headers = ctx.profile_headers.clone().unwrap_or_default();
+    let mut headers = ctx.client_headers.clone().unwrap_or_default();
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
@@ -309,8 +309,7 @@ mod tests {
         stream: false,
         initiator: "user",
         inbound_headers: &inbound,
-        behave_as: None,
-        profile_headers: None,
+        client_headers: None,
         outbound: None,
         vars: TemplateVars::default(),
       })
