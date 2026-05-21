@@ -1,4 +1,4 @@
-use crate::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
+use crate::{HeaderExpectation, MockAuthConfig, MockEndpoint, MockLlmConfig, MockLlmServer, MockResponse, MockRoute};
 use axum::body::Bytes;
 use axum::http::Method;
 
@@ -89,4 +89,42 @@ async fn captures_requests_for_assertions() {
   assert_eq!(captured.query.as_deref(), Some("view=full"));
   assert_eq!(captured.header("x-test"), Some("yes"));
   assert_eq!(captured.body, Bytes::from_static(br#"{"input":"hello"}"#));
+}
+
+#[tokio::test]
+async fn rejects_bodies_over_limit() {
+  let server = MockLlmServer::start(MockLlmConfig {
+    routes: vec![MockRoute::chat_completions()],
+    ..Default::default()
+  })
+  .await;
+
+  let http = reqwest::Client::new();
+  let response = http
+    .post(server.url("/chat/completions"))
+    .body(vec![b'x'; 1024 * 1024 + 1])
+    .send()
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
+  assert!(response.text().await.unwrap().contains("request body exceeds"));
+}
+
+#[tokio::test]
+async fn last_configured_route_overrides_earlier_match() {
+  let server = MockLlmServer::start(
+    MockLlmConfig::default().with_route(MockRoute::new(
+      MockEndpoint::Responses,
+      MockResponse::json(serde_json::json!({"id": "resp-override"})),
+    )),
+  )
+  .await;
+
+  let http = reqwest::Client::new();
+  let response = http.post(server.url("/responses")).send().await.unwrap();
+
+  assert_eq!(response.status(), reqwest::StatusCode::OK);
+  let body: serde_json::Value = response.json().await.unwrap();
+  assert_eq!(body["id"], "resp-override");
 }

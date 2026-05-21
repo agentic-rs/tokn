@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+
 #[derive(Clone, Debug)]
 pub struct CapturedRequest {
   pub method: Method,
@@ -107,9 +109,16 @@ struct MockState {
 
 async fn handle_request(State(state): State<Arc<MockState>>, request: Request) -> Response {
   let (parts, body) = request.into_parts();
-  let body = match axum::body::to_bytes(body, usize::MAX).await {
+  let body = match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
     Ok(body) => body,
     Err(err) => {
+      if err.to_string().contains("length limit exceeded") {
+        return (
+          StatusCode::PAYLOAD_TOO_LARGE,
+          format!("request body exceeds {MAX_BODY_BYTES} bytes"),
+        )
+          .into_response();
+      }
       return (
         StatusCode::INTERNAL_SERVER_ERROR,
         format!("failed to read request body: {err}"),
@@ -130,6 +139,7 @@ async fn handle_request(State(state): State<Arc<MockState>>, request: Request) -
     .config
     .routes
     .iter()
+    .rev()
     .find(|route| route.endpoint.method() == parts.method && route.endpoint.path() == parts.uri.path())
   else {
     return (
