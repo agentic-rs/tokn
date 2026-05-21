@@ -504,8 +504,12 @@ fn print_event(event: &Event) {
       }
       RecordEvent::Usage(usage) => {
         println!(
-          "[record:usage] input={:?} output={:?} cached={:?} reasoning={:?}",
-          usage.input_tokens, usage.output_tokens, usage.details.cache_read, usage.details.reasoning
+          "[record:usage] input={:?} output={:?} cache_read={:?} cache_write={:?} reasoning={:?}",
+          usage.input_tokens,
+          usage.output_tokens,
+          usage.details.cache_read,
+          usage.details.cache_write,
+          usage.details.reasoning
         );
       }
     },

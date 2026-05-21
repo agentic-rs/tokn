@@ -1,5 +1,5 @@
 {
-  "expected_version": 7,
+  "expected_version": 8,
   "input": [
     {
       "table": "requests",
@@ -43,14 +43,8 @@
         "endpoint",
         "status",
         "request_error",
-        "latency_ms",
-        "latency_header_ms",
         "user",
-        "peer_addr",
-        "local_addr",
-        "mode",
-        "behave_as",
-        "method"
+        "ctx_json"
       ]
     },
     {
@@ -74,12 +68,8 @@
         "account_id",
         "provider_id",
         "model",
-        "initiator",
-        "stream",
-        "input_tok",
-        "output_tok",
-        "cached_tok",
-        "reasoning_tok"
+        "params_json",
+        "usage_json"
       ]
     },
     {

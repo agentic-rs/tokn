@@ -26,6 +26,7 @@ impl SessionSource {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageDetails {
   pub cache_read: Option<u64>,
+  pub cache_write: Option<u64>,
   pub reasoning: Option<u64>,
 }
 

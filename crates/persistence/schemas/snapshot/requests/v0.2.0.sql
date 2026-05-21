@@ -9,17 +9,10 @@ CREATE TABLE request_connection (
   endpoint TEXT,
   status INTEGER,
   request_error TEXT,
-  latency_ms INTEGER,
-  latency_header_ms INTEGER,
   user TEXT,
-  peer_addr TEXT,
-  local_addr TEXT,
-  mode TEXT,
-  behave_as TEXT,
-  method TEXT
+  ctx_json TEXT
 );
 CREATE INDEX idx_request_connection_ts ON request_connection(ts);
-CREATE INDEX idx_request_connection_local_addr ON request_connection(local_addr);
 
 CREATE TABLE request_metadata (
   request_id TEXT PRIMARY KEY,
@@ -27,12 +20,8 @@ CREATE TABLE request_metadata (
   account_id TEXT,
   provider_id TEXT,
   model TEXT,
-  initiator TEXT,
-  stream INTEGER,
-  input_tok INTEGER,
-  output_tok INTEGER,
-  cached_tok INTEGER,
-  reasoning_tok INTEGER
+  params_json TEXT,
+  usage_json TEXT
 );
 CREATE INDEX idx_request_metadata_session ON request_metadata(session_id);
 CREATE INDEX idx_request_metadata_account ON request_metadata(account_id);
@@ -71,21 +60,11 @@ SELECT
   m.account_id,
   m.provider_id,
   m.model,
-  m.initiator,
+  m.params_json,
   c.status,
-  m.stream,
-  c.latency_ms,
-  c.latency_header_ms,
-  m.input_tok,
-  m.output_tok,
-  m.cached_tok,
-  m.reasoning_tok,
-  c.peer_addr,
-  c.method,
+  c.ctx_json,
+  m.usage_json,
   c.user,
-  c.local_addr,
-  c.mode,
-  c.behave_as,
   d.inbound_req_method,
   d.inbound_req_url,
   d.inbound_req_headers,

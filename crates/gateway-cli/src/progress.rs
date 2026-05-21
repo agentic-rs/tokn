@@ -102,6 +102,9 @@ impl RequestState {
     if usage.details.cache_read.is_some() {
       self.usage.details.cache_read = usage.details.cache_read;
     }
+    if usage.details.cache_write.is_some() {
+      self.usage.details.cache_write = usage.details.cache_write;
+    }
     if usage.details.reasoning.is_some() {
       self.usage.details.reasoning = usage.details.reasoning;
     }
@@ -254,7 +257,12 @@ fn format_usage(u: &Usage) -> String {
   }
   if let Some(v) = u.details.cache_read {
     if v > 0 {
-      parts.push(format!("cache={v}"));
+      parts.push(format!("cache_read={v}"));
+    }
+  }
+  if let Some(v) = u.details.cache_write {
+    if v > 0 {
+      parts.push(format!("cache_write={v}"));
     }
   }
   if let Some(v) = u.details.reasoning {
@@ -872,6 +880,7 @@ mod tests {
       output_tokens: Some(13),
       details: UsageDetails {
         cache_read: Some(17),
+        cache_write: Some(18),
         reasoning: Some(19),
       },
     }))));
@@ -881,6 +890,7 @@ mod tests {
     assert_eq!(state.request.usage.input_tokens, Some(11));
     assert_eq!(state.request.usage.output_tokens, Some(13));
     assert_eq!(state.request.usage.details.cache_read, Some(17));
+    assert_eq!(state.request.usage.details.cache_write, Some(18));
     assert_eq!(state.request.usage.details.reasoning, Some(19));
   }
 

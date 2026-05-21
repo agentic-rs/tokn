@@ -48,6 +48,7 @@ pub fn usage_has_any(usage: &Usage) -> bool {
   usage.input_tokens.is_some()
     || usage.output_tokens.is_some()
     || usage.details.cache_read.is_some()
+    || usage.details.cache_write.is_some()
     || usage.details.reasoning.is_some()
 }
 
@@ -67,7 +68,11 @@ fn parse_openai_chat_usage(u: Option<&Value>) -> Option<Usage> {
   Some(Usage {
     input_tokens,
     output_tokens,
-    details: UsageDetails { cache_read, reasoning },
+    details: UsageDetails {
+      cache_read,
+      cache_write: None,
+      reasoning,
+    },
   })
 }
 
@@ -83,7 +88,11 @@ fn parse_openai_responses_usage(u: Option<&Value>) -> Option<Usage> {
   Some(Usage {
     input_tokens,
     output_tokens,
-    details: UsageDetails { cache_read, reasoning },
+    details: UsageDetails {
+      cache_read,
+      cache_write: None,
+      reasoning,
+    },
   })
 }
 
@@ -93,14 +102,14 @@ fn parse_openai_responses_usage(u: Option<&Value>) -> Option<Usage> {
 /// `input_tokens` excludes cached content.
 fn parse_anthropic_usage(u: Option<&Value>) -> Option<Usage> {
   let raw_input = ptr_u64(u, "/input_tokens");
-  let cache_creation = ptr_u64(u, "/cache_creation_input_tokens");
+  let cache_write = ptr_u64(u, "/cache_creation_input_tokens");
   let cache_read = ptr_u64(u, "/cache_read_input_tokens");
   // Require at least one Anthropic-specific marker.
-  if cache_creation.is_none() && cache_read.is_none() {
+  if cache_write.is_none() && cache_read.is_none() {
     return None;
   }
   let output_tokens = ptr_u64(u, "/output_tokens");
-  let total_input = match (raw_input, cache_creation, cache_read) {
+  let total_input = match (raw_input, cache_write, cache_read) {
     (None, None, None) => None,
     (a, b, c) => Some(a.unwrap_or(0) + b.unwrap_or(0) + c.unwrap_or(0)),
   };
@@ -109,6 +118,7 @@ fn parse_anthropic_usage(u: Option<&Value>) -> Option<Usage> {
     output_tokens,
     details: UsageDetails {
       cache_read,
+      cache_write,
       reasoning: None,
     },
   })
@@ -136,6 +146,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(11));
     assert_eq!(u.output_tokens, Some(22));
     assert_eq!(u.details.cache_read, None);
+    assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, None);
   }
 
@@ -163,6 +174,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(15));
     assert_eq!(u.output_tokens, Some(1));
     assert_eq!(u.details.cache_read, Some(2));
+    assert_eq!(u.details.cache_write, Some(4));
   }
 
   #[test]
@@ -188,6 +200,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(100));
     assert_eq!(u.output_tokens, Some(50));
     assert_eq!(u.details.cache_read, Some(30));
+    assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, Some(20));
   }
 
@@ -204,6 +217,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(35973));
     assert_eq!(u.output_tokens, Some(989));
     assert_eq!(u.details.cache_read, Some(34176));
+    assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, Some(11));
   }
 

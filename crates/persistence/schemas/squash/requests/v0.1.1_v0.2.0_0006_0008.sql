@@ -1,5 +1,5 @@
 -- Squashed requests migrations from snapshot v0.1.1 to snapshot v0.2.0.
--- Covers schema versions 0006 through 0007.
+-- Covers schema versions 0006 through 0008.
 
 ALTER TABLE requests RENAME TO requests_legacy;
 
@@ -9,17 +9,10 @@ CREATE TABLE request_connection (
   endpoint TEXT,
   status INTEGER,
   request_error TEXT,
-  latency_ms INTEGER,
-  latency_header_ms INTEGER,
   user TEXT,
-  peer_addr TEXT,
-  local_addr TEXT,
-  mode TEXT,
-  behave_as TEXT,
-  method TEXT
+  ctx_json TEXT
 );
 CREATE INDEX idx_request_connection_ts ON request_connection(ts);
-CREATE INDEX idx_request_connection_local_addr ON request_connection(local_addr);
 
 CREATE TABLE request_metadata (
   request_id TEXT PRIMARY KEY,
@@ -27,12 +20,8 @@ CREATE TABLE request_metadata (
   account_id TEXT,
   provider_id TEXT,
   model TEXT,
-  initiator TEXT,
-  stream INTEGER,
-  input_tok INTEGER,
-  output_tok INTEGER,
-  cached_tok INTEGER,
-  reasoning_tok INTEGER
+  params_json TEXT,
+  usage_json TEXT
 );
 CREATE INDEX idx_request_metadata_session ON request_metadata(session_id);
 CREATE INDEX idx_request_metadata_account ON request_metadata(account_id);
@@ -67,14 +56,8 @@ INSERT INTO request_connection (
   endpoint,
   status,
   request_error,
-  latency_ms,
-  latency_header_ms,
   user,
-  peer_addr,
-  local_addr,
-  mode,
-  behave_as,
-  method
+  ctx_json
 )
 SELECT
   id,
@@ -83,14 +66,36 @@ SELECT
   endpoint,
   status,
   request_error,
-  latency_ms,
-  latency_header_ms,
   user,
-  peer_addr,
-  local_addr,
-  mode,
-  behave_as,
-  method
+  CASE
+    WHEN latency_ms IS NULL
+      AND latency_header_ms IS NULL
+      AND peer_addr IS NULL
+      AND local_addr IS NULL
+      AND mode IS NULL
+      AND behave_as IS NULL
+      AND method IS NULL
+    THEN NULL
+    ELSE json_remove(
+      json_set(
+        '{}',
+        '$.latency_ms', latency_ms,
+        '$.latency_header_ms', latency_header_ms,
+        '$.peer_addr', peer_addr,
+        '$.local_addr', local_addr,
+        '$.mode', mode,
+        '$.agent_id', behave_as,
+        '$.pipeline_id', method
+      ),
+      CASE WHEN latency_ms IS NULL THEN '$.latency_ms' ELSE '$.__noop__' END,
+      CASE WHEN latency_header_ms IS NULL THEN '$.latency_header_ms' ELSE '$.__noop__' END,
+      CASE WHEN peer_addr IS NULL THEN '$.peer_addr' ELSE '$.__noop__' END,
+      CASE WHEN local_addr IS NULL THEN '$.local_addr' ELSE '$.__noop__' END,
+      CASE WHEN mode IS NULL THEN '$.mode' ELSE '$.__noop__' END,
+      CASE WHEN behave_as IS NULL THEN '$.agent_id' ELSE '$.__noop__' END,
+      CASE WHEN method IS NULL THEN '$.pipeline_id' ELSE '$.__noop__' END
+    )
+  END
 FROM requests_legacy;
 
 INSERT INTO request_metadata (
@@ -99,12 +104,8 @@ INSERT INTO request_metadata (
   account_id,
   provider_id,
   model,
-  initiator,
-  stream,
-  input_tok,
-  output_tok,
-  cached_tok,
-  reasoning_tok
+  params_json,
+  usage_json
 )
 SELECT
   CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END,
@@ -112,12 +113,43 @@ SELECT
   account_id,
   provider_id,
   model,
-  initiator,
-  stream,
-  input_tok,
-  output_tok,
-  cached_tok,
-  reasoning_tok
+  CASE
+    WHEN initiator IS NULL AND stream IS NULL THEN NULL
+    ELSE json_remove(
+      json_set(
+        '{}',
+        '$.initiator', initiator,
+        '$.stream', CASE WHEN stream = 0 THEN json('false') ELSE json('true') END
+      ),
+      CASE WHEN initiator IS NULL THEN '$.initiator' ELSE '$.__noop__' END,
+      CASE WHEN stream IS NULL THEN '$.stream' ELSE '$.__noop__' END
+    )
+  END,
+  CASE
+    WHEN input_tok IS NULL
+      AND output_tok IS NULL
+      AND cached_tok IS NULL
+      AND reasoning_tok IS NULL
+    THEN NULL
+    ELSE json_remove(
+      json_set(
+        '{}',
+        '$.input', input_tok,
+        '$.output', output_tok,
+        '$.cache_read', cached_tok,
+        '$.reasoning', reasoning_tok,
+        '$.total', CASE
+          WHEN input_tok IS NULL OR output_tok IS NULL THEN NULL
+          ELSE input_tok + output_tok
+        END
+      ),
+      CASE WHEN input_tok IS NULL THEN '$.input' ELSE '$.__noop__' END,
+      CASE WHEN output_tok IS NULL THEN '$.output' ELSE '$.__noop__' END,
+      CASE WHEN cached_tok IS NULL THEN '$.cache_read' ELSE '$.__noop__' END,
+      CASE WHEN reasoning_tok IS NULL THEN '$.reasoning' ELSE '$.__noop__' END,
+      CASE WHEN input_tok IS NULL OR output_tok IS NULL THEN '$.total' ELSE '$.__noop__' END
+    )
+  END
 FROM requests_legacy;
 
 INSERT INTO request_downstream (
@@ -176,21 +208,11 @@ SELECT
   m.account_id,
   m.provider_id,
   m.model,
-  m.initiator,
+  m.params_json,
   c.status,
-  m.stream,
-  c.latency_ms,
-  c.latency_header_ms,
-  m.input_tok,
-  m.output_tok,
-  m.cached_tok,
-  m.reasoning_tok,
-  c.peer_addr,
-  c.method,
+  c.ctx_json,
+  m.usage_json,
   c.user,
-  c.local_addr,
-  c.mode,
-  c.behave_as,
   d.inbound_req_method,
   d.inbound_req_url,
   d.inbound_req_headers,

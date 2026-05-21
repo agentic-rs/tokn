@@ -59,6 +59,11 @@ pub(crate) const MIGRATIONS: &[migrate::Migration] = &[
     name: "split_requests",
     sql: include_str!("../../schemas/migrations/requests/0007_split_requests.sql"),
   },
+  migrate::Migration {
+    version: 8,
+    name: "metadata_json",
+    sql: include_str!("../../schemas/migrations/requests/0008_metadata_json.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -264,7 +269,9 @@ fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::
         .map(serde_json::Value::Number)
         .unwrap_or(serde_json::Value::Null),
       rusqlite::types::ValueRef::Text(t) => match std::str::from_utf8(t) {
-        Ok(s) => serde_json::Value::String(s.to_string()),
+        Ok(s) => {
+          serde_json::from_str::<serde_json::Value>(s).unwrap_or_else(|_| serde_json::Value::String(s.to_string()))
+        }
         Err(_) => serde_json::Value::Array(t.iter().map(|b| serde_json::Value::from(*b)).collect()),
       },
       rusqlite::types::ValueRef::Blob(b) => match std::str::from_utf8(b) {
@@ -299,14 +306,8 @@ mod tests {
           "endpoint",
           "status",
           "request_error",
-          "latency_ms",
-          "latency_header_ms",
           "user",
-          "peer_addr",
-          "local_addr",
-          "mode",
-          "behave_as",
-          "method",
+          "ctx_json",
         ][..],
       ),
       (
@@ -317,12 +318,8 @@ mod tests {
           "account_id",
           "provider_id",
           "model",
-          "initiator",
-          "stream",
-          "input_tok",
-          "output_tok",
-          "cached_tok",
-          "reasoning_tok",
+          "params_json",
+          "usage_json",
         ][..],
       ),
       (
@@ -390,6 +387,6 @@ mod tests {
       .unwrap()
       .query_row([], |r| r.get(0))
       .unwrap();
-    assert_eq!(v, 7);
+    assert_eq!(v, 8);
   }
 }

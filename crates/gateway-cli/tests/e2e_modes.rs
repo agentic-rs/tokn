@@ -41,7 +41,7 @@ impl RequestsHarness {
   async fn row(&self, request_id: &str) -> Map<String, Value> {
     for _ in 0..100 {
       if let Some(row) = read_request_row(&self.requests_dir, request_id).expect("read request row") {
-        if row.get("latency_ms").and_then(Value::as_i64).is_some() {
+        if ctx(&row).get("latency_ms").and_then(Value::as_i64).is_some() {
           return row;
         }
       }
@@ -105,6 +105,14 @@ fn int(row: &Map<String, Value>, key: &str) -> Option<i64> {
   row.get(key).and_then(Value::as_i64)
 }
 
+fn ctx(row: &Map<String, Value>) -> Map<String, Value> {
+  row
+    .get("ctx_json")
+    .and_then(Value::as_object)
+    .cloned()
+    .unwrap_or_default()
+}
+
 fn body_json(row: &Map<String, Value>, key: &str) -> Value {
   let Some(value) = row.get(key) else {
     panic!("{key} missing");
@@ -130,8 +138,19 @@ struct RouterCase {
 }
 
 fn assert_router_row(row: &Map<String, Value>, case: RouterCase) {
-  assert_eq!(text(row, "mode").as_deref(), Some(case.mode), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("requests"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some(case.mode),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("requests"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "inbound_req_method").as_deref(),
     Some("POST"),
@@ -286,8 +305,19 @@ struct ProxyCase {
 }
 
 fn assert_proxy_row(row: &Map<String, Value>, case: ProxyCase, inbound_body: &Bytes) {
-  assert_eq!(text(row, "mode").as_deref(), Some("passthrough"), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("proxy"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some("passthrough"),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("proxy"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "endpoint").as_deref(),
     Some("chat_completions"),
@@ -453,8 +483,9 @@ async fn proxy_switch_failure_returns_bad_request_and_persists_error_row() {
   harness.shutdown().await;
 
   let row = harness.row(request_id).await;
-  assert_eq!(text(&row, "mode").as_deref(), Some("switch"));
-  assert_eq!(text(&row, "method").as_deref(), Some("proxy"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx.get("mode").and_then(Value::as_str), Some("switch"));
+  assert_eq!(ctx.get("pipeline_id").and_then(Value::as_str), Some("proxy"));
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "inbound_req_method").as_deref(), Some("POST"));
   assert_eq!(
