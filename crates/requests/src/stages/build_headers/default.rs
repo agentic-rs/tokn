@@ -96,11 +96,12 @@ impl DefaultBuildHeaders {
     Self::new(agent_defaults, AgentId::Opencode)
   }
 
-  fn effective_agent_id(&self, extracted: &Extracted, provider_id: &str) -> AgentId {
-    extracted
+  fn effective_agent_id(&self, extracted: &Extracted, resolved: &Resolved) -> AgentId {
+    resolved
       .agent_id
       .clone()
-      .or_else(|| self.agent_defaults.get(provider_id).cloned())
+      .or_else(|| extracted.agent_id.clone())
+      .or_else(|| self.agent_defaults.get(resolved.provider_id.as_str()).cloned())
       .unwrap_or_else(|| self.unknown_agent_id_default.clone())
   }
 }
@@ -115,7 +116,7 @@ impl BuildHeadersStage for DefaultBuildHeaders {
   ) -> Result<BuiltHeaders, PipelineError> {
     let inbound = &extracted.headers;
     let vars = build_template_vars(inbound);
-    let agent_id = self.effective_agent_id(extracted, resolved.provider_id.as_str());
+    let agent_id = self.effective_agent_id(extracted, resolved);
 
     let headers = match lookup(resolved.provider_id.as_str(), agent_id.as_str()) {
       Some(schema) => compose_with_schema(&schema, &vars, inbound),
@@ -280,6 +281,21 @@ mod tests {
     assert!(
       out.headers.contains_key(&keys::ORIGINATOR),
       "Codex overlay's `originator` header missing — explicit agent_id was ignored"
+    );
+  }
+
+  #[tokio::test]
+  async fn resolved_agent_id_overrides_extracted_agent_id() {
+    let stage = DefaultBuildHeaders::with_provider_defaults();
+    let mut resolved = resolved("openai");
+    resolved.agent_id = Some(AgentId::CodexCli);
+    let out = stage
+      .build_headers(&ctx(), &extracted(HeaderMap::new(), Some(AgentId::Opencode)), &resolved)
+      .await
+      .unwrap();
+    assert!(
+      out.headers.contains_key(&keys::ORIGINATOR),
+      "Codex overlay should win when Resolve supplied the effective agent_id"
     );
   }
 
