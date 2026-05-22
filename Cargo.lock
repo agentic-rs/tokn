@@ -167,9 +167,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "autocfg"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
+checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "aws-lc-rs"
@@ -2163,9 +2163,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.149"
+version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
+checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
  "itoa",
  "memchr",
@@ -2569,7 +2569,7 @@ dependencies = [
 
 [[package]]
 name = "tokn"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "tokn-auth",
  "tokn-catalogue",
@@ -2592,7 +2592,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-accounts"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2614,7 +2614,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-auth"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2635,7 +2635,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-catalogue"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "directories",
  "reqwest",
@@ -2648,7 +2648,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-config"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -2665,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-convert"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-core"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2709,7 +2709,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-endpoint-chat-completions"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-endpoint-core"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-endpoint-macros"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2737,7 +2737,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-endpoint-messages"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-endpoint-responses"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-gateway-cli"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -2811,7 +2811,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-headers"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "http",
  "reqwest",
@@ -2823,7 +2823,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-mock-server"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "axum",
  "bytes",
@@ -2839,7 +2839,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-persistence"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "bytes",
  "lzma-rust2",
@@ -2860,7 +2860,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-provider-copilot"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-provider-deepseek"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-provider-llama-cpp"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -2917,7 +2917,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-provider-openai"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "async-trait",
  "base64",
@@ -2939,7 +2939,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-provider-zai"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "async-trait",
  "axum",
@@ -2959,7 +2959,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-requests"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2985,7 +2985,7 @@ dependencies = [
 
 [[package]]
 name = "tokn-router"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "arc-swap",
