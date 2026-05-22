@@ -512,6 +512,9 @@ fn model_is_known(model: Option<&str>) -> bool {
 
 fn usage_json(usage: &Usage) -> Option<String> {
   let mut out = Map::new();
+  if let Some(value) = usage.usage_type {
+    out.insert("kind".to_string(), Value::from(value.as_str()));
+  }
   if let Some(value) = usage.input_tokens {
     out.insert("input".to_string(), Value::from(value));
   }
@@ -633,6 +636,7 @@ mod tests {
         input_tokens: Some(12),
         output_tokens: Some(5),
         total_tokens: Some(17),
+        usage_type: Some(tokn_core::db::UsageType::Responses),
         details: tokn_core::db::UsageDetails {
           cache_read: Some(3),
           cache_write: None,
@@ -697,7 +701,14 @@ mod tests {
     );
     assert_eq!(
       parse_json(row.8.as_deref()),
-      Some(json!({"input": 12, "output": 5, "total": 17, "cache_read": 3, "reasoning": 2}))
+      Some(json!({
+        "kind": "responses",
+        "input": 12,
+        "output": 5,
+        "total": 17,
+        "cache_read": 3,
+        "reasoning": 2
+      }))
     );
     assert_eq!(
       parse_json(row.9.as_deref()),
@@ -762,6 +773,7 @@ mod tests {
         input_tokens: Some(12),
         output_tokens: Some(5),
         total_tokens: Some(17),
+        usage_type: Some(tokn_core::db::UsageType::Responses),
         details: tokn_core::db::UsageDetails {
           cache_read: Some(3),
           cache_write: None,
@@ -780,7 +792,14 @@ mod tests {
       .unwrap();
     assert_eq!(
       parse_json(row_after.0.as_deref()),
-      Some(json!({"input": 12, "output": 5, "total": 17, "cache_read": 3, "reasoning": 2}))
+      Some(json!({
+        "kind": "responses",
+        "input": 12,
+        "output": 5,
+        "total": 17,
+        "cache_read": 3,
+        "reasoning": 2
+      }))
     );
     assert_eq!(row_after.1, 1);
   }

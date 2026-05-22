@@ -937,6 +937,7 @@ mod tests {
       input_tokens: Some(11),
       output_tokens: Some(13),
       total_tokens: Some(24),
+      usage_type: None,
       details: UsageDetails {
         cache_read: Some(17),
         cache_write: Some(18),
@@ -972,6 +973,7 @@ mod tests {
       input_tokens: Some(7),
       output_tokens: Some(9),
       total_tokens: None,
+      usage_type: None,
       details: UsageDetails::default(),
     }))));
 
@@ -995,6 +997,7 @@ mod tests {
       input_tokens: Some(3),
       output_tokens: Some(5),
       total_tokens: None,
+      usage_type: None,
       details: UsageDetails::default(),
     }))));
 

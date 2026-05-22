@@ -30,6 +30,23 @@ pub struct UsageDetails {
   pub reasoning: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageType {
+  Chat,
+  Responses,
+  Messages,
+}
+
+impl UsageType {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Chat => "chat",
+      Self::Responses => "responses",
+      Self::Messages => "messages",
+    }
+  }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Usage {
   /// Total prompt/input tokens (includes any cached tokens).
@@ -38,6 +55,7 @@ pub struct Usage {
   pub output_tokens: Option<u64>,
   /// Provider-reported total tokens. This is intentionally not derived.
   pub total_tokens: Option<u64>,
+  pub usage_type: Option<UsageType>,
   pub details: UsageDetails,
 }
 
