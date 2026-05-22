@@ -137,7 +137,7 @@ fn classify_initiator_chat(body: &Value) -> Option<&'static str> {
       Some("system") => continue,
       Some("tool") | Some("assistant") => return Some("agent"),
       Some("user") => return None,
-      _ => return Some("agent"),
+      _ => return None,
     }
   }
   None
@@ -154,13 +154,13 @@ fn classify_initiator_responses(body: &Value) -> Option<&'static str> {
       Some("function_call_output" | "tool_result" | "computer_call_output") => return Some("agent"),
       Some("function_call" | "tool_call" | "reasoning") => return Some("agent"),
       Some("message") | None => {}
-      Some(_) => return Some("agent"),
+      Some(_) => return None,
     }
     match item.get("role").and_then(|role| role.as_str()) {
       Some("system") | Some("developer") => continue,
       Some("tool") | Some("assistant") => return Some("agent"),
       Some("user") => return None,
-      _ => return Some("agent"),
+      _ => return None,
     }
   }
   None

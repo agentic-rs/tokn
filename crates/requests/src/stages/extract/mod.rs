@@ -105,12 +105,13 @@ fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
     .unwrap_or(false)
 }
 
-/// Conservative heuristic mirroring `crates/router::util::initiator`. We
-/// classify based purely on body shape since requests doesn't yet depend on
-/// the legacy crate's helpers. The detail is "agent" iff a `tools` array is
-/// present and non-empty (common signal of agent-style calls); otherwise
-/// "user". This is intentionally simpler than the legacy implementation —
-/// PR2 will port the full classifier when we extract it to a shared crate.
+/// Conservative heuristic mirroring `crates/router::util::initiator`.
+/// Returns `Some("agent")` only for concrete agent evidence and `None`
+/// otherwise, including both clear user turns and unknown shapes.
+///
+/// This is intentionally simpler than the legacy/shared implementation:
+/// requests still uses a local body-shape check until the classifier is
+/// extracted to a shared crate.
 fn classify_initiator(body: &Value) -> Option<&'static str> {
   let has_tools = body
     .get("tools")
