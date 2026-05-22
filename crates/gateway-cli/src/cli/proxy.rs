@@ -182,9 +182,7 @@ async fn shell(cfg_path: Option<PathBuf>, args: ShellArgs) -> Result<()> {
   println!("Type 'exit' to leave this shell.");
   let mut cmd = Command::new(&shell.path);
   cmd.envs(env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-  if let Some(arg0) = shell.arg0 {
-    cmd.arg0(arg0);
-  }
+  apply_shell_arg0(&mut cmd, shell.arg0.as_deref());
   let status = cmd
     .status()
     .with_context(|| format!("launch shell {}", shell.path.display()))?;
@@ -299,6 +297,9 @@ fn detect_shell(explicit: Option<&Path>) -> Result<ShellExec> {
     });
   }
 
+  #[cfg(windows)]
+  let path = PathBuf::from("cmd.exe");
+  #[cfg(not(windows))]
   let path = PathBuf::from("/bin/sh");
   Ok(ShellExec {
     arg0: shell_arg0(&path),
@@ -309,6 +310,16 @@ fn detect_shell(explicit: Option<&Path>) -> Result<ShellExec> {
 fn shell_arg0(path: &Path) -> Option<String> {
   path.file_name().and_then(|name| name.to_str()).map(|s| s.to_string())
 }
+
+#[cfg(unix)]
+fn apply_shell_arg0(cmd: &mut Command, arg0: Option<&str>) {
+  if let Some(arg0) = arg0 {
+    cmd.arg0(arg0);
+  }
+}
+
+#[cfg(not(unix))]
+fn apply_shell_arg0(_cmd: &mut Command, _arg0: Option<&str>) {}
 
 fn route_mode_name(mode: RouteMode) -> &'static str {
   match mode {
