@@ -1,11 +1,11 @@
 [
   {
+    "User-Agent": "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)"
+  },
+  {
     "originator": "codex_exec"
   },
   {
-    "user-agent": "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)"
-  },
-  {
-    "openai-beta": "responses=v1"
+    "OpenAI-Beta": "responses=v1"
   }
 ]

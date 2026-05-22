@@ -37,6 +37,12 @@ use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, Raw
 const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str =
   include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
 
+#[derive(Debug, PartialEq, Eq)]
+struct HeaderFixtureEntry {
+  name: String,
+  value: String,
+}
+
 /// Minimal `Provider` used only to satisfy the new typed
 /// `AccountHandle` requirement on `SelectorOutcome::Selected`.
 struct StubProvider {
@@ -544,9 +550,9 @@ fn recording_handle(
   )
 }
 
-fn load_agent_id_header_fixture(json: &str) -> HeaderMap {
+fn load_agent_id_header_fixture(json: &str) -> Vec<HeaderFixtureEntry> {
   let entries: Vec<serde_json::Map<String, Value>> = serde_json::from_str(json).expect("fixture is a JSON array");
-  let mut headers = HeaderMap::new();
+  let mut headers = Vec::with_capacity(entries.len());
   for entry in entries {
     assert_eq!(entry.len(), 1, "each fixture row must contain exactly one header");
     let (name, value) = entry.into_iter().next().expect("fixture row must contain one header");
@@ -554,7 +560,7 @@ fn load_agent_id_header_fixture(json: &str) -> HeaderMap {
       .as_str()
       .expect("fixture header value must be a string")
       .to_string();
-    headers.insert(name, value);
+    headers.push(HeaderFixtureEntry { name, value });
   }
   headers
 }
@@ -672,14 +678,16 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
     .clone()
     .expect("provider should observe client headers");
   let expected = load_agent_id_header_fixture(CODEX_CLI_OPENAI_SEND_HEADERS_JSON);
-  for (name, value) in &expected {
-    assert_eq!(
-      seen.get(name).map(|seen_value| seen_value.as_str()),
-      Some(value.as_str()),
-      "header fixture mismatch for {}",
-      name.as_str()
-    );
-  }
+  let expected_names = expected.iter().map(|entry| entry.name.to_ascii_lowercase()).collect::<Vec<_>>();
+  let actual = seen
+    .iter()
+    .filter(|(name, _)| expected_names.iter().any(|expected| expected == name.as_str()))
+    .map(|(name, value)| HeaderFixtureEntry {
+      name: name.original().to_string(),
+      value: value.as_str().to_string(),
+    })
+    .collect::<Vec<_>>();
+  assert_eq!(actual, expected, "agent_id header fixture mismatch");
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------
