@@ -43,6 +43,16 @@ fn rr(request_id: &str, attempt: u32, payload: RecordEvent) -> Event {
 }
 
 fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> StageEvent {
+  extracted_with_initiator(model, stream, session, Some("user"), body)
+}
+
+fn extracted_with_initiator(
+  model: &str,
+  stream: bool,
+  session: Option<&str>,
+  initiator: Option<&str>,
+  body: &[u8],
+) -> StageEvent {
   let mut headers = HeaderMap::new();
   headers.insert("x-test", "1");
   StageEvent::Extract(ExtractedSummary {
@@ -51,7 +61,7 @@ fn extracted(model: &str, stream: bool, session: Option<&str>, body: &[u8]) -> S
     stream,
     session_id: session.map(SmolStr::new),
     project_id: None,
-    initiator: SmolStr::new("user"),
+    initiator: initiator.map(SmolStr::new),
     header_initiator: None,
     route_mode_hint: None,
     headers,
@@ -252,6 +262,28 @@ fn happy_path_persists_all_stages() {
   assert!(ctx(&row)["latency_header_ms"].as_i64().is_some());
   assert!(ctx(&row)["latency_ms"].as_i64().is_some());
   assert!(is_null(&row["request_error"]));
+}
+
+#[test]
+fn extract_omits_initiator_when_unknown() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-no-initiator";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
+    },
+  ));
+  h.handle(&r2(
+    req,
+    0,
+    extracted_with_initiator("client-model", true, Some("sess-1"), None, b"{\"in\":1}"),
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_json(&row["params_json"]), Some(serde_json::json!({"stream": true})));
 }
 
 #[test]

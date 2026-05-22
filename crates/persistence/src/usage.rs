@@ -154,7 +154,7 @@ impl UsageDb {
   pub fn summary(&self, since_ts: i64, account: Option<&str>, provider: Option<&str>) -> Result<Vec<RowSummary>> {
     let mut sql = String::from(
       "SELECT account_id, provider_id, model,
-              COALESCE(json_extract(params_json, '$.initiator'), 'user') AS initiator,
+              json_extract(params_json, '$.initiator') AS initiator,
               COUNT(*) AS n,
               COALESCE(SUM(COALESCE(json_extract(usage_json, '$.input'), 0)),0),
               COALESCE(SUM(COALESCE(json_extract(usage_json, '$.output'), 0)),0),
@@ -180,7 +180,7 @@ impl UsageDb {
     }
     sql.push_str(
       " GROUP BY account_id, provider_id, model,
-               COALESCE(json_extract(params_json, '$.initiator'), 'user')
+               json_extract(params_json, '$.initiator')
         ORDER BY n DESC",
     );
 
@@ -190,7 +190,7 @@ impl UsageDb {
         account: row.get::<_, String>(0)?,
         provider: row.get::<_, String>(1)?,
         model: row.get::<_, String>(2)?,
-        initiator: row.get::<_, String>(3)?,
+        initiator: row.get::<_, Option<String>>(3)?,
         count: row.get::<_, i64>(4)? as u64,
         input_tokens: row.get::<_, i64>(5)? as u64,
         output_tokens: row.get::<_, i64>(6)? as u64,
@@ -302,9 +302,11 @@ impl UsageEventHandler {
     pending.model = Some(summary.model.to_string());
     pending.session_id = summary.session_id.as_deref().map(str::to_string);
     pending.project_id = summary.project_id.as_deref().map(str::to_string);
-    pending
-      .params_json
-      .insert("initiator".to_string(), Value::String(summary.initiator.to_string()));
+    if let Some(initiator) = summary.initiator.as_deref() {
+      pending
+        .params_json
+        .insert("initiator".to_string(), Value::String(initiator.to_string()));
+    }
     pending
       .params_json
       .insert("stream".to_string(), Value::Bool(summary.stream));
@@ -466,7 +468,7 @@ pub struct RowSummary {
   pub account: String,
   pub provider: String,
   pub model: String,
-  pub initiator: String,
+  pub initiator: Option<String>,
   pub count: u64,
   pub input_tokens: u64,
   pub output_tokens: u64,
@@ -908,6 +910,10 @@ mod tests {
   }
 
   fn extract_summary() -> StageEvent {
+    extract_summary_with_initiator(Some("user"))
+  }
+
+  fn extract_summary_with_initiator(initiator: Option<&str>) -> StageEvent {
     let mut headers = HeaderMap::new();
     headers.insert("x-test", "1");
     StageEvent::Extract(ExtractedSummary {
@@ -916,7 +922,7 @@ mod tests {
       stream: true,
       session_id: Some(SmolStr::new("sess-1")),
       project_id: Some(SmolStr::new("project-1")),
-      initiator: SmolStr::new("user"),
+      initiator: initiator.map(SmolStr::new),
       header_initiator: None,
       route_mode_hint: None,
       headers,
@@ -957,5 +963,50 @@ mod tests {
 
   fn parse_json(value: Option<&str>) -> Option<Value> {
     value.and_then(|value| serde_json::from_str(value).ok())
+  }
+
+  #[test]
+  fn usage_event_handler_omits_unknown_initiator() {
+    let dir = std::env::temp_dir().join(format!("tokn-router-usage-null-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("usage.db");
+    let mut handler = UsageEventHandler::new(path.clone()).unwrap();
+    let request_id = "req-null-initiator";
+
+    handler.handle(&request_stage(
+      request_id,
+      0,
+      1_000,
+      StageEvent::Started {
+        request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
+      },
+    ));
+    handler.handle(&request_stage(
+      request_id,
+      0,
+      1_002,
+      extract_summary_with_initiator(None),
+    ));
+    handler.handle(&request_stage(request_id, 0, 1_003, resolve_summary()));
+    handler.handle(&request_stage(request_id, 0, 1_006, converted_response_summary()));
+    handler.handle(&request_stage(
+      request_id,
+      0,
+      1_010,
+      StageEvent::Completed {
+        success: true,
+        attempts: 1,
+      },
+    ));
+
+    let conn = Connection::open(&path).unwrap();
+    let params_json: Option<String> = conn
+      .query_row(
+        "SELECT params_json FROM requests WHERE request_id = ?1",
+        params![request_id],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(parse_json(params_json.as_deref()), Some(json!({"stream": true})));
   }
 }

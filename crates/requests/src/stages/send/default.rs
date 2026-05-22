@@ -55,7 +55,7 @@ impl SendStage for DefaultSend {
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
     let upstream_endpoint = require_upstream_endpoint(ctx, resolved, Stage::Send)?;
-    let initiator: &str = extracted.initiator.as_str();
+    let initiator = extracted.initiator.as_deref().unwrap_or("user");
     // Client-derived headers are passed via `client_headers`. The provider's
     // own `patch_headers` will run on top to inject auth + content-type;
     // `inbound_headers` therefore only needs to provide template-vars-
@@ -244,7 +244,7 @@ mod tests {
       stream: false,
       session_id: None,
       project_id: None,
-      initiator: SmolStr::new("user"),
+      initiator: Some(SmolStr::new("user")),
       header_initiator: None,
       route_mode_hint: None,
       headers: HeaderMap::new(),

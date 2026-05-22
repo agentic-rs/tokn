@@ -58,12 +58,16 @@ SELECT
   provider_id,
   model,
   CASE
-    WHEN initiator IS NOT NULL OR stream IS NOT NULL
-      THEN json_object(
-        'initiator', COALESCE(initiator, 'user'),
-        'stream', json(CASE WHEN stream IS NULL THEN 'null' WHEN stream != 0 THEN 'true' ELSE 'false' END)
-      )
-    ELSE NULL
+    WHEN initiator IS NULL AND stream IS NULL THEN NULL
+    ELSE json_remove(
+      json_set(
+        '{}',
+        '$.initiator', initiator,
+        '$.stream', CASE WHEN stream = 0 THEN json('false') ELSE json('true') END
+      ),
+      CASE WHEN initiator IS NULL THEN '$.initiator' ELSE '$.__noop__' END,
+      CASE WHEN stream IS NULL THEN '$.stream' ELSE '$.__noop__' END
+    )
   END,
   CASE
     WHEN input_tok IS NOT NULL

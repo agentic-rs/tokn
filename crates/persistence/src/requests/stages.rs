@@ -60,7 +60,7 @@ impl EventHandler for RequestEventHandler {
           s.model.as_str(),
           s.stream,
           s.session_id.as_deref(),
-          s.initiator.as_str(),
+          s.initiator.as_deref(),
           &s.headers,
           &s.raw_body,
         ),
@@ -214,7 +214,7 @@ impl RequestEventHandler {
     model: &str,
     stream: bool,
     session_id: Option<&str>,
-    initiator: &str,
+    initiator: Option<&str>,
     inbound_req_headers: &tokn_headers::HeaderMap,
     inbound_req_body: &bytes::Bytes,
   ) -> Result<()> {
@@ -520,9 +520,11 @@ impl RequestEventHandler {
   }
 }
 
-fn params_patch(initiator: &str, stream: bool) -> Map<String, Value> {
+fn params_patch(initiator: Option<&str>, stream: bool) -> Map<String, Value> {
   let mut out = Map::new();
-  out.insert("initiator".to_string(), Value::String(initiator.to_string()));
+  if let Some(initiator) = initiator {
+    out.insert("initiator".to_string(), Value::String(initiator.to_string()));
+  }
   out.insert("stream".to_string(), Value::Bool(stream));
   out
 }

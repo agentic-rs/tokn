@@ -130,7 +130,7 @@ mod tests {
       stream: false,
       session_id: None,
       project_id: None,
-      initiator: smol_str::SmolStr::new("user"),
+      initiator: Some(smol_str::SmolStr::new("user")),
       header_initiator: None,
       route_mode_hint: None,
       headers: HeaderMap::new(),

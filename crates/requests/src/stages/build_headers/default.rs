@@ -145,7 +145,7 @@ mod tests {
       stream: false,
       session_id: None,
       project_id: None,
-      initiator: "user".into(),
+      initiator: Some("user".into()),
       header_initiator: None,
       route_mode_hint: None,
       headers,

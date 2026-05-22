@@ -16,7 +16,7 @@ pub(crate) struct HeaderExtract {
 pub(crate) struct BodyExtract {
   pub model: String,
   pub stream: bool,
-  pub initiator: String,
+  pub initiator: Option<String>,
   pub header_initiator: Option<String>,
 }
 
@@ -42,9 +42,7 @@ pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExt
     .and_then(|v| v.to_str().ok())
     .map(|v| v.trim().to_ascii_lowercase())
     .filter(|v| v == "user" || v == "agent");
-  let initiator = header_initiator
-    .clone()
-    .unwrap_or_else(|| classify_initiator(body).to_string());
+  let initiator = header_initiator.clone().or_else(|| classify_initiator(body).map(str::to_string));
   BodyExtract {
     model: body
       .get("model")
@@ -122,10 +120,48 @@ impl RequestParser for MessagesParser {
   }
 }
 
-fn classify_initiator(body: &Value) -> &'static str {
+fn classify_initiator(body: &Value) -> Option<&'static str> {
   if body.get("input").is_some() {
-    crate::util::initiator::classify_initiator_responses(body)
+    classify_initiator_responses(body)
   } else {
-    crate::util::initiator::classify_initiator(body)
+    classify_initiator_chat(body)
   }
+}
+
+fn classify_initiator_chat(body: &Value) -> Option<&'static str> {
+  let Some(msgs) = body.get("messages").and_then(|v| v.as_array()) else {
+    return None;
+  };
+  for message in msgs.iter().rev() {
+    match message.get("role").and_then(|role| role.as_str()) {
+      Some("system") => continue,
+      Some("tool") | Some("assistant") => return Some("agent"),
+      Some("user") => return None,
+      _ => return Some("agent"),
+    }
+  }
+  None
+}
+
+fn classify_initiator_responses(body: &Value) -> Option<&'static str> {
+  let input = body.get("input")?;
+  if input.is_string() {
+    return None;
+  }
+  let items = input.as_array()?;
+  for item in items.iter().rev() {
+    match item.get("type").and_then(|typ| typ.as_str()) {
+      Some("function_call_output" | "tool_result" | "computer_call_output") => return Some("agent"),
+      Some("function_call" | "tool_call" | "reasoning") => return Some("agent"),
+      Some("message") | None => {}
+      Some(_) => return Some("agent"),
+    }
+    match item.get("role").and_then(|role| role.as_str()) {
+      Some("system") | Some("developer") => continue,
+      Some("tool") | Some("assistant") => return Some("agent"),
+      Some("user") => return None,
+      _ => return Some("agent"),
+    }
+  }
+  None
 }
