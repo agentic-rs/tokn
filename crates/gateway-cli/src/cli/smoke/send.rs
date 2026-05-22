@@ -895,9 +895,15 @@ pub(super) fn filter_accounts(
 
 fn build_request_body(endpoint: Endpoint, model: &str, message: &str, stream: bool) -> Value {
   match endpoint {
-    Endpoint::ChatCompletions | Endpoint::Messages => serde_json::json!({
+    Endpoint::ChatCompletions => serde_json::json!({
       "model": model,
       "stream": stream,
+      "messages": [{"role": "user", "content": message}],
+    }),
+    Endpoint::Messages => serde_json::json!({
+      "model": model,
+      "stream": stream,
+      "max_tokens": 32_000,
       "messages": [{"role": "user", "content": message}],
     }),
     Endpoint::Responses => serde_json::json!({
@@ -977,6 +983,19 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
 mod tests {
   use super::*;
   use tokn_headers::HeaderMap;
+
+  #[test]
+  fn build_request_body_messages_includes_required_max_tokens() {
+    let body = build_request_body(Endpoint::Messages, "claude", "hi", false);
+    assert_eq!(body["max_tokens"], 32_000);
+    assert_eq!(body["messages"][0]["content"], "hi");
+  }
+
+  #[test]
+  fn build_request_body_chat_does_not_add_messages_max_tokens() {
+    let body = build_request_body(Endpoint::ChatCompletions, "gpt-4.1", "hi", false);
+    assert!(body.get("max_tokens").is_none());
+  }
 
   #[test]
   fn headers_json_value_preserves_multi_values_in_order() {
