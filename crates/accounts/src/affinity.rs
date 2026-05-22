@@ -22,6 +22,7 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -40,29 +41,48 @@ struct Entry {
   stamped_at: Instant,
 }
 
+trait Clock: Send + Sync {
+  fn now(&self) -> Instant;
+}
+
+struct SystemClock;
+
+impl Clock for SystemClock {
+  fn now(&self) -> Instant {
+    Instant::now()
+  }
+}
+
 pub struct Affinity {
   map: RwLock<HashMap<String, Entry>>,
   ttl: Duration,
   tombstone_ttl: Duration,
+  clock: Arc<dyn Clock>,
 }
 
 impl Affinity {
   pub fn new(ttl: Duration, tombstone_ttl: Duration) -> Self {
+    Self::with_clock(ttl, tombstone_ttl, Arc::new(SystemClock))
+  }
+
+  fn with_clock(ttl: Duration, tombstone_ttl: Duration, clock: Arc<dyn Clock>) -> Self {
     Self {
       map: RwLock::new(HashMap::new()),
       ttl,
       tombstone_ttl,
+      clock,
     }
   }
 
   /// Look up `key`. Side-effect: stale live entries are converted to
   /// tombstones; expired tombstones are removed.
   pub fn lookup(&self, key: &str) -> Lookup {
+    let now = self.clock.now();
     // Fast path: read-only check.
     {
       let g = self.map.read();
       if let Some(e) = g.get(key) {
-        let age = e.stamped_at.elapsed();
+        let age = now.duration_since(e.stamped_at);
         if e.account_id.is_empty() {
           // Tombstone.
           if age < self.tombstone_ttl {
@@ -77,7 +97,7 @@ impl Affinity {
     }
     // Slow path: state transition needed.
     let mut g = self.map.write();
-    let now = Instant::now();
+    let now = self.clock.now();
     match g.get(key) {
       Some(e) if e.account_id.is_empty() => {
         if now.duration_since(e.stamped_at) < self.tombstone_ttl {
@@ -114,7 +134,7 @@ impl Affinity {
       key.to_string(),
       Entry {
         account_id: account_id.to_string(),
-        stamped_at: Instant::now(),
+        stamped_at: self.clock.now(),
       },
     );
   }
@@ -123,32 +143,59 @@ impl Affinity {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use parking_lot::Mutex;
 
   fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
   }
 
-  fn age_entry(a: &Affinity, key: &str, age: Duration) {
-    let mut g = a.map.write();
-    let entry = g.get_mut(key).unwrap();
-    entry.stamped_at = Instant::now() - age;
+  struct FakeClock {
+    base: Instant,
+    elapsed: Mutex<Duration>,
+  }
+
+  impl FakeClock {
+    fn new() -> Self {
+      Self {
+        base: Instant::now(),
+        elapsed: Mutex::new(Duration::ZERO),
+      }
+    }
+
+    fn advance(&self, delta: Duration) {
+      *self.elapsed.lock() += delta;
+    }
+  }
+
+  impl Clock for FakeClock {
+    fn now(&self) -> Instant {
+      self.base + *self.elapsed.lock()
+    }
+  }
+
+  fn test_affinity(ttl: Duration, tombstone_ttl: Duration) -> (Affinity, Arc<FakeClock>) {
+    let clock = Arc::new(FakeClock::new());
+    (
+      Affinity::with_clock(ttl, tombstone_ttl, clock.clone()),
+      clock,
+    )
   }
 
   #[test]
   fn unknown_then_hit_then_expired() {
-    let a = Affinity::new(ms(100), ms(300));
+    let (a, clock) = test_affinity(ms(100), ms(300));
     assert_eq!(a.lookup("k1"), Lookup::Unknown);
     a.record("k1", "acct-a");
     assert_eq!(a.lookup("k1"), Lookup::Hit("acct-a".into()));
-    age_entry(&a, "k1", ms(140));
+    clock.advance(ms(140));
     assert_eq!(a.lookup("k1"), Lookup::Expired);
   }
 
   #[test]
   fn record_clears_tombstone() {
-    let a = Affinity::new(ms(80), ms(400));
+    let (a, clock) = test_affinity(ms(80), ms(400));
     a.record("k", "old");
-    age_entry(&a, "k", ms(120));
+    clock.advance(ms(120));
     assert_eq!(a.lookup("k"), Lookup::Expired);
     a.record("k", "new");
     assert_eq!(a.lookup("k"), Lookup::Hit("new".into()));
@@ -156,22 +203,26 @@ mod tests {
 
   #[test]
   fn tombstone_eventually_forgotten() {
-    let a = Affinity::new(ms(40), ms(120));
+    let (a, clock) = test_affinity(ms(40), ms(120));
     a.record("k", "x");
-    age_entry(&a, "k", ms(70)); // > ttl
+    clock.advance(ms(70)); // > ttl
     assert_eq!(a.lookup("k"), Lookup::Expired); // tombstoned
-    age_entry(&a, "k", ms(150)); // > tombstone_ttl
+    clock.advance(ms(150)); // > tombstone_ttl
     assert_eq!(a.lookup("k"), Lookup::Unknown);
   }
 
   #[test]
   fn sliding_window_keeps_session_alive() {
-    let a = Affinity::new(ms(150), ms(400));
+    let (a, clock) = test_affinity(ms(150), ms(400));
     a.record("k", "acct");
     for _ in 0..4 {
-      age_entry(&a, "k", ms(140));
+      clock.advance(ms(140));
       assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
       a.record("k", "acct"); // refresh
     }
+    clock.advance(ms(149));
+    assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
+    clock.advance(ms(2));
+    assert_eq!(a.lookup("k"), Lookup::Expired);
   }
 }
