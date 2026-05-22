@@ -65,7 +65,7 @@ impl SendStage for ProxySend {
   #[instrument(name = "proxy_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint.unwrap_or(tokn_core::provider::Endpoint::ChatCompletions),
+    endpoint = ?resolved.upstream_endpoint,
     stream = extracted.stream,
   ))]
   async fn send(
@@ -76,9 +76,6 @@ impl SendStage for ProxySend {
     headers: &BuiltHeaders,
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    let upstream_endpoint = resolved
-      .upstream_endpoint
-      .unwrap_or(tokn_core::provider::Endpoint::ChatCompletions);
     let host = ctx
       .config
       .get_str(keys::HOST)
@@ -110,7 +107,7 @@ impl SendStage for ProxySend {
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            endpoint: upstream_endpoint,
+            endpoint: resolved.upstream_endpoint,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -211,7 +208,7 @@ impl SendStage for ProxySend {
       status,
       headers: resp_headers,
       stream: extracted.stream,
-      upstream_endpoint,
+      upstream_endpoint: resolved.upstream_endpoint,
       response: resp,
     })
   }
@@ -311,7 +308,7 @@ mod tests {
       agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      upstream_endpoint: Endpoint::ChatCompletions,
       account_id: SmolStr::new("proxy"),
       provider_id: SmolStr::new("none"),
       account_handle: crate::stages::resolve::proxy::stub_handle("proxy", "none"),
@@ -373,7 +370,7 @@ mod tests {
       agent_id: None,
       model: SmolStr::new("gpt-4"),
       upstream_model: SmolStr::new("gpt-4"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      upstream_endpoint: Endpoint::ChatCompletions,
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(

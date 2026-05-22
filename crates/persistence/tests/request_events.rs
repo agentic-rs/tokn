@@ -66,7 +66,7 @@ fn resolved(account: &str, provider: &str) -> StageEvent {
     agent_id: None,
     model: SmolStr::new("client-model"),
     upstream_model: SmolStr::new("upstream-model"),
-    upstream_endpoint: Some(Endpoint::Responses),
+    upstream_endpoint: Endpoint::Responses,
     account_id: SmolStr::new(account),
     provider_id: SmolStr::new(provider),
   })
@@ -434,54 +434,6 @@ fn record_without_started_bootstraps_row() {
     as_text(&row["inbound_req_url"]).as_deref(),
     Some("https://example.test/v1/responses")
   );
-  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some(""));
-}
-
-#[test]
-fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
-  let dir = tempdir();
-  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
-  let req = "req-auto-endpoint";
-  h.handle(&r2(
-    req,
-    0,
-    StageEvent::Started {
-      endpoint: EndpointLabel::custom("/v1/unknown"),
-    },
-  ));
-  h.handle(&r2(
-    req,
-    0,
-    StageEvent::Resolve(ResolvedSummary {
-      agent_id: None,
-      model: SmolStr::new("client-model"),
-      upstream_model: SmolStr::new("upstream-model"),
-      upstream_endpoint: None,
-      account_id: SmolStr::new("acct"),
-      provider_id: SmolStr::new("prov"),
-    }),
-  ));
-
-  let row = fetch_row(&dir, req);
-  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/unknown"));
-}
-
-#[test]
-fn custom_endpoint_label_persists_verbatim() {
-  let dir = tempdir();
-  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
-  let req = "req-custom-endpoint";
-  h.handle(&r2(
-    req,
-    0,
-    StageEvent::Started {
-      endpoint: EndpointLabel::custom("/v1/custom-endpoint"),
-    },
-  ));
-  h.handle(&r2(req, 0, completed(true, 1)));
-
-  let row = fetch_row(&dir, req);
-  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/custom-endpoint"));
 }
 
 #[test]

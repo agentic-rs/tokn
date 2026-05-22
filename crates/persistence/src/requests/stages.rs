@@ -15,7 +15,7 @@ use crate::{headers_json, Result};
 use rusqlite::params;
 use std::path::PathBuf;
 use tokn_core::event::{Event, EventHandler};
-use tokn_core::request_event::{EndpointLabel, RecordEvent, RequestEventPayload, Stage, StageEvent};
+use tokn_core::request_event::{RecordEvent, RequestEventPayload, Stage, StageEvent};
 
 /// `EventHandler` that persists requests stage events into the requests DB.
 /// Construct once and register alongside the legacy `DbEventHandler` —
@@ -52,7 +52,7 @@ impl EventHandler for RequestEventHandler {
     let result = match &r2.payload {
       RequestEventPayload::Custom(_) => return,
       RequestEventPayload::Stage(stage) => match stage {
-        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, r2.ts, endpoint),
+        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, r2.ts, endpoint.as_str()),
         StageEvent::Extract(s) => self.on_extract(
           request_id,
           attempt,
@@ -68,7 +68,7 @@ impl EventHandler for RequestEventHandler {
           attempt,
           s.account_id.as_str(),
           s.provider_id.as_str(),
-          s.upstream_endpoint.map(EndpointLabel::from).as_ref(),
+          s.upstream_endpoint.as_str(),
         ),
         StageEvent::BuildHeaders(s) => self.on_build_headers(request_id, attempt, &s.headers),
         StageEvent::ConvertRequest(s) => self.on_convert_request(request_id, attempt, &s.upstream_wire_body),
@@ -139,8 +139,7 @@ impl RequestEventHandler {
     if self.db.conn_for_request(&id).is_some() {
       return Ok(());
     }
-    let endpoint = EndpointLabel::custom("");
-    self.on_started(request_id, attempt, ts, &endpoint)
+    self.on_started(request_id, attempt, ts, "")
   }
 
   pub fn on_inbound_connection(
@@ -176,7 +175,7 @@ impl RequestEventHandler {
 
   /// Single anchor INSERT for a fresh request. Later handlers lazily upsert
   /// metadata and wire payload rows as those facts become available.
-  pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &EndpointLabel) -> Result<()> {
+  pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &str) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
@@ -187,7 +186,7 @@ impl RequestEventHandler {
            WHEN request_connection.endpoint = '' THEN excluded.endpoint
            ELSE request_connection.endpoint
          END",
-      params![id, ts, endpoint.as_str()],
+      params![id, ts, endpoint],
     )?;
     self.db.pin_request(&id, ts);
     Ok(())
@@ -238,7 +237,7 @@ impl RequestEventHandler {
     attempt: u32,
     account_id: &str,
     provider_id: &str,
-    upstream_endpoint: Option<&EndpointLabel>,
+    upstream_endpoint: &str,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.db.conn_for_request(&id) else {
@@ -253,12 +252,10 @@ impl RequestEventHandler {
          provider_id = excluded.provider_id",
       params![id, account_id, provider_id],
     )?;
-    if let Some(upstream_endpoint) = upstream_endpoint {
-      conn.execute(
-        "UPDATE request_connection SET endpoint = ?2 WHERE request_id = ?1",
-        params![id, upstream_endpoint.as_str()],
-      )?;
-    }
+    conn.execute(
+      "UPDATE request_connection SET endpoint = ?2 WHERE request_id = ?1",
+      params![id, upstream_endpoint],
+    )?;
     Ok(())
   }
 

@@ -104,7 +104,7 @@ impl AccountSelector for OkSelector {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new("acct-1"),
       provider_id: SmolStr::new("zai-coding-plan"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      upstream_endpoint: Endpoint::ChatCompletions,
       upstream_model: SmolStr::new("glm-4"),
       account_handle: stub_handle("zai-coding-plan", "acct-1"),
     })
@@ -424,7 +424,7 @@ impl AccountSelector for CannedSelector {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),
       provider_id: SmolStr::new("zai-coding-plan"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      upstream_endpoint: Endpoint::ChatCompletions,
       upstream_model: SmolStr::new("glm-4"),
       account_handle: self.handle.clone(),
     })

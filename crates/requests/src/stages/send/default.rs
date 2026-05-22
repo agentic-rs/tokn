@@ -4,9 +4,8 @@
 //! (`tokn_core::provider::Provider`). Build a [`tokn_core::provider::RequestCtx`]
 //! from the upstream-shaped body (produced by ConvertRequest), persona
 //! headers (produced by BuildHeaders), and a few inbound facts pulled from
-//! `Extracted`; then dispatch on the resolved upstream endpoint (or
-//! `ChatCompletions` when resolve left it undecided) to the provider's
-//! `chat` / `responses` / `messages` method.
+//! `Extracted`; then dispatch on `resolved.upstream_endpoint` to the
+//! provider's `chat` / `responses` / `messages` method.
 //!
 //! The provider is responsible for URL construction, auth injection, and
 //! the actual HTTP call — `DefaultSend` only wires the data flow and
@@ -42,7 +41,7 @@ impl SendStage for DefaultSend {
   #[instrument(name = "default_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint.unwrap_or(Endpoint::ChatCompletions),
+    endpoint = ?resolved.upstream_endpoint,
     stream = extracted.stream,
   ))]
   async fn send(
@@ -53,7 +52,6 @@ impl SendStage for DefaultSend {
     headers: &BuiltHeaders,
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    let upstream_endpoint = resolved.upstream_endpoint.unwrap_or(Endpoint::ChatCompletions);
     let initiator: &str = extracted.initiator.as_str();
     // Client-derived headers are passed via `client_headers`. The provider's
     // own `patch_headers` will run on top to inject auth + content-type;
@@ -69,7 +67,7 @@ impl SendStage for DefaultSend {
     // persistence handler can write wire-accurate values into the row.
     let capture = new_outbound_capture();
     let req_ctx = RequestCtx {
-      endpoint: upstream_endpoint,
+      endpoint: resolved.upstream_endpoint,
       http: &self.http,
       body: body.upstream_body.as_ref(),
       body_bytes: Some(&body.upstream_wire_body),
@@ -83,7 +81,7 @@ impl SendStage for DefaultSend {
     };
 
     let provider = resolved.account_handle.provider.clone();
-    let resp_result = match upstream_endpoint {
+    let resp_result = match resolved.upstream_endpoint {
       Endpoint::ChatCompletions => provider.chat(req_ctx).await,
       Endpoint::Responses => provider.responses(req_ctx).await,
       Endpoint::Messages => provider.messages(req_ctx).await,
@@ -168,7 +166,7 @@ impl SendStage for DefaultSend {
       status,
       headers: resp_headers,
       stream: extracted.stream,
-      upstream_endpoint,
+      upstream_endpoint: resolved.upstream_endpoint,
       response: resp,
     })
   }
@@ -245,7 +243,7 @@ mod tests {
       agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      upstream_endpoint: Endpoint::ChatCompletions,
       account_id: SmolStr::new("acct-1"),
       provider_id: SmolStr::from(handle.provider.id()),
       account_handle: handle,

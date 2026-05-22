@@ -66,7 +66,7 @@ impl ResolveStage for ProxyResolve {
       agent_id: extracted.agent_id.clone(),
       model: extracted.model.clone(),
       upstream_model: extracted.model.clone(),
-      upstream_endpoint: None,
+      upstream_endpoint: ctx.endpoint,
       account_id: SmolStr::new(account_id),
       provider_id: SmolStr::new(provider_id),
       account_handle: stub_handle(account_id, provider_id),
@@ -99,7 +99,7 @@ impl ResolveStage for ProxyProviderResolve {
         agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
         upstream_model: SmolStr::from(route.upstream_model.as_str()),
-        upstream_endpoint: Some(endpoint),
+        upstream_endpoint: endpoint,
         account_id: SmolStr::from(acct.id()),
         provider_id: SmolStr::from(acct.provider.info().id.as_str()),
         account_handle: acct,
@@ -248,7 +248,7 @@ mod tests {
     assert_eq!(res.account_id, "proxy");
     assert_eq!(res.provider_id, "api.openai.com");
     assert_eq!(res.upstream_model, "gpt-4");
-    assert_eq!(res.upstream_endpoint, None);
+    assert_eq!(res.upstream_endpoint, Endpoint::ChatCompletions);
   }
 
   #[tokio::test]
