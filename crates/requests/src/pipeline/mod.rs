@@ -34,7 +34,7 @@ pub mod ctx;
 pub mod error;
 pub mod stages;
 
-use crate::event::{EventBus, StageEvent};
+use crate::event::{EventBus, Stage, StageEvent};
 use crate::profile::Profile;
 pub use config::{RunConfig, RunConfigBuilder};
 use ctx::PipelineCtx;
@@ -46,6 +46,8 @@ pub use stages::{
 };
 use std::sync::Arc;
 use std::time::Duration;
+use tokn_core::event::Event as CoreEvent;
+use tokn_core::request_event::{RequestEvent, RequestEventPayload};
 
 /// Alias for clarity at call sites — the same type as [`PipelineRunner`].
 pub type Pipeline = PipelineRunner;
@@ -155,26 +157,38 @@ impl PipelineRunner {
     ctx.emit_stage(StageEvent::Started {
       request_endpoint: started_endpoint,
     });
+    let mut terminal = AttemptTerminalGuard::new(&ctx);
 
     // ---- Extract ----
+    terminal.set_stage(Stage::Extract);
     let extracted = match self.profile.extract.extract(&ctx, raw).await {
       Ok(e) => {
         ctx.emit_stage(StageEvent::Extract((&e).into()));
         e
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     // ---- Resolve ----
+    terminal.set_stage(Stage::Resolve);
     let resolved = match self.profile.resolve.resolve(&ctx, &extracted).await {
       Ok(r) => {
         ctx.emit_stage(StageEvent::Resolve((&r).into()));
         r
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     // ---- BuildHeaders ----
+    terminal.set_stage(Stage::BuildHeaders);
     let headers = match self
       .profile
       .build_headers
@@ -185,10 +199,15 @@ impl PipelineRunner {
         ctx.emit_stage(StageEvent::BuildHeaders((&h).into()));
         h
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     // ---- ConvertRequest ----
+    terminal.set_stage(Stage::ConvertRequest);
     let converted = match self
       .profile
       .convert_request
@@ -199,10 +218,15 @@ impl PipelineRunner {
         ctx.emit_stage(StageEvent::ConvertRequest((&c).into()));
         c
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     // ---- Send ----
+    terminal.set_stage(Stage::Send);
     let sent = match self
       .profile
       .send
@@ -216,10 +240,15 @@ impl PipelineRunner {
         ctx.emit_stage(StageEvent::Send((&s).into()));
         s
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     // ---- ConvertResponse ----
+    terminal.set_stage(Stage::ConvertResponse);
     let converted_response = match self.profile.convert_response.convert_response(&ctx, sent).await {
       Ok(c) => {
         // Build the summary before moving `c` to the caller — body (when
@@ -227,7 +256,11 @@ impl PipelineRunner {
         ctx.emit_stage(StageEvent::ConvertResponse((&c).into()));
         c
       }
-      Err(err) => return Err(self.fail(&ctx, err)),
+      Err(err) => {
+        let err = self.fail(&ctx, err);
+        terminal.mark_terminal();
+        return Err(err);
+      }
     };
 
     match &converted_response.body {
@@ -240,8 +273,13 @@ impl PipelineRunner {
           success: true,
           attempts: ctx.attempt + 1,
         });
+        terminal.mark_terminal();
       }
-      stages::ConvertedBody::Stream { .. } => {}
+      stages::ConvertedBody::Stream { .. } => {
+        // Stream completion is emitted by AccumHelper when the returned body
+        // is drained or dropped; the attempt has been handed off successfully.
+        terminal.mark_terminal();
+      }
     }
     Ok(converted_response)
   }
@@ -263,6 +301,63 @@ impl PipelineRunner {
       attempts: ctx.attempt + 1,
     });
     err
+  }
+}
+
+struct AttemptTerminalGuard {
+  request_id: SmolStr,
+  attempt: u32,
+  attempts: u32,
+  events: Arc<EventBus>,
+  stage: Stage,
+  terminal: bool,
+}
+
+impl AttemptTerminalGuard {
+  fn new(ctx: &PipelineCtx) -> Self {
+    Self {
+      request_id: ctx.request_id.clone(),
+      attempt: ctx.attempt,
+      attempts: ctx.attempt + 1,
+      events: ctx.events.clone(),
+      stage: Stage::Extract,
+      terminal: false,
+    }
+  }
+
+  fn set_stage(&mut self, stage: Stage) {
+    self.stage = stage;
+  }
+
+  fn mark_terminal(&mut self) {
+    self.terminal = true;
+  }
+
+  fn emit_stage(&self, payload: StageEvent) {
+    self.events.emit(CoreEvent::Requests(RequestEvent {
+      request_id: self.request_id.clone(),
+      attempt: self.attempt,
+      ts: tokn_core::util::now_unix_ms(),
+      payload: RequestEventPayload::Stage(payload),
+    }));
+  }
+}
+
+impl Drop for AttemptTerminalGuard {
+  fn drop(&mut self) {
+    if self.terminal {
+      return;
+    }
+    self.emit_stage(StageEvent::Error {
+      stage: self.stage,
+      message: SmolStr::new("pipeline attempt cancelled before completion"),
+      recoverable: false,
+      stop: false,
+    });
+    self.emit_stage(StageEvent::Completed {
+      success: false,
+      attempts: self.attempts,
+    });
   }
 }
 

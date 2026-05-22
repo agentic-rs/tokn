@@ -146,6 +146,28 @@ impl AccountSelector for EmptySelector {
   }
 }
 
+struct PendingSend;
+
+#[async_trait]
+impl tokn_requests::stage_traits::SendStage for PendingSend {
+  async fn send(
+    &self,
+    ctx: &tokn_requests::PipelineCtx,
+    _extracted: &tokn_requests::stage_traits::Extracted,
+    _resolved: &tokn_requests::stage_traits::Resolved,
+    _headers: &tokn_requests::stage_traits::BuiltHeaders,
+    body: &tokn_requests::stage_traits::ConvertedRequest,
+  ) -> Result<tokn_requests::stage_traits::SentResponse, PipelineError> {
+    ctx.emit_record(RecordEvent::UpstreamReq {
+      method: SmolStr::new("POST"),
+      url: SmolStr::new("https://example.test/pending"),
+      headers: HeaderMap::new(),
+      body: body.upstream_wire_body.clone(),
+    });
+    std::future::pending::<Result<tokn_requests::stage_traits::SentResponse, PipelineError>>().await
+  }
+}
+
 fn capture_bus() -> (Arc<EventBus>, Arc<Mutex<Vec<Event>>>) {
   let bus = Arc::new(EventBus::new(256));
   let log: Arc<Mutex<Vec<Event>>> = Arc::new(Mutex::new(Vec::new()));
@@ -223,6 +245,22 @@ async fn drain_until_completed_attempts(
     tokio::time::sleep(std::time::Duration::from_millis(1)).await;
   }
   panic!("timed out waiting for Completed event with attempts={expected_attempts}");
+}
+
+async fn drain_until_upstream_req(log: &Arc<Mutex<Vec<Event>>>) {
+  for _ in 0..1000 {
+    {
+      let guard = log.lock().unwrap();
+      let saw = guard
+        .iter()
+        .any(|e| matches!(&e.payload, EventPayload::Record(RecordEvent::UpstreamReq { .. })));
+      if saw {
+        return;
+      }
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+  }
+  panic!("timed out waiting for UpstreamReq event");
 }
 
 fn known_kinds(events: &[Event]) -> Vec<&'static str> {
@@ -651,6 +689,46 @@ async fn full_pipeline_buffered_happy_path() {
     }
     other => panic!("expected Buffered, got {other:?}"),
   }
+}
+
+#[tokio::test]
+async fn cancelled_attempt_after_upstream_req_emits_terminal_events() {
+  let (bus, log) = capture_bus();
+  let selector = Arc::new(OkSelector);
+  let profile = Arc::new(Profile::full(
+    "smoke-cancelled-at-send",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(NoopBuildHeaders),
+    Arc::new(NoopConvertRequest),
+    Arc::new(PendingSend),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  let task = tokio::spawn(async move { runner.run(raw_chat("glm-4")).await });
+  drain_until_upstream_req(&log).await;
+  task.abort();
+  let _ = task.await;
+
+  let events = drain_until_completed(&log).await;
+  let saw_cancel_error = events.iter().any(|e| {
+    matches!(
+      &e.payload,
+      EventPayload::Stage(StageEvent::Error {
+        stage: Stage::Send,
+        message,
+        ..
+      }) if message.as_str().contains("cancelled")
+    )
+  });
+  assert!(saw_cancel_error, "cancelled send must emit a terminal error");
+
+  let completed = events.iter().find_map(|e| match &e.payload {
+    EventPayload::Stage(StageEvent::Completed { success, attempts }) => Some((*success, *attempts)),
+    _ => None,
+  });
+  assert_eq!(completed, Some((false, 1)));
 }
 
 #[tokio::test]
