@@ -530,8 +530,7 @@ mod tests {
     let registry = ProviderRegistry::builtin();
 
     let res = validate_proxy_provider_modes(&cfg, &registry);
-    assert!(res.is_err(), "helper should still return an error for outside callers");
-    let err = res.err().expect("checked above");
+    let err = res.expect_err("helper should still return an error for outside callers");
     assert!(err.to_string().contains("unresolved provider ids"));
     assert!(err.to_string().contains("made-up-provider"));
   }
