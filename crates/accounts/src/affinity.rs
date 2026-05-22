@@ -22,7 +22,6 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,8 +45,8 @@ pub trait Clock {
   type Instant: Copy;
   type Duration: Copy + Ord;
 
-  fn now() -> Self::Instant;
-  fn elapsed(stamped_at: Self::Instant) -> Self::Duration;
+  fn now(&self) -> Self::Instant;
+  fn elapsed(&self, stamped_at: Self::Instant) -> Self::Duration;
 }
 
 #[doc(hidden)]
@@ -57,11 +56,11 @@ impl Clock for SystemClock {
   type Instant = Instant;
   type Duration = Duration;
 
-  fn now() -> Instant {
+  fn now(&self) -> Instant {
     Instant::now()
   }
 
-  fn elapsed(stamped_at: Instant) -> Duration {
+  fn elapsed(&self, stamped_at: Instant) -> Duration {
     stamped_at.elapsed()
   }
 }
@@ -70,22 +69,22 @@ pub struct Affinity<C: Clock = SystemClock> {
   map: RwLock<HashMap<String, Entry<C::Instant>>>,
   ttl: C::Duration,
   tombstone_ttl: C::Duration,
-  _clock: PhantomData<C>,
+  clock: C,
 }
 
 impl Affinity<SystemClock> {
   pub fn new(ttl: Duration, tombstone_ttl: Duration) -> Self {
-    Affinity::<SystemClock>::with_clock(ttl, tombstone_ttl)
+    Affinity::<SystemClock>::with_clock(ttl, tombstone_ttl, SystemClock)
   }
 }
 
 impl<C: Clock> Affinity<C> {
-  fn with_clock(ttl: C::Duration, tombstone_ttl: C::Duration) -> Self {
+  fn with_clock(ttl: C::Duration, tombstone_ttl: C::Duration, clock: C) -> Self {
     Self {
       map: RwLock::new(HashMap::new()),
       ttl,
       tombstone_ttl,
-      _clock: PhantomData,
+      clock,
     }
   }
 
@@ -96,7 +95,7 @@ impl<C: Clock> Affinity<C> {
     {
       let g = self.map.read();
       if let Some(e) = g.get(key) {
-        let age = C::elapsed(e.stamped_at);
+        let age = self.clock.elapsed(e.stamped_at);
         if e.account_id.is_empty() {
           // Tombstone.
           if age < self.tombstone_ttl {
@@ -111,10 +110,10 @@ impl<C: Clock> Affinity<C> {
     }
     // Slow path: state transition needed.
     let mut g = self.map.write();
-    let now = C::now();
+    let now = self.clock.now();
     match g.get(key) {
       Some(e) if e.account_id.is_empty() => {
-        if C::elapsed(e.stamped_at) < self.tombstone_ttl {
+        if self.clock.elapsed(e.stamped_at) < self.tombstone_ttl {
           Lookup::Expired
         } else {
           g.remove(key);
@@ -122,7 +121,7 @@ impl<C: Clock> Affinity<C> {
         }
       }
       Some(e) => {
-        if C::elapsed(e.stamped_at) < self.ttl {
+        if self.clock.elapsed(e.stamped_at) < self.ttl {
           Lookup::Hit(e.account_id.clone())
         } else {
           // Convert to tombstone.
@@ -148,7 +147,7 @@ impl<C: Clock> Affinity<C> {
       key.to_string(),
       Entry {
         account_id: account_id.to_string(),
-        stamped_at: C::now(),
+        stamped_at: self.clock.now(),
       },
     );
   }
@@ -164,36 +163,34 @@ mod tests {
   }
 
   struct FakeClock {
+    now: Cell<u64>,
+  }
+
+  impl FakeClock {
+    fn new() -> Self {
+      Self { now: Cell::new(0) }
+    }
+
+    fn advance(&self, delta: u64) {
+      self.now.set(self.now.get() + delta);
+    }
   }
 
   impl Clock for FakeClock {
     type Instant = u64;
     type Duration = u64;
 
-    fn now() -> u64 {
-      NOW.with(Cell::get)
+    fn now(&self) -> u64 {
+      self.now.get()
     }
 
-    fn elapsed(stamped_at: u64) -> u64 {
-      Self::now() - stamped_at
+    fn elapsed(&self, stamped_at: u64) -> u64 {
+      self.now() - stamped_at
     }
-  }
-
-  thread_local! {
-    static NOW: Cell<u64> = const { Cell::new(0) };
-  }
-
-  fn reset_clock() {
-    NOW.with(|now| now.set(0));
-  }
-
-  fn advance_clock(delta: u64) {
-    NOW.with(|now| now.set(now.get() + delta));
   }
 
   fn test_affinity(ttl: u64, tombstone_ttl: u64) -> Affinity<FakeClock> {
-    reset_clock();
-    Affinity::<FakeClock>::with_clock(ttl, tombstone_ttl)
+    Affinity::<FakeClock>::with_clock(ttl, tombstone_ttl, FakeClock::new())
   }
 
   #[test]
@@ -202,7 +199,7 @@ mod tests {
     assert_eq!(a.lookup("k1"), Lookup::Unknown);
     a.record("k1", "acct-a");
     assert_eq!(a.lookup("k1"), Lookup::Hit("acct-a".into()));
-    advance_clock(ms(140));
+    a.clock.advance(ms(140));
     assert_eq!(a.lookup("k1"), Lookup::Expired);
   }
 
@@ -210,7 +207,7 @@ mod tests {
   fn record_clears_tombstone() {
     let a = test_affinity(ms(80), ms(400));
     a.record("k", "old");
-    advance_clock(ms(120));
+    a.clock.advance(ms(120));
     assert_eq!(a.lookup("k"), Lookup::Expired);
     a.record("k", "new");
     assert_eq!(a.lookup("k"), Lookup::Hit("new".into()));
@@ -220,9 +217,9 @@ mod tests {
   fn tombstone_eventually_forgotten() {
     let a = test_affinity(ms(40), ms(120));
     a.record("k", "x");
-    advance_clock(ms(70)); // > ttl
+    a.clock.advance(ms(70)); // > ttl
     assert_eq!(a.lookup("k"), Lookup::Expired); // tombstoned
-    advance_clock(ms(150)); // > tombstone_ttl
+    a.clock.advance(ms(150)); // > tombstone_ttl
     assert_eq!(a.lookup("k"), Lookup::Unknown);
   }
 
@@ -231,13 +228,13 @@ mod tests {
     let a = test_affinity(ms(150), ms(400));
     a.record("k", "acct");
     for _ in 0..4 {
-      advance_clock(ms(140));
+      a.clock.advance(ms(140));
       assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
       a.record("k", "acct"); // refresh
     }
-    advance_clock(ms(149));
+    a.clock.advance(ms(149));
     assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
-    advance_clock(ms(2));
+    a.clock.advance(ms(2));
     assert_eq!(a.lookup("k"), Lookup::Expired);
   }
 }
