@@ -123,10 +123,15 @@ impl Affinity {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::thread::sleep;
 
   fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
+  }
+
+  fn age_entry(a: &Affinity, key: &str, age: Duration) {
+    let mut g = a.map.write();
+    let entry = g.get_mut(key).unwrap();
+    entry.stamped_at = Instant::now() - age;
   }
 
   #[test]
@@ -135,7 +140,7 @@ mod tests {
     assert_eq!(a.lookup("k1"), Lookup::Unknown);
     a.record("k1", "acct-a");
     assert_eq!(a.lookup("k1"), Lookup::Hit("acct-a".into()));
-    sleep(ms(140));
+    age_entry(&a, "k1", ms(140));
     assert_eq!(a.lookup("k1"), Lookup::Expired);
   }
 
@@ -143,7 +148,7 @@ mod tests {
   fn record_clears_tombstone() {
     let a = Affinity::new(ms(80), ms(400));
     a.record("k", "old");
-    sleep(ms(120));
+    age_entry(&a, "k", ms(120));
     assert_eq!(a.lookup("k"), Lookup::Expired);
     a.record("k", "new");
     assert_eq!(a.lookup("k"), Lookup::Hit("new".into()));
@@ -153,9 +158,9 @@ mod tests {
   fn tombstone_eventually_forgotten() {
     let a = Affinity::new(ms(40), ms(120));
     a.record("k", "x");
-    sleep(ms(70)); // > ttl
+    age_entry(&a, "k", ms(70)); // > ttl
     assert_eq!(a.lookup("k"), Lookup::Expired); // tombstoned
-    sleep(ms(150)); // > tombstone_ttl
+    age_entry(&a, "k", ms(150)); // > tombstone_ttl
     assert_eq!(a.lookup("k"), Lookup::Unknown);
   }
 
@@ -164,7 +169,7 @@ mod tests {
     let a = Affinity::new(ms(150), ms(400));
     a.record("k", "acct");
     for _ in 0..4 {
-      sleep(ms(40));
+      age_entry(&a, "k", ms(140));
       assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
       a.record("k", "acct"); // refresh
     }
