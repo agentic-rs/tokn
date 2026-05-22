@@ -53,6 +53,12 @@ fn assert_proxy_row(row: &Map<String, Value>, case: ProxyCase, inbound_body: &By
   );
   assert_eq!(text(row, "provider_id").as_deref(), Some("127.0.0.1"), "{}", case.name);
   assert_eq!(
+    text(row, "session_id").as_deref(),
+    Some("sess-proxy-1"),
+    "{}",
+    case.name
+  );
+  assert_eq!(
     int(row, "outbound_resp_status"),
     Some(case.upstream_status.as_u16() as i64)
   );
@@ -128,6 +134,7 @@ async fn proxy_passthrough_modes_return_expected_results_and_persist_request_row
       .uri("/v1/chat/completions")
       .header("content-type", "application/json")
       .header("authorization", "Bearer client-token")
+      .header("x-session-id", "sess-proxy-1")
       .header("x-request-id", request_id)
       .body(())
       .unwrap();

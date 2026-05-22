@@ -39,6 +39,22 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
   "keep-alive",
 ];
 
+const SESSION_ID_HEADERS: &[&str] = &[
+  "x-session-id",
+  "x-client-session-id",
+  "session_id",
+  "x-session-affinity",
+  "x-opencode-session",
+];
+
+const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
+
+const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project", "x-project-cwd"];
+
+const INTERACTION_ID_HEADERS: &[&str] = &["x-interaction-id"];
+
+const ACCOUNT_ID_HEADERS: &[&str] = &["chatgpt-account-id"];
+
 /// Router-owned header names (lowercase) that must never leak upstream.
 /// Mirrors `tokn_router::api::is_router_owned_header` — duplicated here
 /// to keep `tokn-requests` free of any dependency on the legacy router
@@ -109,8 +125,30 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
     }
     Ok(BuiltHeaders {
       headers: out,
-      vars: TemplateVars::default(),
+      vars: build_template_vars(&extracted.headers),
     })
+  }
+}
+
+fn first_header(headers: &HeaderMap, names: &[&str]) -> Option<smol_str::SmolStr> {
+  for name in names {
+    if let Some(value) = headers.get(*name) {
+      let value = value.as_str().trim();
+      if !value.is_empty() {
+        return Some(value.into());
+      }
+    }
+  }
+  None
+}
+
+fn build_template_vars(inbound: &HeaderMap) -> TemplateVars {
+  TemplateVars {
+    session_id: first_header(inbound, SESSION_ID_HEADERS),
+    request_id: first_header(inbound, REQUEST_ID_HEADERS),
+    project_cwd: first_header(inbound, PROJECT_ID_HEADERS),
+    interaction_id: first_header(inbound, INTERACTION_ID_HEADERS),
+    account_id: first_header(inbound, ACCOUNT_ID_HEADERS),
   }
 }
 
@@ -200,13 +238,23 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn empty_template_vars() {
+  async fn passthrough_vars_preserve_correlation_metadata() {
+    let headers = header_map(&[
+      ("x-session-id", "ses_abc"),
+      ("x-request-id", "req_123"),
+      ("x-opencode-project", "/worktree"),
+      ("x-interaction-id", "int_9"),
+      ("chatgpt-account-id", "acct_1"),
+    ]);
     let out = PassthroughBuildHeaders::new()
-      .build_headers(&ctx(), &extracted(HeaderMap::new()), &resolved("openai"))
+      .build_headers(&ctx(), &extracted(headers), &resolved("openai"))
       .await
       .unwrap();
-    assert!(out.vars.session_id.is_none());
-    assert!(out.vars.request_id.is_none());
+    assert_eq!(out.vars.session_id.as_deref(), Some("ses_abc"));
+    assert_eq!(out.vars.request_id.as_deref(), Some("req_123"));
+    assert_eq!(out.vars.project_cwd.as_deref(), Some("/worktree"));
+    assert_eq!(out.vars.interaction_id.as_deref(), Some("int_9"));
+    assert_eq!(out.vars.account_id.as_deref(), Some("acct_1"));
   }
 
   #[tokio::test]
