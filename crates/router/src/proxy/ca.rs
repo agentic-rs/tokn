@@ -78,6 +78,8 @@ fn write_ca_file(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
       .with_context(|| format!("chmod {}", path.display()))?;
   }
+  #[cfg(not(unix))]
+  let _ = mode;
   Ok(())
 }
 
