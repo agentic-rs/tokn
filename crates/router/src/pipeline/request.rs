@@ -366,7 +366,7 @@ mod tests {
   #[test]
   fn parse_inbound_vars_uses_shared_session_and_project_headers() {
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert("x-session-id", reqwest::header::HeaderValue::from_static("session-1"));
+    headers.insert("session-id", reqwest::header::HeaderValue::from_static("session-1"));
     headers.insert(
       "x-opencode-project",
       reqwest::header::HeaderValue::from_static("/tmp/project"),
