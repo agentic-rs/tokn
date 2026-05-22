@@ -21,6 +21,7 @@ CREATE TABLE request_connection (
 CREATE INDEX idx_request_connection_ts ON request_connection(ts);
 
 INSERT INTO request_connection (
+  rowid,
   request_id,
   ts,
   ver,
@@ -31,6 +32,7 @@ INSERT INTO request_connection (
   ctx_json
 )
 SELECT
+  rowid,
   request_id,
   ts,
   NULL,
