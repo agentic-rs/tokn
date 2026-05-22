@@ -24,6 +24,7 @@ use tokn_core::account::AccountConfig;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
+use tokn_core::AgentId;
 use tokn_headers::HeaderMap;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
@@ -32,6 +33,27 @@ use tokn_requests::stages::{
   NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
+
+const CODEX_CLI_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/codex-cli_openai_send.yaml");
+const OPENCODE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/opencode_openai_send.yaml");
+const CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML: &str =
+  include_str!("fixtures/agent_id_headers/claude-code_openai_send.yaml");
+const CLINE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.yaml");
+const COPILOT_CLI_OPENAI_SEND_HEADERS_YAML: &str =
+  include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.yaml");
+
+#[derive(Debug, PartialEq, Eq)]
+struct HeaderFixtureEntry {
+  name: String,
+  value: String,
+}
+
+struct AgentHeaderCase {
+  name: &'static str,
+  agent_id: AgentId,
+  provider_id: &'static str,
+  fixture_yaml: &'static str,
+}
 
 /// Minimal `Provider` used only to satisfy the new typed
 /// `AccountHandle` requirement on `SelectorOutcome::Selected`.
@@ -423,11 +445,28 @@ impl AccountSelector for CannedSelector {
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),
-      provider_id: SmolStr::new("zai-coding-plan"),
+      provider_id: SmolStr::new(self.handle.provider.id()),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("glm-4"),
       account_handle: self.handle.clone(),
     })
+  }
+}
+
+struct FixedAgentExtract {
+  agent_id: AgentId,
+}
+
+#[async_trait]
+impl tokn_requests::stage_traits::ExtractStage for FixedAgentExtract {
+  async fn extract(
+    &self,
+    ctx: &tokn_requests::PipelineCtx,
+    raw: RawInbound,
+  ) -> Result<tokn_requests::stage_traits::Extracted, PipelineError> {
+    let mut extracted = DefaultExtract.extract(ctx, raw).await?;
+    extracted.agent_id = Some(self.agent_id.clone());
+    Ok(extracted)
   }
 }
 
@@ -438,6 +477,104 @@ fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
     .body(body)
     .unwrap();
   reqwest::Response::from(resp)
+}
+
+struct RecordingProvider {
+  info: ProviderInfo,
+  resp: Mutex<Option<reqwest::Response>>,
+  seen_client_headers: Arc<Mutex<Option<HeaderMap>>>,
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+
+  async fn chat(&self, ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    *self.seen_client_headers.lock().unwrap() = ctx.client_headers.clone();
+    Ok(
+      self
+        .resp
+        .lock()
+        .unwrap()
+        .take()
+        .expect("RecordingProvider::chat: no canned response armed"),
+    )
+  }
+}
+
+fn recording_handle(
+  provider_id: &str,
+  account_id: &str,
+  resp: reqwest::Response,
+) -> (Arc<AccountHandle>, Arc<Mutex<Option<HeaderMap>>>) {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "recording",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  let seen_client_headers = Arc::new(Mutex::new(None));
+  let provider = RecordingProvider {
+    info,
+    resp: Mutex::new(Some(resp)),
+    seen_client_headers: seen_client_headers.clone(),
+  };
+  (
+    Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider))),
+    seen_client_headers,
+  )
+}
+
+fn load_agent_id_header_fixture(yaml: &str) -> Vec<HeaderFixtureEntry> {
+  let entries: Vec<serde_json::Map<String, Value>> = serde_yaml::from_str(yaml).expect("fixture is a YAML array");
+  let mut headers = Vec::with_capacity(entries.len());
+  for entry in entries {
+    assert_eq!(entry.len(), 1, "each fixture row must contain exactly one header");
+    let (name, value) = entry.into_iter().next().expect("fixture row must contain one header");
+    let value = value
+      .as_str()
+      .expect("fixture header value must be a string")
+      .to_string();
+    headers.push(HeaderFixtureEntry { name, value });
+  }
+  headers
 }
 
 #[tokio::test]
@@ -513,6 +650,88 @@ async fn full_pipeline_buffered_happy_path() {
       assert_eq!(body_json["choices"][0]["message"]["content"], "hi");
     }
     other => panic!("expected Buffered, got {other:?}"),
+  }
+}
+
+#[tokio::test]
+async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
+  let cases = [
+    AgentHeaderCase {
+      name: "opencode_openai",
+      agent_id: AgentId::Opencode,
+      provider_id: "openai",
+      fixture_yaml: OPENCODE_OPENAI_SEND_HEADERS_YAML,
+    },
+    AgentHeaderCase {
+      name: "codex_cli_openai",
+      agent_id: AgentId::CodexCli,
+      provider_id: "openai",
+      fixture_yaml: CODEX_CLI_OPENAI_SEND_HEADERS_YAML,
+    },
+    AgentHeaderCase {
+      name: "claude_code_openai",
+      agent_id: AgentId::ClaudeCode,
+      provider_id: "openai",
+      fixture_yaml: CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML,
+    },
+    AgentHeaderCase {
+      name: "cline_openai",
+      agent_id: AgentId::Cline,
+      provider_id: "openai",
+      fixture_yaml: CLINE_OPENAI_SEND_HEADERS_YAML,
+    },
+    AgentHeaderCase {
+      name: "copilot_cli_openai",
+      agent_id: AgentId::CopilotCli,
+      provider_id: "openai",
+      fixture_yaml: COPILOT_CLI_OPENAI_SEND_HEADERS_YAML,
+    },
+  ];
+
+  for case in cases {
+    let (bus, _log) = capture_bus();
+    let (handle, seen_client_headers) = recording_handle(
+      case.provider_id,
+      "acct-1",
+      ok_response(
+        200,
+        r#"{"id":"resp-agent-id","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
+      ),
+    );
+    let selector = Arc::new(CannedSelector { handle });
+
+    let profile = Arc::new(Profile::full(
+      "smoke-agent-id-headers",
+      Arc::new(FixedAgentExtract {
+        agent_id: case.agent_id.clone(),
+      }),
+      Arc::new(PoolResolve::new(selector)),
+      Arc::new(DefaultBuildHeaders::with_provider_defaults()),
+      Arc::new(DefaultConvertRequest),
+      Arc::new(DefaultSend::new(reqwest::Client::new())),
+      Arc::new(DefaultConvertResponse::new()),
+    ));
+    let runner = PipelineRunner::new(profile, bus);
+
+    runner
+      .run(raw_chat("glm-4"))
+      .await
+      .unwrap_or_else(|err| panic!("{}: pipeline should succeed: {err}", case.name));
+
+    let seen = seen_client_headers
+      .lock()
+      .unwrap()
+      .clone()
+      .unwrap_or_else(|| panic!("{}: provider should observe client headers", case.name));
+    let expected = load_agent_id_header_fixture(case.fixture_yaml);
+    let actual = seen
+      .iter()
+      .map(|(name, value)| HeaderFixtureEntry {
+        name: name.original().to_string(),
+        value: value.as_str().to_string(),
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "{}: agent_id header fixture mismatch", case.name);
   }
 }
 
