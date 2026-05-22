@@ -114,15 +114,8 @@ jobs:
           use_oidc: true
 
   build:
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - macos-13
-          - windows-latest
 
     steps:
       - name: Checkout
