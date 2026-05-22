@@ -11,7 +11,7 @@ use snafu::Snafu;
 pub use tokn_core::db::{DbPaths, HttpSnapshot, MessageRecord, PartRecord};
 #[allow(unused_imports)]
 pub(crate) use tokn_core::db::{Usage, UsageDetails};
-pub use usage::UsageDb;
+pub use usage::{UsageDb, UsageEventHandler};
 
 /// Serialise an HTTP header map to JSON bytes, redacting values whose name
 /// is sensitive (`authorization`, `proxy-authorization`, `cookie`, anything
