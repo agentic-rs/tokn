@@ -499,13 +499,17 @@ mod tests {
   fn build_state_rejects_unknown_proxy_provider_mode_provider() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
-    cfg.proxy_mode
+    cfg
+      .proxy_mode
       .provider_modes
       .insert("made-up-provider".into(), ProxyProviderMode::Switch);
     let bus = EventBus::new(16);
 
     let res = build_state(&cfg, &[], Arc::new(bus));
-    assert!(res.is_err(), "unknown provider ids should fail against the real registry");
+    assert!(
+      res.is_err(),
+      "unknown provider ids should fail against the real registry"
+    );
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("unknown provider id"));
     assert!(err.to_string().contains("made-up-provider"));
