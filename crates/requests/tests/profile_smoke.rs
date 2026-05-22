@@ -36,11 +36,26 @@ use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, Raw
 
 const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str =
   include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
+const OPENCODE_OPENAI_SEND_HEADERS_JSON: &str =
+  include_str!("fixtures/agent_id_headers/opencode_openai_send.json");
+const CLAUDE_CODE_OPENAI_SEND_HEADERS_JSON: &str =
+  include_str!("fixtures/agent_id_headers/claude-code_openai_send.json");
+const CLINE_OPENAI_SEND_HEADERS_JSON: &str =
+  include_str!("fixtures/agent_id_headers/cline_openai_send.json");
+const COPILOT_CLI_OPENAI_SEND_HEADERS_JSON: &str =
+  include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.json");
 
 #[derive(Debug, PartialEq, Eq)]
 struct HeaderFixtureEntry {
   name: String,
   value: String,
+}
+
+struct AgentHeaderCase {
+  name: &'static str,
+  agent_id: AgentId,
+  provider_id: &'static str,
+  fixture_json: &'static str,
 }
 
 /// Minimal `Provider` used only to satisfy the new typed
@@ -643,51 +658,84 @@ async fn full_pipeline_buffered_happy_path() {
 
 #[tokio::test]
 async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
-  let (bus, _log) = capture_bus();
-  let (handle, seen_client_headers) = recording_handle(
-    "openai",
-    "acct-1",
-    ok_response(
-      200,
-      r#"{"id":"resp-agent-id","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
-    ),
-  );
-  let selector = Arc::new(CannedSelector { handle });
-
-  let profile = Arc::new(Profile::full(
-    "smoke-agent-id-headers",
-    Arc::new(FixedAgentExtract {
+  let cases = [
+    AgentHeaderCase {
+      name: "opencode_openai",
+      agent_id: AgentId::Opencode,
+      provider_id: "openai",
+      fixture_json: OPENCODE_OPENAI_SEND_HEADERS_JSON,
+    },
+    AgentHeaderCase {
+      name: "codex_cli_openai",
       agent_id: AgentId::CodexCli,
-    }),
-    Arc::new(PoolResolve::new(selector)),
-    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
-    Arc::new(DefaultConvertRequest),
-    Arc::new(DefaultSend::new(reqwest::Client::new())),
-    Arc::new(DefaultConvertResponse::new()),
-  ));
-  let runner = PipelineRunner::new(profile, bus);
+      provider_id: "openai",
+      fixture_json: CODEX_CLI_OPENAI_SEND_HEADERS_JSON,
+    },
+    AgentHeaderCase {
+      name: "claude_code_openai",
+      agent_id: AgentId::ClaudeCode,
+      provider_id: "openai",
+      fixture_json: CLAUDE_CODE_OPENAI_SEND_HEADERS_JSON,
+    },
+    AgentHeaderCase {
+      name: "cline_openai",
+      agent_id: AgentId::Cline,
+      provider_id: "openai",
+      fixture_json: CLINE_OPENAI_SEND_HEADERS_JSON,
+    },
+    AgentHeaderCase {
+      name: "copilot_cli_openai",
+      agent_id: AgentId::CopilotCli,
+      provider_id: "openai",
+      fixture_json: COPILOT_CLI_OPENAI_SEND_HEADERS_JSON,
+    },
+  ];
 
-  runner
-    .run(raw_chat("glm-4"))
-    .await
-    .expect("pipeline should succeed with injected agent_id");
+  for case in cases {
+    let (bus, _log) = capture_bus();
+    let (handle, seen_client_headers) = recording_handle(
+      case.provider_id,
+      "acct-1",
+      ok_response(
+        200,
+        r#"{"id":"resp-agent-id","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
+      ),
+    );
+    let selector = Arc::new(CannedSelector { handle });
 
-  let seen = seen_client_headers
-    .lock()
-    .unwrap()
-    .clone()
-    .expect("provider should observe client headers");
-  let expected = load_agent_id_header_fixture(CODEX_CLI_OPENAI_SEND_HEADERS_JSON);
-  let expected_names = expected.iter().map(|entry| entry.name.to_ascii_lowercase()).collect::<Vec<_>>();
-  let actual = seen
-    .iter()
-    .filter(|(name, _)| expected_names.iter().any(|expected| expected == name.as_str()))
-    .map(|(name, value)| HeaderFixtureEntry {
-      name: name.original().to_string(),
-      value: value.as_str().to_string(),
-    })
-    .collect::<Vec<_>>();
-  assert_eq!(actual, expected, "agent_id header fixture mismatch");
+    let profile = Arc::new(Profile::full(
+      "smoke-agent-id-headers",
+      Arc::new(FixedAgentExtract {
+        agent_id: case.agent_id.clone(),
+      }),
+      Arc::new(PoolResolve::new(selector)),
+      Arc::new(DefaultBuildHeaders::with_provider_defaults()),
+      Arc::new(DefaultConvertRequest),
+      Arc::new(DefaultSend::new(reqwest::Client::new())),
+      Arc::new(DefaultConvertResponse::new()),
+    ));
+    let runner = PipelineRunner::new(profile, bus);
+
+    runner
+      .run(raw_chat("glm-4"))
+      .await
+      .unwrap_or_else(|err| panic!("{}: pipeline should succeed: {err}", case.name));
+
+    let seen = seen_client_headers
+      .lock()
+      .unwrap()
+      .clone()
+      .unwrap_or_else(|| panic!("{}: provider should observe client headers", case.name));
+    let expected = load_agent_id_header_fixture(case.fixture_json);
+    let actual = seen
+      .iter()
+      .map(|(name, value)| HeaderFixtureEntry {
+        name: name.original().to_string(),
+        value: value.as_str().to_string(),
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(actual, expected, "{}: agent_id header fixture mismatch", case.name);
+  }
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------
