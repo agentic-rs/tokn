@@ -760,6 +760,72 @@ async fn proxy_passthrough_4xx_stream_request_completes_before_downstream_body_d
 }
 
 #[tokio::test]
+async fn proxy_passthrough_preserves_unknown_endpoint_label() {
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{EndpointLabel, RequestEventPayload, StageEvent};
+
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let upstream_body = br#"{"id":"resp-unknown","ok":true}"#;
+
+  let server = tokio::spawn(async move {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut buf = vec![0_u8; 8192];
+    let _ = stream.read(&mut buf).await.unwrap();
+    let resp = format!(
+      "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+      upstream_body.len()
+    );
+    stream.write_all(resp.as_bytes()).await.unwrap();
+    stream.write_all(upstream_body).await.unwrap();
+    stream.flush().await.unwrap();
+  });
+
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Passthrough;
+  let events = Arc::new(EventBus::new(128));
+  let mut rx = events.subscribe();
+  let state = build_state(&cfg, &[], events).unwrap();
+
+  let req = Request::builder()
+    .method(Method::POST)
+    .uri("/v1/experimental/agents")
+    .header("content-type", "application/json")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_passthrough_via_pipeline_inner(
+    &state,
+    &addr.ip().to_string(),
+    addr.port(),
+    "http",
+    None,
+    Some(addr.to_string()),
+    parts,
+    Bytes::from_static(br#"{"model":"gpt-4.1"}"#),
+  )
+  .await;
+
+  assert_eq!(resp.status(), StatusCode::OK);
+  server.await.unwrap();
+
+  let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+  loop {
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    assert!(!remaining.is_zero(), "timed out waiting for Started event");
+    let Ok(Ok(ev)) = tokio::time::timeout(remaining, rx.recv()).await else {
+      continue;
+    };
+    let CoreEvent::Requests(req) = &*ev else { continue };
+    if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &req.payload {
+      assert_eq!(endpoint, &EndpointLabel::Custom("/v1/experimental/agents".into()));
+      break;
+    }
+  }
+}
+
+#[tokio::test]
 async fn proxy_switch_rejects_unrecognized_provider_url() {
   let mut cfg = Config::default();
   cfg.server.route_mode = RouteMode::Switch;

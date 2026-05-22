@@ -144,9 +144,10 @@ impl PipelineRunner {
     request_id: SmolStr,
     attempt: u32,
   ) -> Result<ConvertedResponse, PipelineError> {
+    let started_endpoint = raw.endpoint_label.clone().unwrap_or_else(|| raw.endpoint.into());
     let ctx = PipelineCtx::new_with_attempt_and_config(request_id, attempt, raw.endpoint, self.events.clone(), config);
     ctx.emit_stage(StageEvent::Started {
-      endpoint: raw.endpoint.into(),
+      endpoint: started_endpoint,
     });
 
     // ---- Extract ----

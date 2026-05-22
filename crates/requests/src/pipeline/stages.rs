@@ -25,6 +25,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokn_accounts::AccountHandle;
 use tokn_core::provider::Endpoint;
+use tokn_core::request_event::EndpointLabel;
 use tokn_core::AgentId;
 use tokn_headers::{HeaderMap, TemplateVars};
 
@@ -182,6 +183,7 @@ impl Drop for AccumHelper {
 #[derive(Debug, Clone)]
 pub struct RawInbound {
   pub endpoint: Endpoint,
+  pub endpoint_label: Option<EndpointLabel>,
   pub headers: HeaderMap,
   /// Original wire body (still compressed if it arrived compressed). PR1
   /// does not require decompression; the production path will populate

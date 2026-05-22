@@ -270,6 +270,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
 
   let raw = RawInbound {
     endpoint,
+    endpoint_label: None,
     headers,
     raw_body: body_bytes.clone(),
     decoded_body: body_bytes.clone(),

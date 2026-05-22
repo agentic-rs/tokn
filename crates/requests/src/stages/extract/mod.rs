@@ -41,6 +41,7 @@ impl ExtractStage for DefaultExtract {
   async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
       endpoint: _,
+      endpoint_label: _,
       headers,
       raw_body,
       decoded_body,
@@ -156,6 +157,7 @@ mod tests {
     let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
     RawInbound {
       endpoint: Endpoint::ChatCompletions,
+      endpoint_label: None,
       headers,
       raw_body: decoded.clone(),
       decoded_body: decoded,

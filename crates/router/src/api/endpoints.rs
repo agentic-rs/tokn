@@ -54,6 +54,7 @@ async fn handle(
   let decoded = super::codec::decode_json_request(&inbound, body)?;
   let raw = tokn_requests::RawInbound {
     endpoint: parser.endpoint(),
+    endpoint_label: None,
     headers: (&inbound).into(),
     raw_body: decoded.raw_body.clone(),
     decoded_body: decoded.decoded_body.clone(),

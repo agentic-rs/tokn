@@ -152,6 +152,7 @@ fn raw_chat(model: &str) -> RawInbound {
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
   RawInbound {
     endpoint: Endpoint::ChatCompletions,
+    endpoint_label: None,
     headers: HeaderMap::new(),
     raw_body: decoded.clone(),
     decoded_body: decoded,

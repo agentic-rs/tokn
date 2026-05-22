@@ -39,7 +39,7 @@ use tokn_accounts::routing::ResolveError;
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::provider::Endpoint;
 use tokn_core::request_event::{
-  ConvertedResponseSummary, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent,
+  ConvertedResponseSummary, EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent,
 };
 use tokn_requests::pipeline::error::RequestsError;
 
@@ -214,7 +214,8 @@ async fn proxy_via_pipeline_inner(
   // parse, no route lookup), but `RawInbound` requires a value.
   // Pick the closest match from the path so downstream introspection
   // (e.g. logs) is sensible.
-  let endpoint = Endpoint::infer_from(path_only).unwrap_or(Endpoint::ChatCompletions);
+  let endpoint_label = EndpointLabel::infer_from(path_only);
+  let endpoint = endpoint_label.unwrap_or(Endpoint::ChatCompletions);
 
   // Keep the wire body verbatim for passthrough forwarding, but decode a
   // side-copy for best-effort model/stream peeking and event summaries.
@@ -283,7 +284,7 @@ async fn proxy_via_pipeline_inner(
         let api_err = ApiError::bad_request(format!(
           "switch mode requires a recognized provider URL, got '{full_url}'"
         ));
-        emit_proxy_terminal_error(state, request_id, endpoint, &api_err);
+        emit_proxy_terminal_error(state, request_id, endpoint_label.clone(), &api_err);
         return api_err.into_response();
       };
       cfg_builder = cfg_builder
@@ -297,6 +298,7 @@ async fn proxy_via_pipeline_inner(
 
   let raw = tokn_requests::RawInbound {
     endpoint,
+    endpoint_label: Some(endpoint_label),
     headers: inbound_headers,
     raw_body,
     decoded_body,
@@ -353,15 +355,13 @@ fn emit_proxy_inbound(
   }));
 }
 
-fn emit_proxy_terminal_error(state: &AppState, request_id: SmolStr, endpoint: Endpoint, api_err: &ApiError) {
+fn emit_proxy_terminal_error(state: &AppState, request_id: SmolStr, endpoint: EndpointLabel, api_err: &ApiError) {
   let ts = tokn_core::util::now_unix_ms();
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: request_id.clone(),
     attempt: 0,
     ts,
-    payload: RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: endpoint.into(),
-    }),
+    payload: RequestEventPayload::Stage(StageEvent::Started { endpoint }),
   }));
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: request_id.clone(),
