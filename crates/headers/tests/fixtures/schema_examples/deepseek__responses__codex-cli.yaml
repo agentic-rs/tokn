@@ -1,0 +1,14 @@
+- Accept: text/event-stream
+- Authorization: <redacted>
+- Content-Length: "45273"
+- Content-Type: application/json
+- Host: 10.0.2.2:4141
+- originator: codex_exec
+- session_id: <session_id>
+- thread_id: <session_id>
+- User-Agent: codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)
+- x-client-request-id: <session_id>
+- x-codex-beta-features: terminal_resize_reflow
+- x-codex-turn-metadata: '{"session_id":"<session_id>","thread_id":"<session_id>","turn_id":"<turn_id>","sandbox":"none","turn_started_at_unix_ms":1778772557890}'
+- x-codex-window-id: <session_id>:0
+- X-Request-Id: 1c1a7569-ebbe-4af6-9a83-b948794a3e81

@@ -5,8 +5,7 @@
 //! Per the no-redaction policy, fixture values are stored verbatim — including
 //! the literal `"<redacted>"` placeholder that the router substitutes for
 //! credentials before persisting. No schema parsing/build is exercised here;
-//! this test only pins the foundational map's ability to round-trip captured
-//! traffic.
+//! schema-targeted examples live in `schema_examples.rs`.
 //!
 //! Fixture source: `~/.local/share/tokn-router/requests/*.db`, mined via
 //! `tmp/mine_inbound.py` and filtered to drop missing-persona, browser, and
@@ -118,77 +117,4 @@ fn user_agents_fixture_covers_known_clients() {
       "expected at least one user-agent containing `{needle}`"
     );
   }
-}
-
-#[test]
-fn opencode_schema_parses_real_deepseek_capture() {
-  use tokn_headers::schemas::OpencodeHeaders;
-  use tokn_headers::HeaderSchema;
-
-  let cells = load_cells();
-  // Pick any opencode-on-deepseek POST cell. Key format from miner is
-  // `<host>__<endpoint>__<persona>` (slashes in endpoint flattened).
-  let (key, map) = cells
-    .iter()
-    .find(|(k, _)| k.starts_with("api.deepseek.com__") && k.ends_with("__opencode"))
-    .expect("fixture must contain at least one opencode/deepseek cell");
-  OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
-}
-
-#[test]
-fn opencode_schema_parses_real_copilot_responses_capture() {
-  use tokn_headers::schemas::OpencodeHeaders;
-  use tokn_headers::HeaderSchema;
-
-  let cells = load_cells();
-  let (key, map) = cells
-    .iter()
-    .find(|(k, _)| k == "github-copilot__responses__opencode")
-    .expect("fixture must contain a github-copilot opencode responses cell");
-  OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
-}
-
-#[test]
-fn copilot_overlay_builds_from_real_opencode_copilot_capture() {
-  use tokn_headers::keys;
-  use tokn_headers::schemas::CopilotOverlay;
-
-  let cells = load_cells();
-  let (_, map) = cells
-    .iter()
-    .find(|(k, _)| k == "github-copilot__responses__opencode")
-    .expect("fixture must contain a github-copilot opencode responses cell");
-
-  let overlay = CopilotOverlay::build(&Default::default(), map);
-  assert_eq!(overlay.editor_version.as_str(), "vscode/1.95.0");
-  assert_eq!(overlay.editor_plugin_version.as_str(), "copilot-chat/0.23.0");
-  assert_eq!(overlay.integration_id.as_str(), "vscode-chat");
-  assert_eq!(overlay.initiator.as_deref(), map.get(&keys::X_INITIATOR).map(|v| v.as_str()));
-  assert!(overlay.vision_request.is_none());
-}
-
-#[test]
-fn codex_cli_schema_parses_real_router_sse_capture() {
-  use tokn_headers::schemas::CodexCliHeaders;
-  use tokn_headers::HeaderSchema;
-
-  let cells = load_cells();
-  let (key, map) = cells
-    .iter()
-    .find(|(k, _)| k == "deepseek__responses__codex-cli")
-    .expect("fixture must contain a codex-cli deepseek responses cell");
-  CodexCliHeaders::parse(map).unwrap_or_else(|e| panic!("CodexCliHeaders::parse failed for `{key}`: {e}"));
-}
-
-#[test]
-fn codex_cli_schema_parses_real_chatgpt_websocket_capture() {
-  use tokn_headers::schemas::CodexCliHeaders;
-  use tokn_headers::HeaderSchema;
-
-  let cells = load_cells();
-  let (key, map) = cells
-    .iter()
-    .find(|(k, _)| k == "chatgpt.com__backend-api_codex_responses__codex-cli")
-    .expect("fixture must contain a chatgpt codex websocket cell");
-  CodexCliHeaders::parse(map).unwrap_or_else(|e| panic!("CodexCliHeaders::parse failed for `{key}`: {e}"));
 }
