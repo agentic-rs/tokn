@@ -5,8 +5,7 @@
 //! Per the no-redaction policy, fixture values are stored verbatim — including
 //! the literal `"<redacted>"` placeholder that the router substitutes for
 //! credentials before persisting. No schema parsing/build is exercised here;
-//! this test only pins the foundational map's ability to round-trip captured
-//! traffic.
+//! schema-targeted examples live in `schema_examples.rs`.
 //!
 //! Fixture source: `~/.local/share/tokn-router/requests/*.db`, mined via
 //! `tmp/mine_inbound.py` and filtered to drop missing-persona, browser, and
@@ -118,19 +117,4 @@ fn user_agents_fixture_covers_known_clients() {
       "expected at least one user-agent containing `{needle}`"
     );
   }
-}
-
-#[test]
-fn opencode_schema_parses_real_deepseek_capture() {
-  use tokn_headers::schemas::OpencodeHeaders;
-  use tokn_headers::HeaderSchema;
-
-  let cells = load_cells();
-  // Pick any opencode-on-deepseek POST cell. Key format from miner is
-  // `<host>__<endpoint>__<persona>` (slashes in endpoint flattened).
-  let (key, map) = cells
-    .iter()
-    .find(|(k, _)| k.starts_with("api.deepseek.com__") && k.ends_with("__opencode"))
-    .expect("fixture must contain at least one opencode/deepseek cell");
-  OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
 }

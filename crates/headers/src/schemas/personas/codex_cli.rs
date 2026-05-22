@@ -5,6 +5,12 @@
 //! `version`, `session_id`, `thread_id`); these are kept verbatim rather
 //! than canonicalised because that's what the upstream chatgpt.com endpoint
 //! expects.
+//!
+//! The captured matrix contains multiple transport shapes:
+//! `chatgpt.com` websocket upgrades, local/router SSE POSTs, and
+//! browser-context account calls. A single typed schema therefore needs to
+//! accept endpoint-specific optional headers rather than assuming one
+//! normalized baseline.
 
 use crate::error::Error;
 use crate::keys;
@@ -29,17 +35,18 @@ pub struct CodexCliHeaders {
   /// outbound transport derives `Host` from the URL.
   #[serde(rename = "Host", skip_serializing_if = "Option::is_none")]
   pub host: Option<SmolStr>,
-  #[serde(rename = "Accept")]
-  pub accept: SmolStr,
-  #[serde(rename = "originator")]
-  pub originator: SmolStr,
-  #[serde(rename = "chatgpt-account-id")]
-  pub chatgpt_account_id: SmolStr,
-
-  // Present on every captured chatgpt.com call but not part of the raw HTTP
-  // baseline (absent on synthetic curl traffic). Modelled as required.
-  #[serde(rename = "version")]
-  pub version: SmolStr,
+  #[serde(rename = "Accept", skip_serializing_if = "Option::is_none")]
+  pub accept: Option<SmolStr>,
+  #[serde(rename = "Connection", skip_serializing_if = "Option::is_none")]
+  pub connection: Option<SmolStr>,
+  #[serde(rename = "Upgrade", skip_serializing_if = "Option::is_none")]
+  pub upgrade: Option<SmolStr>,
+  #[serde(rename = "originator", skip_serializing_if = "Option::is_none")]
+  pub originator: Option<SmolStr>,
+  #[serde(rename = "chatgpt-account-id", skip_serializing_if = "Option::is_none")]
+  pub chatgpt_account_id: Option<SmolStr>,
+  #[serde(rename = "version", skip_serializing_if = "Option::is_none")]
+  pub version: Option<SmolStr>,
 
   // Body framing — present on POSTs (responses, analytics-events), absent on
   // GETs (models, plugins/featured).
@@ -63,6 +70,14 @@ pub struct CodexCliHeaders {
   pub codex_turn_metadata: Option<SmolStr>,
   #[serde(rename = "OpenAI-Beta", skip_serializing_if = "Option::is_none")]
   pub openai_beta: Option<SmolStr>,
+  #[serde(rename = "X-Request-Id", skip_serializing_if = "Option::is_none")]
+  pub request_id: Option<SmolStr>,
+  #[serde(rename = "Sec-WebSocket-Extensions", skip_serializing_if = "Option::is_none")]
+  pub sec_websocket_extensions: Option<SmolStr>,
+  #[serde(rename = "Sec-WebSocket-Key", skip_serializing_if = "Option::is_none")]
+  pub sec_websocket_key: Option<SmolStr>,
+  #[serde(rename = "Sec-WebSocket-Version", skip_serializing_if = "Option::is_none")]
+  pub sec_websocket_version: Option<SmolStr>,
 
   // Browser-context state
   #[serde(rename = "Cookie", skip_serializing_if = "Option::is_none")]
@@ -75,10 +90,12 @@ impl HeaderSchema for CodexCliHeaders {
       user_agent: required(map, &keys::USER_AGENT)?,
       authorization: required(map, &keys::AUTHORIZATION)?,
       host: optional(map, &keys::HOST),
-      accept: required(map, &keys::ACCEPT)?,
-      originator: required(map, &keys::ORIGINATOR)?,
-      chatgpt_account_id: required(map, &keys::CHATGPT_ACCOUNT_ID)?,
-      version: required(map, &keys::VERSION)?,
+      accept: optional(map, &keys::ACCEPT),
+      connection: optional(map, &keys::CONNECTION),
+      upgrade: optional(map, &keys::UPGRADE),
+      originator: optional(map, &keys::ORIGINATOR),
+      chatgpt_account_id: optional(map, &keys::CHATGPT_ACCOUNT_ID),
+      version: optional(map, &keys::VERSION),
       content_type: optional(map, &keys::CONTENT_TYPE),
       content_length: optional(map, &keys::CONTENT_LENGTH),
       session_id: optional(map, &keys::SESSION_ID_LOWER),
@@ -88,6 +105,10 @@ impl HeaderSchema for CodexCliHeaders {
       codex_beta_features: optional(map, &keys::X_CODEX_BETA_FEATURES),
       codex_turn_metadata: optional(map, &keys::X_CODEX_TURN_METADATA),
       openai_beta: optional(map, &keys::OPENAI_BETA),
+      request_id: optional(map, &keys::X_REQUEST_ID),
+      sec_websocket_extensions: optional(map, &keys::SEC_WEBSOCKET_EXTENSIONS),
+      sec_websocket_key: optional(map, &keys::SEC_WEBSOCKET_KEY),
+      sec_websocket_version: optional(map, &keys::SEC_WEBSOCKET_VERSION),
       cookie: optional(map, &keys::COOKIE),
     })
   }
@@ -96,10 +117,12 @@ impl HeaderSchema for CodexCliHeaders {
     put(&mut m, &keys::USER_AGENT, &self.user_agent);
     put(&mut m, &keys::AUTHORIZATION, &self.authorization);
     put_opt(&mut m, &keys::HOST, &self.host);
-    put(&mut m, &keys::ACCEPT, &self.accept);
-    put(&mut m, &keys::ORIGINATOR, &self.originator);
-    put(&mut m, &keys::CHATGPT_ACCOUNT_ID, &self.chatgpt_account_id);
-    put(&mut m, &keys::VERSION, &self.version);
+    put_opt(&mut m, &keys::ACCEPT, &self.accept);
+    put_opt(&mut m, &keys::CONNECTION, &self.connection);
+    put_opt(&mut m, &keys::UPGRADE, &self.upgrade);
+    put_opt(&mut m, &keys::ORIGINATOR, &self.originator);
+    put_opt(&mut m, &keys::CHATGPT_ACCOUNT_ID, &self.chatgpt_account_id);
+    put_opt(&mut m, &keys::VERSION, &self.version);
     put_opt(&mut m, &keys::CONTENT_TYPE, &self.content_type);
     put_opt(&mut m, &keys::CONTENT_LENGTH, &self.content_length);
     put_opt(&mut m, &keys::SESSION_ID_LOWER, &self.session_id);
@@ -109,15 +132,21 @@ impl HeaderSchema for CodexCliHeaders {
     put_opt(&mut m, &keys::X_CODEX_BETA_FEATURES, &self.codex_beta_features);
     put_opt(&mut m, &keys::X_CODEX_TURN_METADATA, &self.codex_turn_metadata);
     put_opt(&mut m, &keys::OPENAI_BETA, &self.openai_beta);
+    put_opt(&mut m, &keys::X_REQUEST_ID, &self.request_id);
+    put_opt(&mut m, &keys::SEC_WEBSOCKET_EXTENSIONS, &self.sec_websocket_extensions);
+    put_opt(&mut m, &keys::SEC_WEBSOCKET_KEY, &self.sec_websocket_key);
+    put_opt(&mut m, &keys::SEC_WEBSOCKET_VERSION, &self.sec_websocket_version);
     put_opt(&mut m, &keys::COOKIE, &self.cookie);
     m
   }
   fn known_names() -> &'static [&'static HeaderName] {
-    static NAMES: [&HeaderName; 17] = [
+    static NAMES: [&HeaderName; 23] = [
       &keys::USER_AGENT,
       &keys::AUTHORIZATION,
       &keys::HOST,
       &keys::ACCEPT,
+      &keys::CONNECTION,
+      &keys::UPGRADE,
       &keys::ORIGINATOR,
       &keys::CHATGPT_ACCOUNT_ID,
       &keys::VERSION,
@@ -130,6 +159,10 @@ impl HeaderSchema for CodexCliHeaders {
       &keys::X_CODEX_BETA_FEATURES,
       &keys::X_CODEX_TURN_METADATA,
       &keys::OPENAI_BETA,
+      &keys::X_REQUEST_ID,
+      &keys::SEC_WEBSOCKET_EXTENSIONS,
+      &keys::SEC_WEBSOCKET_KEY,
+      &keys::SEC_WEBSOCKET_VERSION,
       &keys::COOKIE,
     ];
     &NAMES
@@ -148,13 +181,15 @@ impl CodexCliHeaders {
       }),
       authorization: from_inbound_or(inbound, &keys::AUTHORIZATION, || "<missing>".into()),
       host: None,
-      accept: from_inbound_or(inbound, &keys::ACCEPT, || "text/event-stream".into()),
-      originator: from_inbound_or(inbound, &keys::ORIGINATOR, || "codex_exec".into()),
+      accept: Some(from_inbound_or(inbound, &keys::ACCEPT, || "text/event-stream".into())),
+      connection: opt_from_inbound(inbound, &keys::CONNECTION),
+      upgrade: opt_from_inbound(inbound, &keys::UPGRADE),
+      originator: Some(from_inbound_or(inbound, &keys::ORIGINATOR, || "codex_exec".into())),
       chatgpt_account_id: vars
         .account_id
         .clone()
-        .unwrap_or_else(|| from_inbound_or(inbound, &keys::CHATGPT_ACCOUNT_ID, || "<missing>".into())),
-      version: from_inbound_or(inbound, &keys::VERSION, || "0.130.0".into()),
+        .or_else(|| opt_from_inbound(inbound, &keys::CHATGPT_ACCOUNT_ID)),
+      version: Some(from_inbound_or(inbound, &keys::VERSION, || "0.130.0".into())),
       content_type: opt_from_inbound(inbound, &keys::CONTENT_TYPE),
       content_length: opt_from_inbound(inbound, &keys::CONTENT_LENGTH),
       session_id: vars
@@ -170,6 +205,13 @@ impl CodexCliHeaders {
       codex_beta_features: opt_from_inbound(inbound, &keys::X_CODEX_BETA_FEATURES),
       codex_turn_metadata: opt_from_inbound(inbound, &keys::X_CODEX_TURN_METADATA),
       openai_beta: opt_from_inbound(inbound, &keys::OPENAI_BETA),
+      request_id: vars
+        .request_id
+        .clone()
+        .or_else(|| opt_from_inbound(inbound, &keys::X_REQUEST_ID)),
+      sec_websocket_extensions: opt_from_inbound(inbound, &keys::SEC_WEBSOCKET_EXTENSIONS),
+      sec_websocket_key: opt_from_inbound(inbound, &keys::SEC_WEBSOCKET_KEY),
+      sec_websocket_version: opt_from_inbound(inbound, &keys::SEC_WEBSOCKET_VERSION),
       cookie: opt_from_inbound(inbound, &keys::COOKIE),
     }
   }
@@ -184,10 +226,12 @@ mod tests {
       user_agent: "codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)".into(),
       authorization: "<redacted>".into(),
       host: Some("chatgpt.com".into()),
-      accept: "text/event-stream".into(),
-      originator: "codex_exec".into(),
-      chatgpt_account_id: "<redacted>".into(),
-      version: "0.130.0".into(),
+      accept: Some("text/event-stream".into()),
+      connection: None,
+      upgrade: None,
+      originator: Some("codex_exec".into()),
+      chatgpt_account_id: Some("<redacted>".into()),
+      version: Some("0.130.0".into()),
       content_type: Some("application/json".into()),
       content_length: Some("45273".into()),
       session_id: Some("019e271b-4023-7081-be3e-7a69d97138a2".into()),
@@ -197,6 +241,10 @@ mod tests {
       codex_beta_features: Some("terminal_resize_reflow".into()),
       codex_turn_metadata: Some("{\"session_id\":\"019e271b\"}".into()),
       openai_beta: None,
+      request_id: None,
+      sec_websocket_extensions: None,
+      sec_websocket_key: None,
+      sec_websocket_version: None,
       cookie: None,
     }
   }
@@ -225,10 +273,10 @@ mod tests {
       h.host.is_none(),
       "no inbound Host => no persona-default Host (would leak to wire)"
     );
-    assert_eq!(h.accept.as_str(), "text/event-stream");
-    assert_eq!(h.originator.as_str(), "codex_exec");
-    assert_eq!(h.chatgpt_account_id.as_str(), "<missing>");
-    assert_eq!(h.version.as_str(), "0.130.0");
+    assert_eq!(h.accept.as_deref(), Some("text/event-stream"));
+    assert_eq!(h.originator.as_deref(), Some("codex_exec"));
+    assert!(h.chatgpt_account_id.is_none());
+    assert_eq!(h.version.as_deref(), Some("0.130.0"));
     assert!(h.content_type.is_none());
     assert!(h.session_id.is_none());
     assert!(h.thread_id.is_none());
@@ -259,6 +307,7 @@ mod tests {
     let h = CodexCliHeaders::build(&vars, &HeaderMap::new());
     assert_eq!(h.session_id.as_deref(), Some("ses_xyz"));
     assert_eq!(h.client_request_id.as_deref(), Some("req_42"));
-    assert_eq!(h.chatgpt_account_id.as_str(), "acct_z");
+    assert_eq!(h.request_id.as_deref(), Some("req_42"));
+    assert_eq!(h.chatgpt_account_id.as_deref(), Some("acct_z"));
   }
 }

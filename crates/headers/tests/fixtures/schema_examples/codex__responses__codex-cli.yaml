@@ -1,0 +1,17 @@
+- Authorization: <redacted>
+- chatgpt-account-id: <redacted>
+- Connection: Upgrade
+- Host: chatgpt.com
+- OpenAI-Beta: responses_websockets=2026-02-06
+- originator: codex_exec
+- Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits
+- Sec-WebSocket-Key: <redacted>
+- Sec-WebSocket-Version: "13"
+- session_id: <session_id>
+- Upgrade: websocket
+- User-Agent: codex_exec/0.128.0 (Ubuntu 26.10.0; x86_64) WindowsTerminal (codex_exec; 0.128.0)
+- version: "0.128.0"
+- x-client-request-id: <session_id>
+- x-codex-beta-features: terminal_resize_reflow
+- x-codex-turn-metadata: '{"session_id":"<session_id>","thread_source":"user","turn_id":"","workspaces":{"<path>":{"associated_remote_urls":{"origin":"https://github.com/<repo>"},"latest_git_commit_hash":"<git_hash>","has_changes":false}},"sandbox":"seccomp"}'
+- x-codex-window-id: <session_id>:0
