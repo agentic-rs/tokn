@@ -13,6 +13,7 @@
 use super::{composite_request_id, RequestsDb};
 use crate::{headers_json, Result};
 use rusqlite::params;
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use tokn_core::event::{Event, EventHandler};
 use tokn_core::request_event::{EndpointLabel, RecordEvent, RequestEventPayload, Stage, StageEvent};
@@ -154,15 +155,16 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests InboundConnection bootstrap failed");
       return Ok(());
     };
-    conn.execute(
-      "UPDATE request_connection SET
-         local_addr = COALESCE(?2, local_addr),
-         peer_addr = COALESCE(?3, peer_addr),
-         mode = COALESCE(?4, mode),
-         method = COALESCE(?5, method)
-        WHERE request_id = ?1",
-      params![id, update.local_addr, update.peer_addr, update.mode, update.method],
-    )?;
+    let mut ctx = Map::new();
+    if let Some(local_addr) = update.local_addr {
+      ctx.insert("local_addr".to_string(), Value::String(local_addr.to_string()));
+    }
+    if let Some(peer_addr) = update.peer_addr {
+      ctx.insert("peer_addr".to_string(), Value::String(peer_addr.to_string()));
+    }
+    ctx.insert("mode".to_string(), Value::String(update.mode.to_string()));
+    ctx.insert("pipeline_id".to_string(), Value::String(update.method.to_string()));
+    patch_ctx_json(conn, &id, ctx)?;
     conn.execute(
       "INSERT INTO request_downstream (request_id, inbound_req_method, inbound_req_url)
        VALUES (?1, ?2, ?3)
@@ -180,14 +182,15 @@ impl RequestEventHandler {
     let id = composite_request_id(request_id, attempt);
     let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
-      "INSERT INTO request_connection (request_id, ts, endpoint)
-       VALUES (?1, ?2, ?3)
+      "INSERT INTO request_connection (request_id, ts, ver, endpoint)
+       VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(request_id) DO UPDATE SET
+         ver = COALESCE(request_connection.ver, excluded.ver),
          endpoint = CASE
            WHEN request_connection.endpoint = '' THEN excluded.endpoint
            ELSE request_connection.endpoint
          END",
-      params![id, ts, endpoint.as_str()],
+      params![id, ts, tokn_core::util::version::full(), endpoint.as_str()],
     )?;
     self.db.pin_request(&id, ts);
     Ok(())
@@ -212,15 +215,14 @@ impl RequestEventHandler {
       return Ok(());
     };
     conn.execute(
-      "INSERT INTO request_metadata (request_id, model, stream, session_id, initiator)
-       VALUES (?1, ?2, ?3, ?4, ?5)
+      "INSERT INTO request_metadata (request_id, model, session_id)
+       VALUES (?1, ?2, ?3)
        ON CONFLICT(request_id) DO UPDATE SET
          model = excluded.model,
-         stream = excluded.stream,
-         session_id = COALESCE(excluded.session_id, request_metadata.session_id),
-         initiator = excluded.initiator",
-      params![id, model, stream as i64, session_id, initiator],
+         session_id = COALESCE(excluded.session_id, request_metadata.session_id)",
+      params![id, model, session_id],
     )?;
+    patch_params_json(conn, &id, params_patch(initiator, stream))?;
     conn.execute(
       "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body)
        VALUES (?1, ?2, ?3)
@@ -323,10 +325,7 @@ impl RequestEventHandler {
          outbound_resp_headers = excluded.outbound_resp_headers",
       params![id, status as i64, hdr_json.as_ref()],
     )?;
-    conn.execute(
-      "UPDATE request_connection SET latency_header_ms = ?2 WHERE request_id = ?1",
-      params![id, latency_header_ms],
-    )?;
+    patch_ctx_json(conn, &id, one_i64("latency_header_ms", latency_header_ms))?;
     Ok(())
   }
 
@@ -381,10 +380,7 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Completed without prior Started");
       return Ok(());
     };
-    conn.execute(
-      "UPDATE request_connection SET latency_ms = ?2 WHERE request_id = ?1",
-      params![id, latency_ms],
-    )?;
+    patch_ctx_json(conn, &id, one_i64("latency_ms", latency_ms))?;
     self.db.clear_request(&id);
     Ok(())
   }
@@ -457,10 +453,7 @@ impl RequestEventHandler {
          outbound_resp_headers = excluded.outbound_resp_headers",
       params![id, status as i64, hdr_json.as_ref()],
     )?;
-    conn.execute(
-      "UPDATE request_connection SET latency_header_ms = ?2 WHERE request_id = ?1",
-      params![id, latency_header_ms],
-    )?;
+    patch_ctx_json(conn, &id, one_i64("latency_header_ms", latency_header_ms))?;
     Ok(())
   }
 
@@ -511,22 +504,88 @@ impl RequestEventHandler {
       tracing::warn!(request_id = %id, "requests Usage without prior Started");
       return Ok(());
     };
+    let usage_json = usage_json(usage);
     conn.execute(
-      "INSERT INTO request_metadata (request_id, input_tok, output_tok, cached_tok, reasoning_tok)
-       VALUES (?1, ?2, ?3, ?4, ?5)
+      "INSERT INTO request_metadata (request_id, usage_json)
+       VALUES (?1, ?2)
        ON CONFLICT(request_id) DO UPDATE SET
-         input_tok = excluded.input_tok,
-         output_tok = excluded.output_tok,
-         cached_tok = excluded.cached_tok,
-         reasoning_tok = excluded.reasoning_tok",
-      params![
-        id,
-        usage.input_tokens.map(|v| v as i64),
-        usage.output_tokens.map(|v| v as i64),
-        usage.details.cache_read.map(|v| v as i64),
-        usage.details.reasoning.map(|v| v as i64),
-      ],
+         usage_json = excluded.usage_json",
+      params![id, usage_json],
     )?;
     Ok(())
   }
+}
+
+fn params_patch(initiator: &str, stream: bool) -> Map<String, Value> {
+  let mut out = Map::new();
+  out.insert("initiator".to_string(), Value::String(initiator.to_string()));
+  out.insert("stream".to_string(), Value::Bool(stream));
+  out
+}
+
+fn one_i64(key: &str, value: i64) -> Map<String, Value> {
+  let mut out = Map::new();
+  out.insert(key.to_string(), Value::from(value));
+  out
+}
+
+fn patch_ctx_json(conn: &rusqlite::Connection, request_id: &str, patch: Map<String, Value>) -> Result<()> {
+  patch_json_column(
+    conn,
+    request_id,
+    patch,
+    "UPDATE request_connection
+     SET ctx_json = json_set(COALESCE(ctx_json, '{}'), ?2, json(?3))
+     WHERE request_id = ?1",
+  )
+}
+
+fn patch_params_json(conn: &rusqlite::Connection, request_id: &str, patch: Map<String, Value>) -> Result<()> {
+  patch_json_column(
+    conn,
+    request_id,
+    patch,
+    "UPDATE request_metadata
+     SET params_json = json_set(COALESCE(params_json, '{}'), ?2, json(?3))
+     WHERE request_id = ?1",
+  )
+}
+
+fn patch_json_column(
+  conn: &rusqlite::Connection,
+  request_id: &str,
+  patch: Map<String, Value>,
+  update_sql: &str,
+) -> Result<()> {
+  if patch.is_empty() {
+    return Ok(());
+  }
+  for (key, value) in patch {
+    let path = format!("$.{key}");
+    conn.execute(update_sql, params![request_id, path, value.to_string()])?;
+  }
+  Ok(())
+}
+
+fn usage_json(usage: &tokn_core::db::Usage) -> Option<String> {
+  let mut out = Map::new();
+  if let Some(v) = usage.input_tokens {
+    out.insert("input".to_string(), Value::from(v));
+  }
+  if let Some(v) = usage.output_tokens {
+    out.insert("output".to_string(), Value::from(v));
+  }
+  if let Some(v) = usage.total_tokens {
+    out.insert("total".to_string(), Value::from(v));
+  }
+  if let Some(v) = usage.details.cache_read {
+    out.insert("cache_read".to_string(), Value::from(v));
+  }
+  if let Some(v) = usage.details.cache_write {
+    out.insert("cache_write".to_string(), Value::from(v));
+  }
+  if let Some(v) = usage.details.reasoning {
+    out.insert("reasoning".to_string(), Value::from(v));
+  }
+  (!out.is_empty()).then(|| Value::Object(out).to_string())
 }

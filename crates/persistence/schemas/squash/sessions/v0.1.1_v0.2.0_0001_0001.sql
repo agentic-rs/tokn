@@ -1,0 +1,3 @@
+-- Squashed sessions migrations from snapshot v0.1.1 to snapshot v0.2.0.
+-- Covers schema versions 0001 through 0001.
+-- No-op: sessions v0.1.1 and v0.2.0 are currently equivalent.

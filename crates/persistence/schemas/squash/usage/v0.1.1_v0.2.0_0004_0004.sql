@@ -1,0 +1,3 @@
+-- Squashed usage migrations from snapshot v0.1.1 to snapshot v0.2.0.
+-- Covers schema versions 0004 through 0004.
+-- No-op: usage v0.1.1 and v0.2.0 are currently equivalent.

@@ -26,6 +26,7 @@ impl SessionSource {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct UsageDetails {
   pub cache_read: Option<u64>,
+  pub cache_write: Option<u64>,
   pub reasoning: Option<u64>,
 }
 
@@ -35,6 +36,8 @@ pub struct Usage {
   pub input_tokens: Option<u64>,
   /// Completion/output tokens.
   pub output_tokens: Option<u64>,
+  /// Provider-reported total tokens. This is intentionally not derived.
+  pub total_tokens: Option<u64>,
   pub details: UsageDetails,
 }
 

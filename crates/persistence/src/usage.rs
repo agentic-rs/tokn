@@ -19,7 +19,7 @@ pub struct UsageRecord<'a> {
   pub stream: bool,
 }
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,

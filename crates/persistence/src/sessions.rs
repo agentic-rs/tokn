@@ -17,7 +17,7 @@ pub struct SessionRecord<'a> {
   pub messages: &'a [MessageRecord],
 }
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
   version: 1,
   name: "initial",

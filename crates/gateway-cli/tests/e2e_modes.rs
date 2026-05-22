@@ -41,7 +41,7 @@ impl RequestsHarness {
   async fn row(&self, request_id: &str) -> Map<String, Value> {
     for _ in 0..100 {
       if let Some(row) = read_request_row(&self.requests_dir, request_id).expect("read request row") {
-        if row.get("latency_ms").and_then(Value::as_i64).is_some() {
+        if ctx(&row).get("latency_ms").and_then(Value::as_i64).is_some() {
           return row;
         }
       }
@@ -105,6 +105,18 @@ fn int(row: &Map<String, Value>, key: &str) -> Option<i64> {
   row.get(key).and_then(Value::as_i64)
 }
 
+fn ctx(row: &Map<String, Value>) -> Map<String, Value> {
+  row
+    .get("ctx_json")
+    .and_then(Value::as_object)
+    .cloned()
+    .unwrap_or_default()
+}
+
+fn json_obj(row: &Map<String, Value>, key: &str) -> Map<String, Value> {
+  row.get(key).and_then(Value::as_object).cloned().unwrap_or_default()
+}
+
 fn body_json(row: &Map<String, Value>, key: &str) -> Value {
   let Some(value) = row.get(key) else {
     panic!("{key} missing");
@@ -140,8 +152,19 @@ struct RouterCase {
 }
 
 fn assert_router_row(row: &Map<String, Value>, case: RouterCase) {
-  assert_eq!(text(row, "mode").as_deref(), Some(case.mode), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("requests"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some(case.mode),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("requests"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "inbound_req_method").as_deref(),
     Some("POST"),
@@ -340,16 +363,19 @@ async fn router_stream_returns_sse_and_persists_drained_stream_row() {
   harness.shutdown().await;
 
   let row = harness.row(request_id).await;
-  assert_eq!(text(&row, "mode").as_deref(), Some("route"));
-  assert_eq!(text(&row, "method").as_deref(), Some("requests"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx.get("mode").and_then(Value::as_str), Some("route"));
+  assert_eq!(ctx.get("pipeline_id").and_then(Value::as_str), Some("requests"));
+  let params = json_obj(&row, "params_json");
+  let usage = json_obj(&row, "usage_json");
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "model").as_deref(), Some("glm-4.7"));
-  assert_eq!(int(&row, "stream"), Some(1));
+  assert_eq!(params.get("stream").and_then(Value::as_bool), Some(true));
   assert_eq!(int(&row, "status"), Some(200));
   assert_eq!(int(&row, "outbound_resp_status"), Some(200));
   assert_eq!(int(&row, "inbound_resp_status"), Some(200));
-  assert_eq!(int(&row, "input_tok"), Some(3));
-  assert_eq!(int(&row, "output_tok"), Some(2));
+  assert_eq!(usage.get("input").and_then(Value::as_i64), Some(3));
+  assert_eq!(usage.get("output").and_then(Value::as_i64), Some(2));
   let persisted_outbound = body_json(&row, "outbound_req_body");
   assert_eq!(persisted_outbound["model"], "glm-4.7");
   assert_eq!(persisted_outbound["stream"], true);
@@ -370,8 +396,19 @@ struct ProxyCase {
 }
 
 fn assert_proxy_row(row: &Map<String, Value>, case: ProxyCase, inbound_body: &Bytes) {
-  assert_eq!(text(row, "mode").as_deref(), Some("passthrough"), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("proxy"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some("passthrough"),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("proxy"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "endpoint").as_deref(),
     Some("chat_completions"),
@@ -537,8 +574,9 @@ async fn proxy_switch_failure_returns_bad_request_and_persists_error_row() {
   harness.shutdown().await;
 
   let row = harness.row(request_id).await;
-  assert_eq!(text(&row, "mode").as_deref(), Some("switch"));
-  assert_eq!(text(&row, "method").as_deref(), Some("proxy"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx.get("mode").and_then(Value::as_str), Some("switch"));
+  assert_eq!(ctx.get("pipeline_id").and_then(Value::as_str), Some("proxy"));
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "inbound_req_method").as_deref(), Some("POST"));
   assert_eq!(
