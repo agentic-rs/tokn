@@ -217,7 +217,7 @@ async fn health() -> &'static str {
 pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
-  validate_proxy_provider_modes(cfg, provider_registry.as_ref());
+  let _ = validate_proxy_provider_modes(cfg, provider_registry.as_ref());
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
@@ -248,15 +248,24 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   })
 }
 
-fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) {
+fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) -> Result<()> {
+  let mut unresolved = Vec::new();
   for provider_id in cfg.proxy_mode.provider_modes.keys() {
     if provider_registry.resolve(provider_id).is_none() {
       tracing::warn!(
         provider_id = %provider_id,
         "ignoring unresolved [proxy_mode].provider_modes entry"
       );
+      unresolved.push(provider_id.clone());
     }
   }
+  if unresolved.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "[proxy_mode].provider_modes contains unresolved provider ids: {}",
+    unresolved.join(", ")
+  );
 }
 
 /// Construct the default `tokn-requests` pipeline for router-owned JSON
@@ -509,6 +518,22 @@ mod tests {
       res.is_ok(),
       "unknown provider ids should only warn and not fail state construction"
     );
+  }
+
+  #[test]
+  fn validate_proxy_provider_modes_returns_error_for_unknown_provider() {
+    let mut cfg = Config::default();
+    cfg
+      .proxy_mode
+      .provider_modes
+      .insert("made-up-provider".into(), ProxyProviderMode::Switch);
+    let registry = ProviderRegistry::builtin();
+
+    let res = validate_proxy_provider_modes(&cfg, &registry);
+    assert!(res.is_err(), "helper should still return an error for outside callers");
+    let err = res.err().expect("checked above");
+    assert!(err.to_string().contains("unresolved provider ids"));
+    assert!(err.to_string().contains("made-up-provider"));
   }
 
   #[tokio::test]
