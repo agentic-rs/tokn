@@ -121,8 +121,8 @@ fn apply_endpoint_compat_defaults(
     Value::Number(serde_json::Number::from(DEFAULT_MESSAGES_MAX_TOKENS)),
   );
 
-  let normalized = serde_json::to_vec(&decoded.value)
-    .map_err(|e| ApiError::bad_request(format!("invalid JSON request body: {e}")))?;
+  let normalized =
+    serde_json::to_vec(&decoded.value).map_err(|e| ApiError::bad_request(format!("invalid JSON request body: {e}")))?;
   decoded.decoded_body = Bytes::from(normalized.clone());
 
   let encoding = super::codec::request_content_encoding(inbound)?;
@@ -258,8 +258,8 @@ mod tests {
   #[test]
   fn messages_compat_reencodes_gzip_body_after_injecting_default() {
     let body = br#"{"model":"claude","messages":[]}"#;
-    let raw_body = super::super::codec::encode_body_bytes(body, Some(super::super::codec::ContentEncodingKind::Gzip))
-      .unwrap();
+    let raw_body =
+      super::super::codec::encode_body_bytes(body, Some(super::super::codec::ContentEncodingKind::Gzip)).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
     let mut decoded = super::super::codec::DecodedJsonRequest {
