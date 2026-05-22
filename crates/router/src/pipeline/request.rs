@@ -11,6 +11,7 @@ use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use tokn_core::provider::TemplateVars;
 use tokn_core::AgentId;
 use tokn_headers::agent::build_agent_headers;
+use tokn_headers::inbound::build_template_vars;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tracing::warn;
@@ -279,22 +280,8 @@ fn compose_with_schema(
 }
 
 fn parse_inbound_vars(inbound: &reqwest::header::HeaderMap) -> TemplateVars {
-  TemplateVars {
-    session_id: header_value(inbound, "x-session-affinity").or_else(|| header_value(inbound, "session_id")),
-    request_id: header_value(inbound, "x-request-id"),
-    project_cwd: header_value(inbound, "x-project-cwd"),
-    interaction_id: header_value(inbound, "x-interaction-id"),
-    account_id: header_value(inbound, "chatgpt-account-id"),
-  }
-}
-
-fn header_value(headers: &reqwest::header::HeaderMap, name: &str) -> Option<smol_str::SmolStr> {
-  headers
-    .get(name)
-    .and_then(|value| value.to_str().ok())
-    .map(str::trim)
-    .filter(|value| !value.is_empty())
-    .map(smol_str::SmolStr::from)
+  let inbound_headers: tokn_headers::HeaderMap = inbound.into();
+  build_template_vars(&inbound_headers)
 }
 
 fn provider_headers(headers: &reqwest::header::HeaderMap) -> reqwest::header::HeaderMap {
@@ -374,5 +361,25 @@ mod tests {
       Some("opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13")
     );
     assert!(out.headers.get("originator").is_none());
+  }
+
+  #[test]
+  fn parse_inbound_vars_uses_shared_session_and_project_headers() {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("session-id", reqwest::header::HeaderValue::from_static("session-1"));
+    headers.insert(
+      "x-opencode-project",
+      reqwest::header::HeaderValue::from_static("/tmp/project"),
+    );
+    headers.insert(
+      "x-interaction-id",
+      reqwest::header::HeaderValue::from_static("interaction-1"),
+    );
+
+    let vars = parse_inbound_vars(&headers);
+
+    assert_eq!(vars.session_id.as_deref(), Some("session-1"));
+    assert_eq!(vars.project_cwd.as_deref(), Some("/tmp/project"));
+    assert_eq!(vars.interaction_id.as_deref(), Some("interaction-1"));
   }
 }

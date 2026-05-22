@@ -4,6 +4,7 @@ use smol_str::SmolStr;
 pub const SESSION_ID_HEADERS: &[&str] = &[
   "x-session-id",
   "x-client-session-id",
+  "session-id",
   "session_id",
   "x-session-affinity",
   "x-opencode-session",
@@ -57,7 +58,8 @@ mod tests {
   fn first_present_uses_priority_and_trims() {
     let headers = header_map(&[
       ("x-session-id", "   "),
-      ("x-client-session-id", " sess-2 "),
+      ("x-client-session-id", "   "),
+      ("session-id", " sess-2 "),
       ("x-opencode-session", "sess-3"),
     ]);
 
