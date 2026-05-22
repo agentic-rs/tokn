@@ -34,7 +34,7 @@ mod tests {
     assert_eq!(parsed.meta.session_id.as_deref(), Some("session-1"));
     assert_eq!(parsed.meta.request_id.as_deref(), Some("request-1"));
     assert_eq!(parsed.meta.project_id.as_deref(), Some("project-1"));
-    assert_eq!(parsed.meta.initiator, None);
+    assert_eq!(parsed.meta.initiator.as_deref(), Some("user"));
     assert_eq!(parsed.body, body);
     assert_eq!(
       parsed.meta.inbound_headers.get("x-session-id").map(|v| v.as_str()),
