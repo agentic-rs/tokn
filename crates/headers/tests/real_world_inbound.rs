@@ -134,3 +134,29 @@ fn opencode_schema_parses_real_deepseek_capture() {
     .expect("fixture must contain at least one opencode/deepseek cell");
   OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
 }
+
+#[test]
+fn codex_cli_schema_parses_real_router_sse_capture() {
+  use tokn_headers::schemas::CodexCliHeaders;
+  use tokn_headers::HeaderSchema;
+
+  let cells = load_cells();
+  let (key, map) = cells
+    .iter()
+    .find(|(k, _)| k == "deepseek__responses__codex-cli")
+    .expect("fixture must contain a codex-cli deepseek responses cell");
+  CodexCliHeaders::parse(map).unwrap_or_else(|e| panic!("CodexCliHeaders::parse failed for `{key}`: {e}"));
+}
+
+#[test]
+fn codex_cli_schema_parses_real_chatgpt_websocket_capture() {
+  use tokn_headers::schemas::CodexCliHeaders;
+  use tokn_headers::HeaderSchema;
+
+  let cells = load_cells();
+  let (key, map) = cells
+    .iter()
+    .find(|(k, _)| k == "chatgpt.com__backend-api_codex_responses__codex-cli")
+    .expect("fixture must contain a chatgpt codex websocket cell");
+  CodexCliHeaders::parse(map).unwrap_or_else(|e| panic!("CodexCliHeaders::parse failed for `{key}`: {e}"));
+}

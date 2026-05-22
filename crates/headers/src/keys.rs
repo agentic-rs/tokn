@@ -21,6 +21,7 @@ key!(ACCEPT, "Accept", "accept");
 key!(ACCEPT_ENCODING, "Accept-Encoding", "accept-encoding");
 key!(ACCEPT_LANGUAGE, "Accept-Language", "accept-language");
 key!(CONNECTION, "Connection", "connection");
+key!(UPGRADE, "Upgrade", "upgrade");
 key!(COOKIE, "Cookie", "cookie");
 key!(USER_AGENT, "User-Agent", "user-agent");
 key!(HOST, "Host", "host");
@@ -72,6 +73,13 @@ key!(X_CLIENT_SESSION_ID, "X-Client-Session-Id", "x-client-session-id");
 key!(X_AGENT_TASK_ID, "X-Agent-Task-Id", "x-agent-task-id");
 key!(SEC_FETCH_MODE, "Sec-Fetch-Mode", "sec-fetch-mode");
 key!(
+  SEC_WEBSOCKET_EXTENSIONS,
+  "Sec-WebSocket-Extensions",
+  "sec-websocket-extensions"
+);
+key!(SEC_WEBSOCKET_KEY, "Sec-WebSocket-Key", "sec-websocket-key");
+key!(SEC_WEBSOCKET_VERSION, "Sec-WebSocket-Version", "sec-websocket-version");
+key!(
   X_STAINLESS_RETRY_COUNT,
   "X-Stainless-Retry-Count",
   "x-stainless-retry-count"
@@ -120,6 +128,7 @@ mod tests {
       ACCEPT_ENCODING,
       ACCEPT_LANGUAGE,
       CONNECTION,
+      UPGRADE,
       COOKIE,
       USER_AGENT,
       HOST,
@@ -154,6 +163,9 @@ mod tests {
       X_CLIENT_SESSION_ID,
       X_AGENT_TASK_ID,
       SEC_FETCH_MODE,
+      SEC_WEBSOCKET_EXTENSIONS,
+      SEC_WEBSOCKET_KEY,
+      SEC_WEBSOCKET_VERSION,
       X_STAINLESS_RETRY_COUNT,
       X_STAINLESS_LANG,
       X_STAINLESS_PACKAGE_VERSION,

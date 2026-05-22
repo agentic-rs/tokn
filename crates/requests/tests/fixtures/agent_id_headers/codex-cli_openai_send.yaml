@@ -2,6 +2,5 @@
 - Authorization: <missing>
 - Accept: text/event-stream
 - originator: codex_exec
-- chatgpt-account-id: <missing>
 - version: 0.130.0
 - OpenAI-Beta: responses=v1
