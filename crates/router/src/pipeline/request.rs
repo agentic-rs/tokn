@@ -265,15 +265,17 @@ fn compose_with_schema(
   vars: &TemplateVars,
   inbound: &tokn_headers::HeaderMap,
 ) -> tokn_headers::HeaderMap {
-  let agent_map = schema.agent.build_outbound(vars, inbound);
+  let agent_map = schema.agent.build_outbound(vars, inbound).unwrap_or_default();
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {
       use tokn_headers::HeaderSchema as _;
-      CopilotOverlay::build(vars, inbound).dump()
+      CopilotOverlay::build(vars, inbound)
+        .map(|h| h.dump())
+        .unwrap_or_default()
     }
     OverlayKind::Codex => {
       use tokn_headers::HeaderSchema as _;
-      CodexOverlay::build(vars, inbound).dump()
+      CodexOverlay::build(vars, inbound).map(|h| h.dump()).unwrap_or_default()
     }
   });
   ResolvedSchema::compose(agent_map, overlay_map)

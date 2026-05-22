@@ -1,5 +1,6 @@
 //! Agent-specific header builders used to synthesize outbound request headers.
 
+use crate::error::Error;
 use crate::map::HeaderMap;
 use crate::schema::HeaderSchema;
 use crate::schemas::{ClaudeCodeHeaders, ClineHeaders, CodexCliHeaders, CopilotCliHeaders, OpencodeHeaders};
@@ -26,20 +27,30 @@ impl AgentKind {
     }
   }
 
-  pub fn build_outbound(self, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
-    match self {
-      Self::Opencode => OpencodeHeaders::build(vars, inbound).dump(),
-      Self::CodexCli => CodexCliHeaders::build(vars, inbound).dump(),
-      Self::ClaudeCode => ClaudeCodeHeaders::build(vars, inbound).dump(),
-      Self::Cline => ClineHeaders::build(vars, inbound).dump(),
-      Self::CopilotCli => CopilotCliHeaders::build(vars, inbound).dump(),
-    }
+  pub fn build_outbound(self, vars: &TemplateVars, inbound: &HeaderMap) -> Result<HeaderMap, Error> {
+    Ok(match self {
+      Self::Opencode => OpencodeHeaders::build(vars, inbound)?.dump(),
+      Self::CodexCli => CodexCliHeaders::build(vars, inbound)?.dump(),
+      Self::ClaudeCode => ClaudeCodeHeaders::build(vars, inbound)?.dump(),
+      Self::Cline => ClineHeaders::build(vars, inbound)?.dump(),
+      Self::CopilotCli => CopilotCliHeaders::build(vars, inbound)?.dump(),
+    })
+  }
+
+  pub fn build_outbound_strict(self, vars: &TemplateVars, inbound: &HeaderMap) -> Result<HeaderMap, Error> {
+    Ok(match self {
+      Self::Opencode => OpencodeHeaders::build_strict(vars, inbound)?.dump(),
+      Self::CodexCli => CodexCliHeaders::build_strict(vars, inbound)?.dump(),
+      Self::ClaudeCode => ClaudeCodeHeaders::build_strict(vars, inbound)?.dump(),
+      Self::Cline => ClineHeaders::build_strict(vars, inbound)?.dump(),
+      Self::CopilotCli => CopilotCliHeaders::build_strict(vars, inbound)?.dump(),
+    })
   }
 }
 
 pub fn build_agent_headers(agent_id: &str, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
   AgentKind::from_agent_id(agent_id)
-    .map(|kind| kind.build_outbound(vars, inbound))
+    .and_then(|kind| kind.build_outbound(vars, inbound).ok())
     .unwrap_or_default()
 }
 
@@ -85,7 +96,23 @@ mod tests {
       AgentKind::Cline,
       AgentKind::CopilotCli,
     ] {
-      let out = kind.build_outbound(&vars, &inbound);
+      let out = kind.build_outbound(&vars, &inbound).unwrap();
+      assert!(!out.is_empty(), "{kind:?} should build a non-empty HeaderMap");
+    }
+  }
+
+  #[test]
+  fn build_outbound_strict_for_known_agent_returns_nonempty_map() {
+    let vars = TemplateVars::default();
+    let inbound = HeaderMap::new();
+    for kind in [
+      AgentKind::Opencode,
+      AgentKind::CodexCli,
+      AgentKind::ClaudeCode,
+      AgentKind::Cline,
+      AgentKind::CopilotCli,
+    ] {
+      let out = kind.build_outbound_strict(&vars, &inbound).unwrap();
       assert!(!out.is_empty(), "{kind:?} should build a non-empty HeaderMap");
     }
   }

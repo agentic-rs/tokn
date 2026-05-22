@@ -38,6 +38,6 @@ pub mod vars;
 pub use error::Error;
 pub use map::HeaderMap;
 pub use name::HeaderName;
-pub use schema::HeaderSchema;
+pub use schema::{HeaderSchema, Tier};
 pub use value::HeaderValue;
 pub use vars::TemplateVars;

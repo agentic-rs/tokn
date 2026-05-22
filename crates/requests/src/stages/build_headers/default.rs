@@ -106,15 +106,17 @@ impl BuildHeadersStage for DefaultBuildHeaders {
 /// overlay's typed struct and `.dump()` it. Then [`ResolvedSchema::compose`]
 /// merges with overlay-wins semantics.
 fn compose_with_schema(schema: &ResolvedSchema, vars: &TemplateVars, inbound: &HeaderMap) -> HeaderMap {
-  let agent_map = schema.agent.build_outbound(vars, inbound);
+  let agent_map = schema.agent.build_outbound(vars, inbound).unwrap_or_default();
   let overlay_map = schema.overlay.map(|kind| match kind {
     OverlayKind::Copilot => {
       use tokn_headers::HeaderSchema as _;
-      CopilotOverlay::build(vars, inbound).dump()
+      CopilotOverlay::build(vars, inbound)
+        .map(|h| h.dump())
+        .unwrap_or_default()
     }
     OverlayKind::Codex => {
       use tokn_headers::HeaderSchema as _;
-      CodexOverlay::build(vars, inbound).dump()
+      CodexOverlay::build(vars, inbound).map(|h| h.dump()).unwrap_or_default()
     }
   });
   ResolvedSchema::compose(agent_map, overlay_map)
@@ -229,8 +231,11 @@ mod tests {
       .await
       .unwrap();
     assert!(
-      out.headers.contains_key(&keys::ORIGINATOR),
-      "Codex overlay's `originator` header missing — explicit agent_id was ignored"
+      out
+        .headers
+        .get(&keys::USER_AGENT)
+        .is_some_and(|v| v.as_str().starts_with("codex_exec/")),
+      "Codex user-agent missing — explicit agent_id was ignored"
     );
   }
 
@@ -244,8 +249,11 @@ mod tests {
       .await
       .unwrap();
     assert!(
-      out.headers.contains_key(&keys::ORIGINATOR),
-      "Codex overlay should win when Resolve supplied the effective agent_id"
+      out
+        .headers
+        .get(&keys::USER_AGENT)
+        .is_some_and(|v| v.as_str().starts_with("codex_exec/")),
+      "Codex user-agent should win when Resolve supplied the effective agent_id"
     );
   }
 

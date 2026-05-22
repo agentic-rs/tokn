@@ -66,10 +66,10 @@ fn copilot_overlay_builds_from_opencode_copilot_example() {
   use tokn_headers::schemas::CopilotOverlay;
 
   let map = example_map("github-copilot__responses__opencode");
-  let overlay = CopilotOverlay::build(&Default::default(), &map);
-  assert_eq!(overlay.editor_version.as_str(), "vscode/1.95.0");
-  assert_eq!(overlay.editor_plugin_version.as_str(), "copilot-chat/0.23.0");
-  assert_eq!(overlay.integration_id.as_str(), "vscode-chat");
+  let overlay = CopilotOverlay::build(&Default::default(), &map).unwrap();
+  assert_eq!(overlay.editor_version.as_deref(), Some("vscode/1.95.0"));
+  assert_eq!(overlay.editor_plugin_version.as_deref(), Some("copilot-chat/0.23.0"));
+  assert_eq!(overlay.integration_id.as_deref(), Some("vscode-chat"));
   assert_eq!(
     overlay.initiator.as_deref(),
     map.get(&keys::X_INITIATOR).map(|v| v.as_str())
