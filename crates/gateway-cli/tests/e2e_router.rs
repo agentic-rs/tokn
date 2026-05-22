@@ -46,6 +46,12 @@ fn assert_router_row(row: &Map<String, Value>, case: RouterCase) {
     case.name
   );
   assert_eq!(text(row, "model").as_deref(), Some(case.model), "{}", case.name);
+  assert_eq!(
+    text(row, "session_id").as_deref(),
+    Some("sess-router-1"),
+    "{}",
+    case.name
+  );
 
   if let Some(expected_error) = case.expected_error {
     let error = text(row, "request_error").unwrap_or_default();
@@ -153,6 +159,7 @@ async fn router_modes_return_expected_results_and_persist_request_rows() {
           .uri("/v1/chat/completions")
           .header("content-type", "application/json")
           .header("x-request-id", &request_id)
+          .header("x-session-id", "sess-router-1")
           .header("x-route-mode", case.mode)
           .body(Body::from(raw_body.clone()))
           .unwrap(),

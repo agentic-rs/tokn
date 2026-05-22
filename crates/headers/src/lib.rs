@@ -24,6 +24,7 @@
 
 pub mod agent;
 pub mod error;
+pub mod inbound;
 pub mod keys;
 pub mod map;
 pub mod name;

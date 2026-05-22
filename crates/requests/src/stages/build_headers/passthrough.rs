@@ -16,13 +16,15 @@
 //! (called from inside `DefaultSend` via `provider.chat/responses/messages`)
 //! still adds `Authorization` based on `Resolved.account_handle`.
 //!
-//! `TemplateVars` is default — passthrough does not interpolate any header.
+//! `TemplateVars` still mirrors the inbound correlation headers so downstream
+//! consumers see the same request metadata contract as the default path.
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
-use tokn_headers::{HeaderMap, TemplateVars};
+use tokn_headers::inbound::build_template_vars;
+use tokn_headers::HeaderMap;
 
 /// Hop-by-hop header names (lowercase) that must not be forwarded
 /// verbatim to the upstream. The transport layer sets its own value for
@@ -109,7 +111,7 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
     }
     Ok(BuiltHeaders {
       headers: out,
-      vars: TemplateVars::default(),
+      vars: build_template_vars(&extracted.headers),
     })
   }
 }
@@ -201,13 +203,23 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn empty_template_vars() {
+  async fn passthrough_vars_preserve_correlation_metadata() {
+    let headers = header_map(&[
+      ("x-session-id", "ses_abc"),
+      ("x-request-id", "req_123"),
+      ("x-opencode-project", "/worktree"),
+      ("x-interaction-id", "int_9"),
+      ("chatgpt-account-id", "acct_1"),
+    ]);
     let out = PassthroughBuildHeaders::new()
-      .build_headers(&ctx(), &extracted(HeaderMap::new()), &resolved("openai"))
+      .build_headers(&ctx(), &extracted(headers), &resolved("openai"))
       .await
       .unwrap();
-    assert!(out.vars.session_id.is_none());
-    assert!(out.vars.request_id.is_none());
+    assert_eq!(out.vars.session_id.as_deref(), Some("ses_abc"));
+    assert_eq!(out.vars.request_id.as_deref(), Some("req_123"));
+    assert_eq!(out.vars.project_cwd.as_deref(), Some("/worktree"));
+    assert_eq!(out.vars.interaction_id.as_deref(), Some("int_9"));
+    assert_eq!(out.vars.account_id.as_deref(), Some("acct_1"));
   }
 
   #[tokio::test]

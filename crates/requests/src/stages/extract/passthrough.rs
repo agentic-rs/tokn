@@ -25,16 +25,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
-
-const SESSION_ID_HEADERS: &[&str] = &[
-  "x-session-id",
-  "x-client-session-id",
-  "session_id",
-  "x-session-affinity",
-  "x-opencode-session",
-];
-const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 /// Minimal field set peeled off the inbound JSON body. Everything else
 /// is intentionally ignored — the body bytes are forwarded verbatim
@@ -82,8 +74,8 @@ impl ExtractStage for PassthroughExtract {
     // when no header initiator is provided.
     let initiator = header_initiator.clone().unwrap_or_else(|| SmolStr::new("user"));
 
-    let session_id = first_header(&headers, SESSION_ID_HEADERS).map(SmolStr::new);
-    let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(SmolStr::new);
+    let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
+    let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
 
     let route_mode_hint = header_str(&headers, "x-route-mode")
       .map(str::trim)
@@ -113,12 +105,6 @@ impl ExtractStage for PassthroughExtract {
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
   headers.get(name).map(|v| v.as_str())
-}
-
-fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
-  names
-    .iter()
-    .find_map(|name| header_str(headers, name).map(str::trim).filter(|s| !s.is_empty()))
 }
 
 fn accept_is_sse(headers: &HeaderMap) -> bool {
