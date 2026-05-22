@@ -125,21 +125,25 @@ mod tests {
   use super::*;
   use std::thread::sleep;
 
+  fn ms(value: u64) -> Duration {
+    Duration::from_millis(value)
+  }
+
   #[test]
   fn unknown_then_hit_then_expired() {
-    let a = Affinity::new(Duration::from_millis(60), Duration::from_millis(200));
+    let a = Affinity::new(ms(100), ms(300));
     assert_eq!(a.lookup("k1"), Lookup::Unknown);
     a.record("k1", "acct-a");
     assert_eq!(a.lookup("k1"), Lookup::Hit("acct-a".into()));
-    sleep(Duration::from_millis(80));
+    sleep(ms(140));
     assert_eq!(a.lookup("k1"), Lookup::Expired);
   }
 
   #[test]
   fn record_clears_tombstone() {
-    let a = Affinity::new(Duration::from_millis(40), Duration::from_millis(400));
+    let a = Affinity::new(ms(80), ms(400));
     a.record("k", "old");
-    sleep(Duration::from_millis(60));
+    sleep(ms(120));
     assert_eq!(a.lookup("k"), Lookup::Expired);
     a.record("k", "new");
     assert_eq!(a.lookup("k"), Lookup::Hit("new".into()));
@@ -147,20 +151,20 @@ mod tests {
 
   #[test]
   fn tombstone_eventually_forgotten() {
-    let a = Affinity::new(Duration::from_millis(20), Duration::from_millis(60));
+    let a = Affinity::new(ms(40), ms(120));
     a.record("k", "x");
-    sleep(Duration::from_millis(30)); // > ttl
+    sleep(ms(70)); // > ttl
     assert_eq!(a.lookup("k"), Lookup::Expired); // tombstoned
-    sleep(Duration::from_millis(80)); // > tombstone_ttl
+    sleep(ms(150)); // > tombstone_ttl
     assert_eq!(a.lookup("k"), Lookup::Unknown);
   }
 
   #[test]
   fn sliding_window_keeps_session_alive() {
-    let a = Affinity::new(Duration::from_millis(60), Duration::from_millis(300));
+    let a = Affinity::new(ms(150), ms(400));
     a.record("k", "acct");
     for _ in 0..4 {
-      sleep(Duration::from_millis(30));
+      sleep(ms(40));
       assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
       a.record("k", "acct"); // refresh
     }
