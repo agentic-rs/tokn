@@ -17,13 +17,11 @@ pub struct SessionRecord<'a> {
 }
 
 const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
-const MIGRATIONS: &[migrate::Migration] = &[
-  migrate::Migration {
-    version: 1,
-    name: "initial",
-    sql: include_str!("../schemas/snapshot/sessions/v0.0.0.sql"),
-  },
-];
+const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
+  version: 1,
+  name: "initial",
+  sql: include_str!("../schemas/snapshot/sessions/v0.0.0.sql"),
+}];
 
 pub fn latest_version() -> u32 {
   migrate::latest_version(MIGRATIONS)
