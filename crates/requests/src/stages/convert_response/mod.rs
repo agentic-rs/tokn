@@ -9,7 +9,6 @@ use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResp
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use tokn_core::provider::Endpoint;
 use tokn_headers::HeaderMap;
 
 pub mod default;
@@ -37,7 +36,7 @@ impl ConvertResponseStage for NoopConvertResponse {
     _ctx: &PipelineCtx,
     status: u16,
     _headers: HeaderMap,
-    _upstream_endpoint: Endpoint,
+    _upstream_endpoint: Option<tokn_core::provider::Endpoint>,
     _body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError> {
     let _ = status;
@@ -49,7 +48,7 @@ impl ConvertResponseStage for NoopConvertResponse {
     _ctx: &PipelineCtx,
     status: u16,
     _headers: HeaderMap,
-    _upstream_endpoint: Endpoint,
+    _upstream_endpoint: Option<tokn_core::provider::Endpoint>,
     _body: BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError> {
     let _ = status;

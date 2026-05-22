@@ -34,6 +34,14 @@ impl PoolAccountSelector {
 #[async_trait]
 impl AccountSelector for PoolAccountSelector {
   async fn select(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<SelectorOutcome, PipelineError> {
+    let request_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::MissingResolvedEndpoint {
+          request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
     // Route mode hint comes from the inbound `x-route-mode` header (or
     // equivalent) — `DefaultExtract` parses this into
     // `extracted.route_mode_hint`.
@@ -44,7 +52,7 @@ impl AccountSelector for PoolAccountSelector {
 
     match self
       .pool
-      .acquire_for_route(extracted.session_id.as_deref(), &route, ctx.endpoint)
+      .acquire_for_route(extracted.session_id.as_deref(), &route, request_endpoint)
     {
       EndpointAcquire::Account { acct, endpoint } => {
         let provider_id = SmolStr::from(acct.provider.info().id.as_str());

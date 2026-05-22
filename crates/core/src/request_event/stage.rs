@@ -27,56 +27,56 @@ use tokn_headers::{HeaderMap, TemplateVars};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
-pub enum EndpointLabel {
+pub enum RequestEndpoint {
   Known(Endpoint),
-  Custom(SmolStr),
+  CustomPath(SmolStr),
 }
 
-impl EndpointLabel {
+impl RequestEndpoint {
   pub fn as_str(&self) -> &str {
     match self {
-      EndpointLabel::Known(endpoint) => endpoint.as_str(),
-      EndpointLabel::Custom(label) => label.as_str(),
+      RequestEndpoint::Known(endpoint) => endpoint.as_str(),
+      RequestEndpoint::CustomPath(label) => label.as_str(),
     }
   }
 
   pub fn custom(label: impl Into<SmolStr>) -> Self {
-    Self::Custom(label.into())
+    Self::CustomPath(label.into())
   }
 
-  pub fn infer_from(path: impl AsRef<str>) -> Self {
+  pub fn infer_from_path(path: impl AsRef<str>) -> Self {
     let path = path.as_ref();
     if let Some(endpoint) = Endpoint::infer_from(path) {
       Self::Known(endpoint)
     } else {
-      Self::Custom(SmolStr::new(path))
+      Self::CustomPath(SmolStr::new(path))
     }
   }
 
-  pub fn unwrap_or(&self, default: Endpoint) -> Endpoint {
+  pub fn resolved(&self) -> Option<Endpoint> {
     match self {
-      EndpointLabel::Known(endpoint) => *endpoint,
-      EndpointLabel::Custom(_) => default,
+      RequestEndpoint::Known(endpoint) => Some(*endpoint),
+      RequestEndpoint::CustomPath(_) => None,
     }
   }
 }
 
-impl From<Endpoint> for EndpointLabel {
+impl From<Endpoint> for RequestEndpoint {
   fn from(value: Endpoint) -> Self {
     Self::Known(value)
   }
 }
 
-impl PartialEq<Endpoint> for EndpointLabel {
+impl PartialEq<Endpoint> for RequestEndpoint {
   fn eq(&self, other: &Endpoint) -> bool {
     match self {
-      EndpointLabel::Known(endpoint) => endpoint == other,
-      EndpointLabel::Custom(_) => false,
+      RequestEndpoint::Known(endpoint) => endpoint == other,
+      RequestEndpoint::CustomPath(_) => false,
     }
   }
 }
 
-impl std::fmt::Display for EndpointLabel {
+impl std::fmt::Display for RequestEndpoint {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.write_str(self.as_str())
   }
@@ -140,6 +140,7 @@ pub struct ExtractedSummary {
 pub struct ResolvedSummary {
   pub agent_id: Option<AgentId>,
   pub model: SmolStr,
+  pub resolved_endpoint: Option<Endpoint>,
   pub upstream_model: SmolStr,
   pub upstream_endpoint: Option<Endpoint>,
   pub account_id: SmolStr,
@@ -172,7 +173,7 @@ pub struct ConvertedRequestSummary {
 pub struct SentSummary {
   pub status: u16,
   pub headers: HeaderMap,
-  pub upstream_endpoint: Endpoint,
+  pub upstream_endpoint: Option<Endpoint>,
   /// Mirrors the inbound `stream` flag — true iff the client asked for SSE.
   pub stream: bool,
 }
@@ -192,7 +193,7 @@ pub struct ConvertedResponseSummary {
 pub enum StageEvent {
   /// Emitted once at the very start of requests's `PipelineRunner::run`,
   /// before any stage has produced output.
-  Started { endpoint: EndpointLabel },
+  Started { request_endpoint: RequestEndpoint },
   /// Extract stage completed successfully.
   Extract(ExtractedSummary),
   /// Resolve stage completed successfully.

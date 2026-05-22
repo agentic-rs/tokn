@@ -14,7 +14,7 @@
 //! [`StageEvent::Error`]: crate::event::StageEvent::Error
 
 use crate::pipeline::ctx::PipelineCtx;
-use crate::pipeline::error::PipelineError;
+use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::utils::codec::ContentEncodingKind;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -25,9 +25,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokn_accounts::AccountHandle;
 use tokn_core::provider::Endpoint;
-use tokn_core::request_event::EndpointLabel;
+use tokn_core::request_event::RequestEndpoint;
 use tokn_core::AgentId;
 use tokn_headers::{HeaderMap, TemplateVars};
+
+pub const RUN_UPSTREAM_ENDPOINT_KEY: &str = "run.upstream_endpoint";
 
 #[derive(Clone)]
 pub(crate) struct AccumHelper {
@@ -47,7 +49,7 @@ impl AccumHelper {
     let request_id = ctx.request_id.clone();
     let attempt = ctx.attempt;
     let attempts = attempt + 1;
-    let endpoint_label = ctx.endpoint.as_str().to_string();
+    let request_endpoint = ctx.request_endpoint.as_str().to_string();
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
@@ -88,7 +90,7 @@ impl AccumHelper {
             events.emit(tokn_core::event::Event::StreamProgress {
               request_id: request_id.to_string(),
               model: model.to_string(),
-              endpoint: endpoint_label.clone(),
+              endpoint: request_endpoint.clone(),
               usage: snapshot,
               bytes_streamed,
               chunks,
@@ -182,8 +184,7 @@ impl Drop for AccumHelper {
 /// requests (axum in production, fixtures in tests).
 #[derive(Debug, Clone)]
 pub struct RawInbound {
-  pub endpoint: Endpoint,
-  pub endpoint_label: Option<EndpointLabel>,
+  pub request_endpoint: RequestEndpoint,
   pub headers: HeaderMap,
   /// Original wire body (still compressed if it arrived compressed). PR1
   /// does not require decompression; the production path will populate
@@ -202,9 +203,9 @@ pub struct RawInbound {
 /// about the inbound request, in normalized form.
 ///
 /// `Extracted` deliberately does **not** carry the inbound endpoint — that
-/// lives on [`PipelineCtx`] (`ctx.endpoint`) because the runner has it from
-/// the start (out of `RawInbound`) and every stage gets `&PipelineCtx`. Keeping
-/// it on the ctx avoids duplication and ensures a single source of truth.
+/// lives on [`PipelineCtx`] (`ctx.request_endpoint`) because the runner has it
+/// from the start and every stage gets `&PipelineCtx`. Keeping it on the ctx
+/// avoids duplication and ensures a single source of truth.
 #[derive(Debug, Clone)]
 pub struct Extracted {
   pub agent_id: Option<AgentId>,
@@ -231,6 +232,7 @@ pub struct Extracted {
 pub struct Resolved {
   pub agent_id: Option<AgentId>,
   pub model: SmolStr,
+  pub resolved_endpoint: Option<Endpoint>,
   pub upstream_model: SmolStr,
   pub upstream_endpoint: Option<Endpoint>,
   pub account_id: SmolStr,
@@ -246,6 +248,7 @@ impl std::fmt::Debug for Resolved {
     f.debug_struct("Resolved")
       .field("agent_id", &self.agent_id)
       .field("model", &self.model)
+      .field("resolved_endpoint", &self.resolved_endpoint)
       .field("upstream_model", &self.upstream_model)
       .field("upstream_endpoint", &self.upstream_endpoint)
       .field("account_id", &self.account_id)
@@ -296,9 +299,9 @@ pub struct SentResponse {
   /// ConvertResponse uses this to pick the buffered vs. stream branch.
   pub stream: bool,
   /// Endpoint the upstream provider was actually called with — may differ
-  /// from `ctx.endpoint` when a request-shape translation happened in
-  /// ConvertRequest.
-  pub upstream_endpoint: Endpoint,
+  /// from the inbound `request_endpoint` when a request-shape translation
+  /// happened in ConvertRequest.
+  pub upstream_endpoint: Option<Endpoint>,
   pub response: reqwest::Response,
 }
 
@@ -312,6 +315,80 @@ impl std::fmt::Debug for SentResponse {
       .field("response", &"<reqwest::Response>")
       .finish()
   }
+}
+
+fn invalid_configured_endpoint(stage: crate::event::Stage, value: &str) -> PipelineError {
+  PipelineError::permanent(
+    stage,
+    RequestsError::InvalidConfiguredEndpoint {
+      key: RUN_UPSTREAM_ENDPOINT_KEY,
+      value: SmolStr::new(value),
+    },
+  )
+}
+
+fn parse_endpoint(value: &str) -> Option<Endpoint> {
+  match value {
+    "chat_completions" | "chat" | "chat-completions" => Some(Endpoint::ChatCompletions),
+    "responses" => Some(Endpoint::Responses),
+    "messages" => Some(Endpoint::Messages),
+    _ => None,
+  }
+}
+
+pub fn configured_upstream_endpoint(
+  ctx: &PipelineCtx,
+  stage: crate::event::Stage,
+) -> Result<Option<Endpoint>, PipelineError> {
+  match ctx.config.get_str(RUN_UPSTREAM_ENDPOINT_KEY) {
+    Some(value) => parse_endpoint(value)
+      .map(Some)
+      .ok_or_else(|| invalid_configured_endpoint(stage, value)),
+    None => Ok(None),
+  }
+}
+
+pub fn resolved_upstream_endpoint(
+  ctx: &PipelineCtx,
+  resolved: &Resolved,
+  stage: crate::event::Stage,
+) -> Result<Option<Endpoint>, PipelineError> {
+  Ok(
+    resolved
+      .upstream_endpoint
+      .or(configured_upstream_endpoint(ctx, stage)?)
+      .or(resolved.resolved_endpoint),
+  )
+}
+
+pub fn require_resolved_endpoint(
+  ctx: &PipelineCtx,
+  resolved: &Resolved,
+  stage: crate::event::Stage,
+) -> Result<Endpoint, PipelineError> {
+  resolved.resolved_endpoint.ok_or_else(|| {
+    PipelineError::permanent(
+      stage,
+      RequestsError::MissingResolvedEndpoint {
+        request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+      },
+    )
+  })
+}
+
+pub fn require_upstream_endpoint(
+  ctx: &PipelineCtx,
+  resolved: &Resolved,
+  stage: crate::event::Stage,
+) -> Result<Endpoint, PipelineError> {
+  resolved_upstream_endpoint(ctx, resolved, stage)?.ok_or_else(|| {
+    PipelineError::permanent(
+      stage,
+      RequestsError::MissingUpstreamEndpoint {
+        request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+      },
+    )
+  })
 }
 
 /// Output of [`ConvertResponseStage`]: a status/header envelope plus either a
@@ -445,7 +522,7 @@ pub trait ConvertResponseStage: Send + Sync {
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError>;
 
@@ -461,7 +538,7 @@ pub trait ConvertResponseStage: Send + Sync {
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: futures_util::stream::BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError>;
 

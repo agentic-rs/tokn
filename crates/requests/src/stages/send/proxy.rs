@@ -20,7 +20,9 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
-use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
+use crate::pipeline::stages::{
+  resolved_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use smol_str::SmolStr;
@@ -65,7 +67,7 @@ impl SendStage for ProxySend {
   #[instrument(name = "proxy_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint.unwrap_or(tokn_core::provider::Endpoint::ChatCompletions),
+    endpoint = ?resolved.upstream_endpoint,
     stream = extracted.stream,
   ))]
   async fn send(
@@ -76,9 +78,7 @@ impl SendStage for ProxySend {
     headers: &BuiltHeaders,
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    let upstream_endpoint = resolved
-      .upstream_endpoint
-      .unwrap_or(tokn_core::provider::Endpoint::ChatCompletions);
+    let upstream_endpoint = resolved_upstream_endpoint(ctx, resolved, Stage::Send)?;
     let host = ctx
       .config
       .get_str(keys::HOST)
@@ -104,6 +104,14 @@ impl SendStage for ProxySend {
       .unwrap_or(false);
     let mut outbound_headers = headers.headers.clone();
     if inject_auth {
+      let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
+        PipelineError::permanent(
+          Stage::Send,
+          RequestsError::MissingUpstreamEndpoint {
+            request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+          },
+        )
+      })?;
       resolved
         .account_handle
         .provider
@@ -253,7 +261,7 @@ mod tests {
   fn ctx_with(config: RunConfig) -> PipelineCtx {
     PipelineCtx::new_with_config(
       "req-px-send",
-      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions.into(),
       Arc::new(EventBus::new(64)),
       Arc::new(config),
     )
@@ -310,6 +318,7 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("proxy"),
@@ -372,6 +381,7 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("gpt-4"),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("gpt-4"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct"),

@@ -65,6 +65,7 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
       } => Ok(Resolved {
         agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
+        resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model,
         upstream_endpoint,
         account_id,
@@ -78,7 +79,14 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
       SelectorOutcome::NoAccount => Err(PipelineError::permanent(
         Stage::Resolve,
         RequestsError::NoAccount {
-          endpoint: ctx.endpoint,
+          endpoint: ctx.request_endpoint.resolved().ok_or_else(|| {
+            PipelineError::permanent(
+              Stage::Resolve,
+              RequestsError::MissingResolvedEndpoint {
+                request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+              },
+            )
+          })?,
           model: extracted.model.clone(),
         },
       )),
@@ -137,7 +145,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-r", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new("req-r", Endpoint::ChatCompletions.into(), Arc::new(EventBus::new(64)))
   }
 
   #[tokio::test]

@@ -24,7 +24,7 @@ use tokn_accounts::routing::{route_mode_as_str, RouteResolver};
 use tokn_auth::descriptor::RewriteTarget;
 use tokn_config::RouteMode;
 use tokn_core::event::Event as CoreEvent;
-use tokn_core::request_event::{EndpointLabel, RecordEvent, RequestEvent, RequestEventPayload, Stage, StageEvent};
+use tokn_core::request_event::{RecordEvent, RequestEndpoint, RequestEvent, RequestEventPayload, Stage, StageEvent};
 
 const CONNECT_OK: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n";
@@ -338,7 +338,7 @@ fn emit_router_not_implemented(
     attempt: 0,
     ts,
     payload: RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: EndpointLabel::Custom(path.into()),
+      request_endpoint: RequestEndpoint::CustomPath(path.into()),
     }),
   }));
   state.events.emit(CoreEvent::Requests(RequestEvent {

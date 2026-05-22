@@ -24,7 +24,9 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
-use crate::pipeline::stages::{ConvertRequestStage, ConvertedRequest, Extracted, Resolved};
+use crate::pipeline::stages::{
+  require_resolved_endpoint, require_upstream_endpoint, ConvertRequestStage, ConvertedRequest, Extracted, Resolved,
+};
 use crate::utils::codec::{encode_body_bytes, ContentEncodingKind};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -41,11 +43,12 @@ impl ConvertRequestStage for DefaultConvertRequest {
     extracted: &Extracted,
     resolved: &Resolved,
   ) -> Result<ConvertedRequest, PipelineError> {
-    let upstream_endpoint = resolved.upstream_endpoint.unwrap_or(ctx.endpoint);
+    let inbound_endpoint = require_resolved_endpoint(ctx, resolved, Stage::ConvertRequest)?;
+    let upstream_endpoint = require_upstream_endpoint(ctx, resolved, Stage::ConvertRequest)?;
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
-    if upstream_endpoint != ctx.endpoint {
-      upstream_body = tokn_convert::convert_request(ctx.endpoint, upstream_endpoint, &upstream_body)
+    if upstream_endpoint != inbound_endpoint {
+      upstream_body = tokn_convert::convert_request(inbound_endpoint, upstream_endpoint, &upstream_body)
         .map_err(|source| perm(RequestsError::RequestConversion { source }))?;
     }
 
@@ -98,6 +101,7 @@ fn perm(source: RequestsError) -> PipelineError {
 mod tests {
   use super::*;
   use crate::event::EventBus;
+  use crate::pipeline::config::RunConfig;
   use crate::pipeline::ctx::PipelineCtx;
   use crate::pipeline::stages::{Extracted, Resolved};
   use crate::test_support::{mock_handle, mock_handle_with_provider, MockProvider};
@@ -108,11 +112,15 @@ mod tests {
   use tokn_headers::HeaderMap;
 
   fn ctx_at(endpoint: Endpoint) -> PipelineCtx {
-    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))
+    PipelineCtx::new("req-cr", endpoint.into(), Arc::new(EventBus::new(64)))
   }
 
   fn ctx() -> PipelineCtx {
     ctx_at(Endpoint::ChatCompletions)
+  }
+
+  fn ctx_with_config(endpoint: Endpoint, config: RunConfig) -> PipelineCtx {
+    PipelineCtx::new_with_config("req-cr", endpoint.into(), Arc::new(EventBus::new(64)), Arc::new(config))
   }
 
   fn extracted_with(body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
@@ -135,12 +143,14 @@ mod tests {
 
   fn resolved_with(
     handle: Arc<tokn_accounts::AccountHandle>,
+    resolved_endpoint: Endpoint,
     upstream_endpoint: Endpoint,
     upstream_model: &str,
   ) -> Resolved {
     Resolved {
       agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
+      resolved_endpoint: Some(resolved_endpoint),
       upstream_model: smol_str::SmolStr::new(upstream_model),
       upstream_endpoint: Some(upstream_endpoint),
       account_id: smol_str::SmolStr::new("acct-1"),
@@ -154,7 +164,12 @@ mod tests {
     let body = serde_json::json!({"model": "input-model", "messages": [{"role":"user","content":"hi"}]});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body.clone(), None, raw.clone());
-    let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
+    let res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
     assert_eq!(*out.upstream_body, body);
@@ -170,6 +185,7 @@ mod tests {
     let ex = extracted_with(body, None, raw);
     let res = resolved_with(
       mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
       Endpoint::ChatCompletions,
       "upstream-model-7",
     );
@@ -193,7 +209,12 @@ mod tests {
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body, None, raw);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Stamp));
-    let res = resolved_with(handle, Endpoint::ChatCompletions, "input-model");
+    let res = resolved_with(
+      handle,
+      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
     assert_eq!(out.upstream_body["stamped"], true);
@@ -210,7 +231,12 @@ mod tests {
     });
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body.clone(), None, raw);
-    let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
+    let res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::Responses,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
 
     let out = DefaultConvertRequest
       .convert_request(&ctx_at(Endpoint::Responses), &ex, &res)
@@ -237,6 +263,7 @@ mod tests {
     let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
       "upstream-model-2",
     );
 
@@ -252,7 +279,12 @@ mod tests {
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body, Some(ContentEncodingKind::Zstd), raw);
-    let res = resolved_with(mock_handle("acct", "mock"), Endpoint::ChatCompletions, "input-model");
+    let res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
 
     let out = DefaultConvertRequest.convert_request(&ctx(), &ex, &res).await.unwrap();
     assert_eq!(out.content_encoding, Some(ContentEncodingKind::Zstd));
@@ -270,7 +302,12 @@ mod tests {
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body, None, raw);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Boom));
-    let res = resolved_with(handle, Endpoint::ChatCompletions, "input-model");
+    let res = resolved_with(
+      handle,
+      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
 
     let err = DefaultConvertRequest
       .convert_request(&ctx(), &ex, &res)
@@ -279,5 +316,70 @@ mod tests {
     assert_eq!(err.stage, Stage::ConvertRequest);
     assert!(!err.recoverable);
     assert!(err.message().contains("boom"));
+  }
+
+  #[tokio::test]
+  async fn uses_run_config_upstream_endpoint_override_for_cross_endpoint_conversion() {
+    let body = serde_json::json!({
+      "model": "input-model",
+      "input": [{"role": "user", "content": "hi"}]
+    });
+    let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
+    let ex = extracted_with(body.clone(), None, raw);
+    let mut res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::Responses,
+      Endpoint::Responses,
+      "input-model",
+    );
+    res.upstream_endpoint = None;
+    let ctx = ctx_with_config(
+      Endpoint::Responses,
+      RunConfig::builder()
+        .with_str(crate::pipeline::stages::RUN_UPSTREAM_ENDPOINT_KEY, "chat_completions")
+        .build(),
+    );
+
+    let out = DefaultConvertRequest
+      .convert_request(&ctx, &ex, &res)
+      .await
+      .expect("convert should use configured upstream endpoint");
+
+    assert_ne!(*out.upstream_body, body);
+    assert_eq!(out.upstream_wire_body, out.debug_outbound_body);
+  }
+
+  #[tokio::test]
+  async fn errors_when_no_resolved_endpoint_is_available() {
+    let body = serde_json::json!({"model": "input-model"});
+    let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
+    let ex = extracted_with(body, None, raw);
+    let mut res = resolved_with(
+      mock_handle("acct", "mock"),
+      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions,
+      "input-model",
+    );
+    res.resolved_endpoint = None;
+    res.upstream_endpoint = None;
+    let ctx = PipelineCtx::new(
+      "req-cr-missing",
+      tokn_core::request_event::RequestEndpoint::custom("/v1/experimental/agents"),
+      Arc::new(EventBus::new(64)),
+    );
+
+    let err = DefaultConvertRequest
+      .convert_request(&ctx, &ex, &res)
+      .await
+      .unwrap_err();
+
+    assert_eq!(err.stage, Stage::ConvertRequest);
+    assert!(!err.recoverable);
+    match err.inner() {
+      RequestsError::MissingResolvedEndpoint { request_endpoint } => {
+        assert_eq!(request_endpoint.as_str(), "/v1/experimental/agents");
+      }
+      other => panic!("expected MissingResolvedEndpoint, got {other:?}"),
+    }
   }
 }

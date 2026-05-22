@@ -66,7 +66,7 @@ impl ConvertResponseStage for PassthroughConvertResponse {
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError> {
     let _ = upstream_endpoint;
@@ -102,7 +102,7 @@ impl ConvertResponseStage for PassthroughConvertResponse {
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError> {
     let _ = upstream_endpoint;
@@ -229,7 +229,7 @@ mod tests {
   fn ctx() -> (PipelineCtx, Arc<EventBus>) {
     let events = Arc::new(EventBus::new(128));
     (
-      PipelineCtx::new("req-pcr", Endpoint::ChatCompletions, events.clone()),
+      PipelineCtx::new("req-pcr", Endpoint::ChatCompletions.into(), events.clone()),
       events,
     )
   }
@@ -257,7 +257,7 @@ mod tests {
     let (c, _ev) = ctx();
     let raw = Bytes::from_static(br#"{"choices":[{"text":"hi"}],"usage":{"prompt_tokens":3,"completion_tokens":4}}"#);
     let out = PassthroughConvertResponse::new()
-      .convert_buffered(&c, 200, HeaderMap::new(), Endpoint::ChatCompletions, raw.clone())
+      .convert_buffered(&c, 200, HeaderMap::new(), Some(Endpoint::ChatCompletions), raw.clone())
       .await
       .unwrap();
     assert_eq!(out.status, 200);
@@ -276,7 +276,7 @@ mod tests {
     let mut rx = events.subscribe();
     let raw = Bytes::from_static(br#"{"usage":{"prompt_tokens":3,"completion_tokens":4}}"#);
     let _out = PassthroughConvertResponse::new()
-      .convert_buffered(&c, 200, HeaderMap::new(), Endpoint::ChatCompletions, raw)
+      .convert_buffered(&c, 200, HeaderMap::new(), Some(Endpoint::ChatCompletions), raw)
       .await
       .unwrap();
 
@@ -314,7 +314,7 @@ mod tests {
     .boxed();
 
     let out = PassthroughConvertResponse::new()
-      .convert_stream(&c, 200, HeaderMap::new(), Endpoint::ChatCompletions, body)
+      .convert_stream(&c, 200, HeaderMap::new(), Some(Endpoint::ChatCompletions), body)
       .await
       .unwrap();
 
@@ -363,7 +363,7 @@ mod tests {
       status: 403,
       headers: headers("text/event-stream"),
       stream: true,
-      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
       response: response(403, "event: error\ndata: forbidden\n\n", "text/event-stream"),
     };
 

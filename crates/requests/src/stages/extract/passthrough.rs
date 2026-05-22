@@ -53,8 +53,7 @@ pub struct PassthroughExtract;
 impl ExtractStage for PassthroughExtract {
   async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
-      endpoint: _,
-      endpoint_label: _,
+      request_endpoint: _,
       headers,
       raw_body,
       decoded_body,
@@ -142,15 +141,14 @@ mod tests {
   fn ctx() -> PipelineCtx {
     PipelineCtx::new(
       "req-passthrough",
-      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions.into(),
       Arc::new(EventBus::new(64)),
     )
   }
 
   fn raw_with_body(body_bytes: Bytes, headers: HeaderMap) -> RawInbound {
     RawInbound {
-      endpoint: Endpoint::ChatCompletions,
-      endpoint_label: None,
+      request_endpoint: Endpoint::ChatCompletions.into(),
       headers,
       raw_body: body_bytes.clone(),
       decoded_body: body_bytes,

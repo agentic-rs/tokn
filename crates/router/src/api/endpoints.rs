@@ -8,7 +8,7 @@ use axum::response::Response;
 use smol_str::SmolStr;
 use tokn_accounts::routing::{route_mode_as_str, ResolveError};
 use tokn_core::event::Event as CoreEvent;
-use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload};
+use tokn_core::request_event::{RecordEvent, RequestEndpoint, RequestEvent, RequestEventPayload};
 use tokn_requests::pipeline::error::RequestsError;
 use tracing::instrument;
 
@@ -53,8 +53,7 @@ async fn handle(
   }
   let decoded = super::codec::decode_json_request(&inbound, body)?;
   let raw = tokn_requests::RawInbound {
-    endpoint: parser.endpoint(),
-    endpoint_label: None,
+    request_endpoint: RequestEndpoint::from(parser.endpoint()),
     headers: (&inbound).into(),
     raw_body: decoded.raw_body.clone(),
     decoded_body: decoded.decoded_body.clone(),

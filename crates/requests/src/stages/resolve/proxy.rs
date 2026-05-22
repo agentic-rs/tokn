@@ -65,6 +65,7 @@ impl ResolveStage for ProxyResolve {
     Ok(Resolved {
       agent_id: extracted.agent_id.clone(),
       model: extracted.model.clone(),
+      resolved_endpoint: ctx.request_endpoint.resolved(),
       upstream_model: extracted.model.clone(),
       upstream_endpoint: None,
       account_id: SmolStr::new(account_id),
@@ -77,6 +78,14 @@ impl ResolveStage for ProxyResolve {
 #[async_trait]
 impl ResolveStage for ProxyProviderResolve {
   async fn resolve(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
+    let request_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::MissingResolvedEndpoint {
+          request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
     let provider_id = ctx.config.get_str(keys::PROVIDER_ID).ok_or_else(|| {
       PipelineError::permanent(
         Stage::Resolve,
@@ -93,11 +102,12 @@ impl ResolveStage for ProxyProviderResolve {
     };
     match self
       .pool
-      .acquire_for_route(extracted.session_id.as_deref(), &route, ctx.endpoint)
+      .acquire_for_route(extracted.session_id.as_deref(), &route, request_endpoint)
     {
       EndpointAcquire::Account { acct, endpoint } => Ok(Resolved {
         agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
+        resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model: SmolStr::from(route.upstream_model.as_str()),
         upstream_endpoint: Some(endpoint),
         account_id: SmolStr::from(acct.id()),
@@ -113,7 +123,7 @@ impl ResolveStage for ProxyProviderResolve {
       EndpointAcquire::None => Err(PipelineError::permanent(
         Stage::Resolve,
         RequestsError::NoAccount {
-          endpoint: ctx.endpoint,
+          endpoint: request_endpoint,
           model: extracted.model.clone(),
         },
       )),
@@ -235,7 +245,7 @@ mod tests {
   fn ctx_with(config: RunConfig) -> PipelineCtx {
     PipelineCtx::new_with_config(
       "req-px",
-      Endpoint::ChatCompletions,
+      Endpoint::ChatCompletions.into(),
       Arc::new(EventBus::new(64)),
       Arc::new(config),
     )

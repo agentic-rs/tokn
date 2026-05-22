@@ -49,7 +49,7 @@ mod tests {
   use tokn_headers::HeaderMap;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req", Endpoint::ChatCompletions, Arc::new(EventBus::new(16)))
+    PipelineCtx::new("req", Endpoint::ChatCompletions.into(), Arc::new(EventBus::new(16)))
   }
 
   fn extracted(raw: Bytes, decoded: Bytes) -> Extracted {
@@ -74,6 +74,7 @@ mod tests {
     Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("a"),

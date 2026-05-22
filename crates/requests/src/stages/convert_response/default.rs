@@ -14,6 +14,7 @@
 //! The trait's provided [`convert_response`](ConvertResponseStage::convert_response)
 //! handles the dispatch (buffered vs stream).
 
+use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::{ConvertResponseStage, ConvertedBody, ConvertedResponse};
@@ -48,7 +49,7 @@ impl ConvertResponseStage for DefaultConvertResponse {
   #[instrument(name = "default_convert_buffered", skip_all, fields(
     status = status,
     upstream_endpoint = ?upstream_endpoint,
-    inbound_endpoint = ?ctx.endpoint,
+    inbound_endpoint = ?ctx.request_endpoint,
     body_len = body.len(),
   ))]
   async fn convert_buffered(
@@ -56,10 +57,25 @@ impl ConvertResponseStage for DefaultConvertResponse {
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError> {
-    let inbound_endpoint = ctx.endpoint;
+    let inbound_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingResolvedEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
+    let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingUpstreamEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
 
     if body.is_empty() {
       return Ok(ConvertedResponse {
@@ -118,18 +134,33 @@ impl ConvertResponseStage for DefaultConvertResponse {
   #[instrument(name = "default_convert_stream", skip_all, fields(
     status = status,
     upstream_endpoint = ?upstream_endpoint,
-    inbound_endpoint = ?ctx.endpoint,
+    inbound_endpoint = ?ctx.request_endpoint,
   ))]
   async fn convert_stream(
     &self,
     ctx: &PipelineCtx,
     status: u16,
     headers: HeaderMap,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     body: BoxStream<'static, std::io::Result<Bytes>>,
   ) -> Result<ConvertedResponse, PipelineError> {
     debug!("wrapping upstream response as SSE stream");
-    let inbound_endpoint = ctx.endpoint;
+    let inbound_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingResolvedEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
+    let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingUpstreamEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
     let mut pipeline = SsePipeline::from_stream(body);
     if upstream_endpoint != inbound_endpoint {
       pipeline = pipeline.with_transformer(EndpointTranslator::new(upstream_endpoint, inbound_endpoint));
@@ -189,7 +220,7 @@ mod tests {
   use tokn_headers::HeaderMap;
 
   fn ctx(endpoint: Endpoint) -> PipelineCtx {
-    PipelineCtx::new("req-cr", endpoint, Arc::new(EventBus::new(64)))
+    PipelineCtx::new("req-cr", endpoint.into(), Arc::new(EventBus::new(64)))
   }
 
   fn response(status: u16, body: &'static str, content_type: &'static str) -> reqwest::Response {
@@ -209,7 +240,7 @@ mod tests {
         &ctx(Endpoint::ChatCompletions),
         200,
         HeaderMap::new(),
-        Endpoint::ChatCompletions,
+        Some(Endpoint::ChatCompletions),
         Bytes::from_static(br#"{"id":"x","choices":[]}"#),
       )
       .await
@@ -232,7 +263,7 @@ mod tests {
         &ctx(Endpoint::ChatCompletions),
         502,
         HeaderMap::new(),
-        Endpoint::ChatCompletions,
+        Some(Endpoint::ChatCompletions),
         Bytes::new(),
       )
       .await
@@ -255,7 +286,7 @@ mod tests {
         &ctx(Endpoint::ChatCompletions),
         200,
         HeaderMap::new(),
-        Endpoint::ChatCompletions,
+        Some(Endpoint::ChatCompletions),
         Bytes::from_static(b"not json"),
       )
       .await
@@ -274,7 +305,7 @@ mod tests {
         &ctx(Endpoint::ChatCompletions),
         200,
         HeaderMap::new(),
-        Endpoint::ChatCompletions,
+        Some(Endpoint::ChatCompletions),
         futures_util::stream::iter(vec![Ok(Bytes::from(body))]).boxed(),
       )
       .await
@@ -293,13 +324,13 @@ mod tests {
   async fn provided_convert_response_emits_upstream_body_for_buffered() {
     let stage = DefaultConvertResponse::new();
     let events = Arc::new(EventBus::new(64));
-    let ctx = PipelineCtx::new("req-body", Endpoint::ChatCompletions, events.clone());
+    let ctx = PipelineCtx::new("req-body", Endpoint::ChatCompletions.into(), events.clone());
     let mut rx = events.subscribe();
     let sent = SentResponse {
       status: 200,
       headers: HeaderMap::new(),
       stream: false,
-      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
       response: response(200, r#"{"ok":true}"#, "application/json"),
     };
     let out = stage.convert_response(&ctx, sent).await.unwrap();
@@ -330,13 +361,13 @@ mod tests {
   async fn provided_convert_response_stream_emits_body_records() {
     let stage = DefaultConvertResponse::new();
     let events = Arc::new(EventBus::new(64));
-    let ctx = PipelineCtx::new("req-stream", Endpoint::ChatCompletions, events.clone());
+    let ctx = PipelineCtx::new("req-stream", Endpoint::ChatCompletions.into(), events.clone());
     let mut rx = events.subscribe();
     let sent = SentResponse {
       status: 200,
       headers: HeaderMap::new(),
       stream: true,
-      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
       response: response(200, "data: {}\n\ndata: [DONE]\n\n", "text/event-stream"),
     };
     let out = stage.convert_response(&ctx, sent).await.unwrap();

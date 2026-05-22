@@ -236,10 +236,10 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   );
 
   // StageEvent::Started carries the endpoint inferred from the path.
-  if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &events[p_started].payload {
+  if let RequestEventPayload::Stage(StageEvent::Started { request_endpoint }) = &events[p_started].payload {
     assert_eq!(
-      *endpoint,
-      tokn_core::request_event::EndpointLabel::Known(tokn_core::provider::Endpoint::ChatCompletions)
+      *request_endpoint,
+      tokn_core::request_event::RequestEndpoint::Known(tokn_core::provider::Endpoint::ChatCompletions)
     );
   }
 
@@ -760,9 +760,9 @@ async fn proxy_passthrough_4xx_stream_request_completes_before_downstream_body_d
 }
 
 #[tokio::test]
-async fn proxy_passthrough_preserves_unknown_endpoint_label() {
+async fn proxy_passthrough_preserves_unknown_request_endpoint() {
   use tokn_core::event::Event as CoreEvent;
-  use tokn_core::request_event::{EndpointLabel, RequestEventPayload, StageEvent};
+  use tokn_core::request_event::{RequestEndpoint, RequestEventPayload, StageEvent};
 
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
@@ -818,8 +818,11 @@ async fn proxy_passthrough_preserves_unknown_endpoint_label() {
       continue;
     };
     let CoreEvent::Requests(req) = &*ev else { continue };
-    if let RequestEventPayload::Stage(StageEvent::Started { endpoint }) = &req.payload {
-      assert_eq!(endpoint, &EndpointLabel::Custom("/v1/experimental/agents".into()));
+    if let RequestEventPayload::Stage(StageEvent::Started { request_endpoint }) = &req.payload {
+      assert_eq!(
+        request_endpoint,
+        &RequestEndpoint::CustomPath("/v1/experimental/agents".into())
+      );
       break;
     }
   }

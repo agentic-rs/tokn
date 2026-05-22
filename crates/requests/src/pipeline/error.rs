@@ -37,6 +37,15 @@ pub enum RequestsError {
   #[snafu(display("no account supports endpoint {endpoint} for model {model}"))]
   NoAccount { endpoint: Endpoint, model: SmolStr },
 
+  #[snafu(display("invalid `{key}` endpoint `{value}`"))]
+  InvalidConfiguredEndpoint { key: &'static str, value: SmolStr },
+
+  #[snafu(display("missing resolved endpoint for request endpoint `{request_endpoint}`"))]
+  MissingResolvedEndpoint { request_endpoint: SmolStr },
+
+  #[snafu(display("missing upstream endpoint for request endpoint `{request_endpoint}`"))]
+  MissingUpstreamEndpoint { request_endpoint: SmolStr },
+
   #[snafu(display("request conversion failed: {source}"))]
   RequestConversion { source: ConvertError },
 

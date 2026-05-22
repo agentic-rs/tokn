@@ -419,13 +419,13 @@ impl ProgressEventHandler {
       format!("{}:{}", request_id, event.attempt)
     };
     match &event.payload {
-      RequestEventPayload::Stage(StageEvent::Started { endpoint }) => {
+      RequestEventPayload::Stage(StageEvent::Started { request_endpoint }) => {
         let bar = self.multi.insert_before(&self.footer, ProgressBar::new_spinner());
         bar.set_style(self.style.clone());
         bar.enable_steady_tick(std::time::Duration::from_millis(120));
         let state = BarState {
           bar,
-          request: RequestState::new(endpoint.as_str().to_string()),
+          request: RequestState::new(request_endpoint.as_str().to_string()),
         };
         self.bars.insert(composite_id.clone(), state);
         self.in_flight = self.in_flight.saturating_add(1);
@@ -774,10 +774,10 @@ impl ProgressLogEventHandler {
       format!("{}:{}", request_id, event.attempt)
     };
     match &event.payload {
-      RequestEventPayload::Stage(StageEvent::Started { endpoint }) => {
+      RequestEventPayload::Stage(StageEvent::Started { request_endpoint }) => {
         self
           .requests
-          .insert(composite_id, RequestState::new(endpoint.as_str().to_string()));
+          .insert(composite_id, RequestState::new(request_endpoint.as_str().to_string()));
         self.in_flight = self.in_flight.saturating_add(1);
       }
       RequestEventPayload::Stage(StageEvent::Extract(s)) => {
@@ -875,7 +875,7 @@ mod tests {
   fn tty_handler_tracks_sent_bytes_and_usage_from_records() {
     let mut handler = ProgressEventHandler::new();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
+      request_endpoint: tokn_core::request_event::RequestEndpoint::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
       method: "POST".into(),
@@ -908,7 +908,7 @@ mod tests {
   fn tty_handler_waits_for_usage_then_finalizes() {
     let mut handler = ProgressEventHandler::new();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
+      request_endpoint: tokn_core::request_event::RequestEndpoint::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Completed {
       success: true,
@@ -933,7 +933,7 @@ mod tests {
     let dir = std::env::temp_dir().join(format!("tokn-router-progress-test-{}", uuid::Uuid::new_v4()));
     let mut handler = ProgressLogEventHandler::new(&dir).unwrap();
     handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
-      endpoint: tokn_core::request_event::EndpointLabel::custom("responses"),
+      request_endpoint: tokn_core::request_event::RequestEndpoint::custom("responses"),
     })));
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamReq {
       method: "POST".into(),

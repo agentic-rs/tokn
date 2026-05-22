@@ -156,6 +156,7 @@ mod tests {
     Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct-1"),
@@ -165,7 +166,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-pbh", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new("req-pbh", Endpoint::ChatCompletions.into(), Arc::new(EventBus::new(64)))
   }
 
   #[tokio::test]

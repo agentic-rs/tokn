@@ -211,6 +211,7 @@ mod tests {
     Resolved {
       agent_id: None,
       model: "gpt-4o".into(),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: "gpt-4o".into(),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: "acct-1".into(),
@@ -220,7 +221,7 @@ mod tests {
   }
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-bh", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new("req-bh", Endpoint::ChatCompletions.into(), Arc::new(EventBus::new(64)))
   }
 
   #[tokio::test]
