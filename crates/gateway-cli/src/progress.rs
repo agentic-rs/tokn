@@ -99,6 +99,9 @@ impl RequestState {
     if usage.output_tokens.is_some() {
       self.usage.output_tokens = usage.output_tokens;
     }
+    if usage.total_tokens.is_some() {
+      self.usage.total_tokens = usage.total_tokens;
+    }
     if usage.details.cache_read.is_some() {
       self.usage.details.cache_read = usage.details.cache_read;
     }
@@ -253,6 +256,11 @@ fn format_usage(u: &Usage) -> String {
   if let Some(v) = u.output_tokens {
     if v > 0 {
       parts.push(format!("out={v}"));
+    }
+  }
+  if let Some(v) = u.total_tokens {
+    if v > 0 {
+      parts.push(format!("total={v}"));
     }
   }
   if let Some(v) = u.details.cache_read {
@@ -878,6 +886,7 @@ mod tests {
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
       input_tokens: Some(11),
       output_tokens: Some(13),
+      total_tokens: Some(24),
       details: UsageDetails {
         cache_read: Some(17),
         cache_write: Some(18),
@@ -889,6 +898,7 @@ mod tests {
     assert_eq!(state.request.sent_bytes, 6);
     assert_eq!(state.request.usage.input_tokens, Some(11));
     assert_eq!(state.request.usage.output_tokens, Some(13));
+    assert_eq!(state.request.usage.total_tokens, Some(24));
     assert_eq!(state.request.usage.details.cache_read, Some(17));
     assert_eq!(state.request.usage.details.cache_write, Some(18));
     assert_eq!(state.request.usage.details.reasoning, Some(19));
@@ -911,6 +921,7 @@ mod tests {
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
       input_tokens: Some(7),
       output_tokens: Some(9),
+      total_tokens: None,
       details: UsageDetails::default(),
     }))));
 
@@ -933,6 +944,7 @@ mod tests {
     handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::Usage(Usage {
       input_tokens: Some(3),
       output_tokens: Some(5),
+      total_tokens: None,
       details: UsageDetails::default(),
     }))));
 

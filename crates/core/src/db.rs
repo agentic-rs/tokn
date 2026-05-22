@@ -36,6 +36,8 @@ pub struct Usage {
   pub input_tokens: Option<u64>,
   /// Completion/output tokens.
   pub output_tokens: Option<u64>,
+  /// Provider-reported total tokens. This is intentionally not derived.
+  pub total_tokens: Option<u64>,
   pub details: UsageDetails,
 }
 

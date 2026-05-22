@@ -516,6 +516,7 @@ fn usage_record_updates_token_columns() {
     RecordEvent::Usage(Usage {
       input_tokens: Some(11),
       output_tokens: Some(22),
+      total_tokens: Some(40),
       details: UsageDetails {
         cache_read: Some(3),
         cache_write: Some(5),
@@ -533,13 +534,13 @@ fn usage_record_updates_token_columns() {
       "cache_read": 3,
       "cache_write": 5,
       "reasoning": 4,
-      "total": 33
+      "total": 40
     }))
   );
 }
 
 #[test]
-fn usage_json_omits_missing_token_keys() {
+fn usage_json_omits_missing_token_keys_and_does_not_calculate_total() {
   let dir = tempdir();
   let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-usage-partial";
@@ -555,7 +556,8 @@ fn usage_json_omits_missing_token_keys() {
     0,
     RecordEvent::Usage(Usage {
       input_tokens: Some(11),
-      output_tokens: None,
+      output_tokens: Some(13),
+      total_tokens: None,
       details: UsageDetails {
         cache_read: None,
         cache_write: None,
@@ -565,5 +567,8 @@ fn usage_json_omits_missing_token_keys() {
   ));
 
   let row = fetch_row(&dir, req);
-  assert_eq!(as_json(&row["usage_json"]), Some(serde_json::json!({"input": 11})));
+  assert_eq!(
+    as_json(&row["usage_json"]),
+    Some(serde_json::json!({"input": 11, "output": 13}))
+  );
 }

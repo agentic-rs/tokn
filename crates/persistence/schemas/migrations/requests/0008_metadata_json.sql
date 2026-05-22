@@ -125,17 +125,12 @@ SELECT
         '$.input', input_tok,
         '$.output', output_tok,
         '$.cache_read', cached_tok,
-        '$.reasoning', reasoning_tok,
-        '$.total', CASE
-          WHEN input_tok IS NULL OR output_tok IS NULL THEN NULL
-          ELSE input_tok + output_tok
-        END
+        '$.reasoning', reasoning_tok
       ),
       CASE WHEN input_tok IS NULL THEN '$.input' ELSE '$.__noop__' END,
       CASE WHEN output_tok IS NULL THEN '$.output' ELSE '$.__noop__' END,
       CASE WHEN cached_tok IS NULL THEN '$.cache_read' ELSE '$.__noop__' END,
-      CASE WHEN reasoning_tok IS NULL THEN '$.reasoning' ELSE '$.__noop__' END,
-      CASE WHEN input_tok IS NULL OR output_tok IS NULL THEN '$.total' ELSE '$.__noop__' END
+      CASE WHEN reasoning_tok IS NULL THEN '$.reasoning' ELSE '$.__noop__' END
     )
   END
 FROM request_metadata_legacy;

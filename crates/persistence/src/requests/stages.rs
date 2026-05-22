@@ -572,6 +572,9 @@ fn usage_json(usage: &tokn_core::db::Usage) -> Option<String> {
   if let Some(v) = usage.output_tokens {
     out.insert("output".to_string(), Value::from(v));
   }
+  if let Some(v) = usage.total_tokens {
+    out.insert("total".to_string(), Value::from(v));
+  }
   if let Some(v) = usage.details.cache_read {
     out.insert("cache_read".to_string(), Value::from(v));
   }
@@ -580,9 +583,6 @@ fn usage_json(usage: &tokn_core::db::Usage) -> Option<String> {
   }
   if let Some(v) = usage.details.reasoning {
     out.insert("reasoning".to_string(), Value::from(v));
-  }
-  if let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens) {
-    out.insert("total".to_string(), Value::from(input + output));
   }
   (!out.is_empty()).then(|| Value::Object(out).to_string())
 }
