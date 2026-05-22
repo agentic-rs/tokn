@@ -44,6 +44,8 @@ struct RequestState {
   sent_bytes: u64,
   recv_bytes: u64,
   usage: Usage,
+  final_status: Option<u16>,
+  error: Option<String>,
 }
 
 impl RequestState {
@@ -58,6 +60,8 @@ impl RequestState {
       sent_bytes: 0,
       recv_bytes: 0,
       usage: Usage::default(),
+      final_status: None,
+      error: None,
     }
   }
 
@@ -130,12 +134,14 @@ impl RequestState {
       String::new()
     };
     if success {
-      let status = final_status.unwrap_or(0);
+      let status_part = final_status
+        .map(|status| format!(" {}", style_status(status)))
+        .unwrap_or_default();
       format!(
-        "[{}] {} {} {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
+        "[{}] {}{} {} {} {} {} sent={:.1}kB recv={:.1}kB{} latency={:.1}s{}",
         style(&id_short).dim(),
         style("✓").green().bold(),
-        style_status(status),
+        status_part,
         style(&self.provider).blue(),
         style(truncate(&self.model, 28)).cyan(),
         style(truncate(&self.account, 16)).magenta(),
@@ -350,10 +356,14 @@ impl ProgressEventHandler {
       return;
     }
     let latency_ms = pending.request.started.elapsed().as_millis() as u64;
-    let final_msg =
-      pending
-        .request
-        .render_completed(request_id, pending.success, pending.attempts, None, latency_ms, None);
+    let final_msg = pending.request.render_completed(
+      request_id,
+      pending.success,
+      pending.attempts,
+      pending.request.final_status,
+      latency_ms,
+      pending.request.error.as_deref(),
+    );
     pending.bar.disable_steady_tick();
     let _ = multi.println(final_msg);
     pending.bar.finish_and_clear();
@@ -464,15 +474,38 @@ impl ProgressEventHandler {
           self.finalize_pending_if_waiting(&composite_id);
         }
       }
+      RequestEventPayload::Record(RecordEvent::UpstreamResp { status, .. }) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.final_status = Some(*status);
+        } else if let Some(pending) = self.pending.get(&composite_id).cloned() {
+          if let Ok(mut pending) = pending.lock() {
+            pending.request.final_status = Some(*status);
+          }
+        }
+      }
+      RequestEventPayload::Stage(StageEvent::Error { message, .. }) => {
+        if let Some(state) = self.bars.get_mut(&composite_id) {
+          state.request.error = Some(message.to_string());
+        } else if let Some(pending) = self.pending.get(&composite_id).cloned() {
+          if let Ok(mut pending) = pending.lock() {
+            pending.request.error = Some(message.to_string());
+          }
+        }
+      }
       RequestEventPayload::Stage(StageEvent::Completed { success, attempts }) => {
         if let Some(state) = self.bars.remove(&composite_id) {
           if *success {
             self.queue_pending_completion(composite_id.clone(), state, *attempts);
           } else {
             let latency_ms = state.request.started.elapsed().as_millis() as u64;
-            let final_msg = state
-              .request
-              .render_completed(&composite_id, *success, *attempts, None, latency_ms, None);
+            let final_msg = state.request.render_completed(
+              &composite_id,
+              *success,
+              *attempts,
+              state.request.final_status,
+              latency_ms,
+              state.request.error.as_deref(),
+            );
             state.bar.disable_steady_tick();
             let _ = self.multi.println(final_msg);
             state.bar.finish_and_clear();
@@ -801,10 +834,27 @@ impl ProgressLogEventHandler {
           state.merge_usage(usage);
         }
       }
+      RequestEventPayload::Record(RecordEvent::UpstreamResp { status, .. }) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.final_status = Some(*status);
+        }
+      }
+      RequestEventPayload::Stage(StageEvent::Error { message, .. }) => {
+        if let Some(state) = self.requests.get_mut(&composite_id) {
+          state.error = Some(message.to_string());
+        }
+      }
       RequestEventPayload::Stage(StageEvent::Completed { success, .. }) => {
         if let Some(state) = self.requests.remove(&composite_id) {
           let latency_ms = state.started.elapsed().as_millis() as u64;
-          let line = state.render_completed(&composite_id, *success, 1, None, latency_ms, None);
+          let line = state.render_completed(
+            &composite_id,
+            *success,
+            1,
+            state.final_status,
+            latency_ms,
+            state.error.as_deref(),
+          );
           self.write_line(&line);
         }
         self.in_flight = self.in_flight.saturating_sub(1);
@@ -952,6 +1002,54 @@ mod tests {
     assert_eq!(state.sent_bytes, 9);
     assert_eq!(state.usage.input_tokens, Some(3));
     assert_eq!(state.usage.output_tokens, Some(5));
+
+    drop(handler);
+    std::fs::remove_dir_all(&dir).unwrap();
+  }
+
+  #[test]
+  fn tty_handler_tracks_status_and_error_for_completion() {
+    let mut handler = ProgressEventHandler::new();
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
+      request_endpoint: tokn_core::request_event::RequestEndpoint::custom("responses"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamResp {
+      status: 502,
+      headers: tokn_headers::HeaderMap::new(),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Error {
+      stage: tokn_core::request_event::Stage::Send,
+      message: "upstream 502: boom".into(),
+      recoverable: true,
+      stop: false,
+    })));
+
+    let state = handler.bars.get("req-1").expect("request state must exist");
+    assert_eq!(state.request.final_status, Some(502));
+    assert_eq!(state.request.error.as_deref(), Some("upstream 502: boom"));
+  }
+
+  #[test]
+  fn log_handler_tracks_status_and_error_for_completion() {
+    let dir = std::env::temp_dir().join(format!("tokn-router-progress-test-{}", uuid::Uuid::new_v4()));
+    let mut handler = ProgressLogEventHandler::new(&dir).unwrap();
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Started {
+      request_endpoint: tokn_core::request_event::RequestEndpoint::custom("responses"),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Record(RecordEvent::UpstreamResp {
+      status: 429,
+      headers: tokn_headers::HeaderMap::new(),
+    })));
+    handler.handle_request(&req(RequestEventPayload::Stage(StageEvent::Error {
+      stage: tokn_core::request_event::Stage::Send,
+      message: "upstream 429: rate limited".into(),
+      recoverable: false,
+      stop: false,
+    })));
+
+    let state = handler.requests.get("req-1").expect("request state must exist");
+    assert_eq!(state.final_status, Some(429));
+    assert_eq!(state.error.as_deref(), Some("upstream 429: rate limited"));
 
     drop(handler);
     std::fs::remove_dir_all(&dir).unwrap();
