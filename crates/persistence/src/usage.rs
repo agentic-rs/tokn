@@ -1,14 +1,14 @@
 use super::{migrate, Result, Usage};
 use rusqlite::{params, Connection};
 use std::path::Path;
-use tokn_core::request_event::EndpointLabel;
+use tokn_core::request_event::RequestEndpoint;
 
 pub struct UsageRecord<'a> {
   pub ts: i64,
   pub session_id: &'a str,
   pub request_id: &'a str,
   pub project_id: Option<&'a str>,
-  pub endpoint: &'a EndpointLabel,
+  pub endpoint: &'a RequestEndpoint,
   pub account_id: &'a str,
   pub provider_id: &'a str,
   pub model: &'a str,

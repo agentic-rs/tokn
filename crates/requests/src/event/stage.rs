@@ -35,6 +35,7 @@ impl From<&Resolved> for ResolvedSummary {
     Self {
       agent_id: r.agent_id.clone(),
       model: r.model.clone(),
+      resolved_endpoint: r.resolved_endpoint,
       upstream_model: r.upstream_model.clone(),
       upstream_endpoint: r.upstream_endpoint,
       account_id: r.account_id.clone(),

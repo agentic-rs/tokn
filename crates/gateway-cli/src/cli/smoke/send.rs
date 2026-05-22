@@ -269,7 +269,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
   }));
 
   let raw = RawInbound {
-    endpoint,
+    request_endpoint: endpoint.into(),
     headers,
     raw_body: body_bytes.clone(),
     decoded_body: body_bytes.clone(),
@@ -374,8 +374,8 @@ impl Captured {
                 snap.request_id = Some(event.request_id.to_string());
               }
               match &event.payload {
-                EventPayload::Stage(StageEvent::Started { endpoint }) => {
-                  snap.started_endpoint = Some(endpoint.as_str().to_string())
+                EventPayload::Stage(StageEvent::Started { request_endpoint }) => {
+                  snap.started_endpoint = Some(request_endpoint.as_str().to_string())
                 }
                 EventPayload::Stage(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
                 EventPayload::Stage(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
@@ -417,8 +417,8 @@ fn subscribe_event_printer(bus: &EventBus) {
 
 fn print_event(event: &Event) {
   match &event.payload {
-    EventPayload::Stage(StageEvent::Started { endpoint }) => {
-      println!("[started]          endpoint={endpoint}");
+    EventPayload::Stage(StageEvent::Started { request_endpoint }) => {
+      println!("[started]          endpoint={request_endpoint}");
     }
     EventPayload::Stage(StageEvent::Extract(e)) => {
       let cid = e.agent_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");

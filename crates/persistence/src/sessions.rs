@@ -3,14 +3,14 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokn_core::db::SessionSource;
-use tokn_core::request_event::EndpointLabel;
+use tokn_core::request_event::RequestEndpoint;
 use tracing::{debug, trace};
 
 pub struct SessionRecord<'a> {
   pub ts: i64,
   pub session_id: &'a str,
   pub session_source: SessionSource,
-  pub endpoint: &'a EndpointLabel,
+  pub endpoint: &'a RequestEndpoint,
   pub account_id: &'a str,
   pub provider_id: &'a str,
   pub model: &'a str,

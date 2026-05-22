@@ -1,8 +1,8 @@
 //! Per-request mutable state threaded through every stage.
 //!
 //! `PipelineCtx` carries identifiers (request id, attempt counter), the
-//! inbound [`Endpoint`] (set by the runner from `RawInbound` before any
-//! stage runs), and a handle to the [`EventBus`] so stages can publish
+//! inbound [`RequestEndpoint`] (set by the runner from `RawInbound` before
+//! any stage runs), and a handle to the [`EventBus`] so stages can publish
 //! custom events without holding a separate reference to the bus. Stage
 //! outputs are *not* stored here — they flow as function-typed return
 //! values between stages — but the ctx is the right home for cross-cutting
@@ -13,19 +13,15 @@ use crate::pipeline::config::RunConfig;
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokn_core::event::Event as CoreEvent;
-use tokn_core::provider::Endpoint;
+use tokn_core::request_event::RequestEndpoint;
 
 pub struct PipelineCtx {
   pub request_id: SmolStr,
   pub attempt: u32,
-  /// Inbound endpoint as parsed by the transport. Set by the runner from
-  /// `RawInbound.endpoint` before the Extract stage runs and treated as
-  /// immutable for the rest of the pipeline. Downstream stages
-  /// (BuildHeaders, ConvertRequest, Send, ConvertResponse) read this when
-  /// they need to know the inbound format — e.g. to decide whether
-  /// upstream/inbound endpoints differ and a request/response conversion is
-  /// required.
-  pub endpoint: Endpoint,
+  /// Inbound request identity as observed by the transport. Known router
+  /// endpoints use `RequestEndpoint::Known`; proxy/custom paths may be
+  /// `CustomPath`.
+  pub request_endpoint: RequestEndpoint,
   pub events: Arc<EventBus>,
   /// Caller-supplied per-run config bag. Stages may read transport-level
   /// hints from it; secondary pipeline variants (e.g. proxy passthrough)
@@ -36,30 +32,30 @@ pub struct PipelineCtx {
 }
 
 impl PipelineCtx {
-  pub fn new(request_id: impl Into<SmolStr>, endpoint: Endpoint, events: Arc<EventBus>) -> Self {
-    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, Arc::new(RunConfig::default()))
+  pub fn new(request_id: impl Into<SmolStr>, request_endpoint: RequestEndpoint, events: Arc<EventBus>) -> Self {
+    Self::new_with_attempt_and_config(request_id, 0, request_endpoint, events, Arc::new(RunConfig::default()))
   }
 
   pub fn new_with_config(
     request_id: impl Into<SmolStr>,
-    endpoint: Endpoint,
+    request_endpoint: RequestEndpoint,
     events: Arc<EventBus>,
     config: Arc<RunConfig>,
   ) -> Self {
-    Self::new_with_attempt_and_config(request_id, 0, endpoint, events, config)
+    Self::new_with_attempt_and_config(request_id, 0, request_endpoint, events, config)
   }
 
   pub fn new_with_attempt_and_config(
     request_id: impl Into<SmolStr>,
     attempt: u32,
-    endpoint: Endpoint,
+    request_endpoint: RequestEndpoint,
     events: Arc<EventBus>,
     config: Arc<RunConfig>,
   ) -> Self {
     Self {
       request_id: request_id.into(),
       attempt,
-      endpoint,
+      request_endpoint,
       events,
       config,
     }

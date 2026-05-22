@@ -14,7 +14,7 @@ use tokn_core::request_event::stage::{
   SentSummary, Stage, StageEvent,
 };
 use tokn_core::request_event::RecordEvent;
-use tokn_core::request_event::{EndpointLabel, RequestEvent, RequestEventPayload};
+use tokn_core::request_event::{RequestEndpoint, RequestEvent, RequestEventPayload};
 use tokn_headers::{HeaderMap, TemplateVars};
 use tokn_persistence::RequestEventHandler;
 
@@ -65,6 +65,7 @@ fn resolved(account: &str, provider: &str) -> StageEvent {
   StageEvent::Resolve(ResolvedSummary {
     agent_id: None,
     model: SmolStr::new("client-model"),
+    resolved_endpoint: Some(Endpoint::Responses),
     upstream_model: SmolStr::new("upstream-model"),
     upstream_endpoint: Some(Endpoint::Responses),
     account_id: SmolStr::new(account),
@@ -96,7 +97,7 @@ fn sent(status: u16) -> StageEvent {
   StageEvent::Send(SentSummary {
     status,
     headers: h,
-    upstream_endpoint: Endpoint::Responses,
+    upstream_endpoint: Some(Endpoint::Responses),
     stream: false,
   })
 }
@@ -203,7 +204,7 @@ fn happy_path_persists_all_stages() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(
@@ -262,7 +263,7 @@ fn extract_merges_params_json_with_existing_keys() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(
@@ -297,6 +298,36 @@ fn extract_merges_params_json_with_existing_keys() {
 }
 
 #[test]
+fn resolve_does_not_overwrite_started_request_endpoint_with_upstream_endpoint() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-endpoint-stability";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      request_endpoint: RequestEndpoint::custom("/v1/experimental/agents"),
+    },
+  ));
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Resolve(ResolvedSummary {
+      agent_id: None,
+      model: SmolStr::new("client-model"),
+      resolved_endpoint: None,
+      upstream_model: SmolStr::new("upstream-model"),
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      account_id: SmolStr::new("acct-1"),
+      provider_id: SmolStr::new("prov-1"),
+    }),
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/experimental/agents"));
+}
+
+#[test]
 fn error_before_send_leaves_status_null_and_records_error() {
   let dir = tempdir();
   let mut h = RequestEventHandler::new(dir.clone()).unwrap();
@@ -305,7 +336,7 @@ fn error_before_send_leaves_status_null_and_records_error() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Messages),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Messages),
     },
   ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"")));
@@ -331,7 +362,7 @@ fn upstream_error_status_persists_response_snapshot_and_error() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"{\"in\":1}")));
@@ -385,7 +416,7 @@ fn retry_produces_two_independent_rows() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(req, 0, extracted("m", false, None, b"a")));
@@ -399,7 +430,7 @@ fn retry_produces_two_independent_rows() {
     req,
     1,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&r2(req, 1, extracted("m", false, None, b"a")));
@@ -438,7 +469,7 @@ fn inbound_connection_record_updates_connection_fields() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&rr(
@@ -496,11 +527,11 @@ fn record_without_started_bootstraps_row() {
     as_text(&row["inbound_req_url"]).as_deref(),
     Some("https://example.test/v1/responses")
   );
-  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some(""));
+  assert!(is_null(&row["endpoint"]));
 }
 
 #[test]
-fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
+fn resolve_without_upstream_endpoint_keeps_started_request_endpoint() {
   let dir = tempdir();
   let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-auto-endpoint";
@@ -508,7 +539,7 @@ fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::custom("/v1/unknown"),
+      request_endpoint: RequestEndpoint::custom("/v1/unknown"),
     },
   ));
   h.handle(&r2(
@@ -517,6 +548,7 @@ fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
     StageEvent::Resolve(ResolvedSummary {
       agent_id: None,
       model: SmolStr::new("client-model"),
+      resolved_endpoint: None,
       upstream_model: SmolStr::new("upstream-model"),
       upstream_endpoint: None,
       account_id: SmolStr::new("acct"),
@@ -529,7 +561,7 @@ fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
 }
 
 #[test]
-fn custom_endpoint_label_persists_verbatim() {
+fn custom_request_endpoint_persists_verbatim() {
   let dir = tempdir();
   let mut h = RequestEventHandler::new(dir.clone()).unwrap();
   let req = "req-custom-endpoint";
@@ -537,7 +569,7 @@ fn custom_endpoint_label_persists_verbatim() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::custom("/v1/custom-endpoint"),
+      request_endpoint: RequestEndpoint::custom("/v1/custom-endpoint"),
     },
   ));
   h.handle(&r2(req, 0, completed(true, 1)));
@@ -555,7 +587,7 @@ fn usage_record_updates_token_columns() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&rr(
@@ -596,7 +628,7 @@ fn usage_json_omits_missing_token_keys_and_does_not_calculate_total() {
     req,
     0,
     StageEvent::Started {
-      endpoint: EndpointLabel::Known(Endpoint::Responses),
+      request_endpoint: RequestEndpoint::Known(Endpoint::Responses),
     },
   ));
   h.handle(&rr(

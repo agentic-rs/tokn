@@ -151,7 +151,7 @@ fn raw_chat(model: &str) -> RawInbound {
   let body = serde_json::json!({"model": model, "messages": []});
   let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
   RawInbound {
-    endpoint: Endpoint::ChatCompletions,
+    request_endpoint: Endpoint::ChatCompletions.into(),
     headers: HeaderMap::new(),
     raw_body: decoded.clone(),
     decoded_body: decoded,

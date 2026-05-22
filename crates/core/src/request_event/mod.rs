@@ -30,7 +30,7 @@ pub mod stage;
 
 pub use record::RecordEvent;
 pub use stage::{
-  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, EndpointLabel, ExtractedSummary,
+  BuiltHeadersSummary, ConvertedRequestSummary, ConvertedResponseSummary, ExtractedSummary, RequestEndpoint,
   ResolvedSummary, SentSummary, Stage, StageEvent,
 };
 

@@ -4,9 +4,8 @@
 //! (`tokn_core::provider::Provider`). Build a [`tokn_core::provider::RequestCtx`]
 //! from the upstream-shaped body (produced by ConvertRequest), persona
 //! headers (produced by BuildHeaders), and a few inbound facts pulled from
-//! `Extracted`; then dispatch on the resolved upstream endpoint (or
-//! `ChatCompletions` when resolve left it undecided) to the provider's
-//! `chat` / `responses` / `messages` method.
+//! `Extracted`; then dispatch on the resolved upstream endpoint to the
+//! provider's `chat` / `responses` / `messages` method.
 //!
 //! The provider is responsible for URL construction, auth injection, and
 //! the actual HTTP call — `DefaultSend` only wires the data flow and
@@ -18,7 +17,9 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
-use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse};
+use crate::pipeline::stages::{
+  require_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use smol_str::SmolStr;
@@ -42,7 +43,7 @@ impl SendStage for DefaultSend {
   #[instrument(name = "default_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint.unwrap_or(Endpoint::ChatCompletions),
+    endpoint = ?resolved.upstream_endpoint,
     stream = extracted.stream,
   ))]
   async fn send(
@@ -53,7 +54,7 @@ impl SendStage for DefaultSend {
     headers: &BuiltHeaders,
     body: &ConvertedRequest,
   ) -> Result<SentResponse, PipelineError> {
-    let upstream_endpoint = resolved.upstream_endpoint.unwrap_or(Endpoint::ChatCompletions);
+    let upstream_endpoint = require_upstream_endpoint(ctx, resolved, Stage::Send)?;
     let initiator: &str = extracted.initiator.as_str();
     // Client-derived headers are passed via `client_headers`. The provider's
     // own `patch_headers` will run on top to inject auth + content-type;
@@ -168,7 +169,7 @@ impl SendStage for DefaultSend {
       status,
       headers: resp_headers,
       stream: extracted.stream,
-      upstream_endpoint,
+      upstream_endpoint: Some(upstream_endpoint),
       response: resp,
     })
   }
@@ -210,6 +211,7 @@ mod tests {
   use super::*;
   use crate::event::EventBus;
   use crate::event::EventPayload;
+  use crate::pipeline::config::RunConfig;
   use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
@@ -219,7 +221,20 @@ mod tests {
   use tokn_core::provider::{Endpoint, Result as ProviderResult};
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-send", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new(
+      "req-send",
+      Endpoint::ChatCompletions.into(),
+      Arc::new(EventBus::new(64)),
+    )
+  }
+
+  fn ctx_with_config(config: RunConfig) -> PipelineCtx {
+    PipelineCtx::new_with_config(
+      "req-send",
+      Endpoint::ChatCompletions.into(),
+      Arc::new(EventBus::new(64)),
+      Arc::new(config),
+    )
   }
 
   fn extracted() -> Extracted {
@@ -244,6 +259,7 @@ mod tests {
     Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
+      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct-1"),
@@ -287,7 +303,7 @@ mod tests {
       .await
       .expect("send should succeed");
     assert_eq!(out.status, 200);
-    assert_eq!(out.upstream_endpoint, Endpoint::ChatCompletions);
+    assert_eq!(out.upstream_endpoint, Some(Endpoint::ChatCompletions));
     assert!(!out.stream);
   }
 
@@ -344,7 +360,7 @@ mod tests {
     let provider = MockProvider::new("mock").with_chat_response(ok_response(502, r#"{"error":"boom"}"#));
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
-    let ctx = PipelineCtx::new("req-send-err", Endpoint::ChatCompletions, events);
+    let ctx = PipelineCtx::new("req-send-err", Endpoint::ChatCompletions.into(), events);
 
     let err = send
       .send(&ctx, &extracted(), &resolved(handle), &BuiltHeaders::default(), &body())
@@ -399,6 +415,58 @@ mod tests {
     assert_eq!(err.stage, Stage::Send);
     assert!(!err.recoverable);
     assert!(err.to_string().contains("boom"));
+  }
+
+  #[tokio::test]
+  async fn uses_run_config_upstream_endpoint_override() {
+    let provider =
+      MockProvider::new("mock").with_responses_response(ok_response(200, r#"{"id":"resp_123","output":[]}"#));
+    let handle = mock_handle_with_provider("acct", provider);
+    let send = DefaultSend::new(reqwest::Client::new());
+    let ctx = ctx_with_config(
+      RunConfig::builder()
+        .with_str(crate::pipeline::stages::RUN_UPSTREAM_ENDPOINT_KEY, "responses")
+        .build(),
+    );
+    let mut resolved = resolved(handle);
+    resolved.upstream_endpoint = None;
+
+    let out = send
+      .send(&ctx, &extracted(), &resolved, &BuiltHeaders::default(), &body())
+      .await
+      .expect("send should use configured upstream endpoint");
+
+    assert_eq!(out.status, 200);
+    assert_eq!(out.upstream_endpoint, Some(Endpoint::Responses));
+  }
+
+  #[tokio::test]
+  async fn errors_when_no_upstream_endpoint_can_be_resolved() {
+    let provider = MockProvider::new("mock");
+    let handle = mock_handle_with_provider("acct", provider);
+    let send = DefaultSend::new(reqwest::Client::new());
+    let mut resolved = resolved(handle);
+    resolved.resolved_endpoint = None;
+    resolved.upstream_endpoint = None;
+    let ctx = PipelineCtx::new(
+      "req-send-missing",
+      tokn_core::request_event::RequestEndpoint::custom("/v1/experimental/agents"),
+      Arc::new(EventBus::new(64)),
+    );
+
+    let err = send
+      .send(&ctx, &extracted(), &resolved, &BuiltHeaders::default(), &body())
+      .await
+      .unwrap_err();
+
+    assert_eq!(err.stage, Stage::Send);
+    assert!(!err.recoverable);
+    match err.inner() {
+      RequestsError::MissingUpstreamEndpoint { request_endpoint } => {
+        assert_eq!(request_endpoint.as_str(), "/v1/experimental/agents");
+      }
+      other => panic!("expected MissingUpstreamEndpoint, got {other:?}"),
+    }
   }
 
   // Ensure the test harness compiles even if `ProviderResult` is unused

@@ -17,9 +17,9 @@ use tokn_core::provider::error;
 use tokn_core::provider::{AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx};
 use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 
-/// One-shot canned response or error returned by [`MockProvider::chat`].
+/// One-shot canned response or error returned by a mocked provider endpoint.
 /// Stored behind a [`Mutex`] because the trait method takes `&self`.
-enum ChatScript {
+enum EndpointScript {
   Response(reqwest::Response),
   Error(Box<dyn FnOnce() -> error::Error + Send + Sync>),
 }
@@ -27,7 +27,9 @@ enum ChatScript {
 pub struct MockProvider {
   info: ProviderInfo,
   transformer: Option<Box<dyn InputTransformer>>,
-  chat_script: Mutex<Option<ChatScript>>,
+  chat_script: Mutex<Option<EndpointScript>>,
+  responses_script: Mutex<Option<EndpointScript>>,
+  messages_script: Mutex<Option<EndpointScript>>,
   header_patch: Vec<(String, String)>,
 }
 
@@ -50,6 +52,8 @@ impl MockProvider {
       },
       transformer: None,
       chat_script: Mutex::new(None),
+      responses_script: Mutex::new(None),
+      messages_script: Mutex::new(None),
       header_patch: Vec::new(),
     }
   }
@@ -61,7 +65,7 @@ impl MockProvider {
 
   /// Arm the next [`Provider::chat`] call to return `resp`.
   pub fn with_chat_response(self, resp: reqwest::Response) -> Self {
-    *self.chat_script.lock().unwrap() = Some(ChatScript::Response(resp));
+    *self.chat_script.lock().unwrap() = Some(EndpointScript::Response(resp));
     self
   }
 
@@ -70,7 +74,36 @@ impl MockProvider {
   where
     F: FnOnce() -> error::Error + Send + Sync + 'static,
   {
-    *self.chat_script.lock().unwrap() = Some(ChatScript::Error(Box::new(f)));
+    *self.chat_script.lock().unwrap() = Some(EndpointScript::Error(Box::new(f)));
+    self
+  }
+
+  pub fn with_responses_response(self, resp: reqwest::Response) -> Self {
+    *self.responses_script.lock().unwrap() = Some(EndpointScript::Response(resp));
+    self
+  }
+
+  #[allow(dead_code)]
+  pub fn with_responses_error<F>(self, f: F) -> Self
+  where
+    F: FnOnce() -> error::Error + Send + Sync + 'static,
+  {
+    *self.responses_script.lock().unwrap() = Some(EndpointScript::Error(Box::new(f)));
+    self
+  }
+
+  #[allow(dead_code)]
+  pub fn with_messages_response(self, resp: reqwest::Response) -> Self {
+    *self.messages_script.lock().unwrap() = Some(EndpointScript::Response(resp));
+    self
+  }
+
+  #[allow(dead_code)]
+  pub fn with_messages_error<F>(self, f: F) -> Self
+  where
+    F: FnOnce() -> error::Error + Send + Sync + 'static,
+  {
+    *self.messages_script.lock().unwrap() = Some(EndpointScript::Error(Box::new(f)));
     self
   }
 
@@ -106,9 +139,29 @@ impl Provider for MockProvider {
   }
   async fn chat(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
     match self.chat_script.lock().unwrap().take() {
-      Some(ChatScript::Response(r)) => Ok(r),
-      Some(ChatScript::Error(f)) => Err(f()),
+      Some(EndpointScript::Response(r)) => Ok(r),
+      Some(EndpointScript::Error(f)) => Err(f()),
       None => unimplemented!("MockProvider::chat: no script armed; call with_chat_response/with_chat_error"),
+    }
+  }
+
+  async fn responses(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
+    match self.responses_script.lock().unwrap().take() {
+      Some(EndpointScript::Response(r)) => Ok(r),
+      Some(EndpointScript::Error(f)) => Err(f()),
+      None => {
+        unimplemented!("MockProvider::responses: no script armed; call with_responses_response/with_responses_error")
+      }
+    }
+  }
+
+  async fn messages(&self, _ctx: RequestCtx<'_>) -> error::Result<reqwest::Response> {
+    match self.messages_script.lock().unwrap().take() {
+      Some(EndpointScript::Response(r)) => Ok(r),
+      Some(EndpointScript::Error(f)) => Err(f()),
+      None => {
+        unimplemented!("MockProvider::messages: no script armed; call with_messages_response/with_messages_error")
+      }
     }
   }
 }

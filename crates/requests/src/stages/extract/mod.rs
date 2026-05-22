@@ -40,7 +40,7 @@ pub struct DefaultExtract;
 impl ExtractStage for DefaultExtract {
   async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
-      endpoint: _,
+      request_endpoint: _,
       headers,
       raw_body,
       decoded_body,
@@ -149,13 +149,17 @@ mod tests {
   use tokn_core::provider::Endpoint;
 
   fn ctx() -> PipelineCtx {
-    PipelineCtx::new("req-test", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
+    PipelineCtx::new(
+      "req-test",
+      Endpoint::ChatCompletions.into(),
+      Arc::new(EventBus::new(64)),
+    )
   }
 
   fn raw(headers: HeaderMap, body: Value) -> RawInbound {
     let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
     RawInbound {
-      endpoint: Endpoint::ChatCompletions,
+      request_endpoint: Endpoint::ChatCompletions.into(),
       headers,
       raw_body: decoded.clone(),
       decoded_body: decoded,
