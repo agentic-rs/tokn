@@ -26,7 +26,7 @@ pub enum SelectorOutcome {
   Selected {
     account_id: SmolStr,
     provider_id: SmolStr,
-    upstream_endpoint: Endpoint,
+    upstream_endpoint: Option<Endpoint>,
     upstream_model: SmolStr,
     account_handle: Arc<AccountHandle>,
   },
@@ -109,7 +109,7 @@ mod tests {
         SelectorOutcomeKind::Ok => SelectorOutcome::Selected {
           account_id: SmolStr::new("acct-1"),
           provider_id: SmolStr::new("zai-coding-plan"),
-          upstream_endpoint: Endpoint::ChatCompletions,
+          upstream_endpoint: Some(Endpoint::ChatCompletions),
           upstream_model: SmolStr::new("glm-4"),
           account_handle: mock_handle("acct-1", "zai-coding-plan"),
         },

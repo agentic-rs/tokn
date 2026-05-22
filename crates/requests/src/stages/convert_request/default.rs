@@ -41,16 +41,17 @@ impl ConvertRequestStage for DefaultConvertRequest {
     extracted: &Extracted,
     resolved: &Resolved,
   ) -> Result<ConvertedRequest, PipelineError> {
+    let upstream_endpoint = resolved.upstream_endpoint.unwrap_or(ctx.endpoint);
     let mut upstream_body = rewrite_model(&extracted.body_json, resolved.upstream_model.as_str());
 
-    if resolved.upstream_endpoint != ctx.endpoint {
-      upstream_body = tokn_convert::convert_request(ctx.endpoint, resolved.upstream_endpoint, &upstream_body)
+    if upstream_endpoint != ctx.endpoint {
+      upstream_body = tokn_convert::convert_request(ctx.endpoint, upstream_endpoint, &upstream_body)
         .map_err(|source| perm(RequestsError::RequestConversion { source }))?;
     }
 
     if let Some(transformer) = resolved.account_handle.provider.input_transformer() {
       upstream_body = transformer
-        .transform_input(resolved.upstream_endpoint, upstream_body)
+        .transform_input(upstream_endpoint, upstream_body)
         .map_err(|source| perm(RequestsError::ProviderInputTransformer { source }))?;
     }
 
@@ -141,7 +142,7 @@ mod tests {
       agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
       upstream_model: smol_str::SmolStr::new(upstream_model),
-      upstream_endpoint,
+      upstream_endpoint: Some(upstream_endpoint),
       account_id: smol_str::SmolStr::new("acct-1"),
       provider_id: smol_str::SmolStr::from(handle.provider.id()),
       account_handle: handle,

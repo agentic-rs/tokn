@@ -68,7 +68,7 @@ impl EventHandler for RequestEventHandler {
           attempt,
           s.account_id.as_str(),
           s.provider_id.as_str(),
-          &s.upstream_endpoint.into(),
+          s.upstream_endpoint.map(EndpointLabel::from).as_ref(),
         ),
         StageEvent::BuildHeaders(s) => self.on_build_headers(request_id, attempt, &s.headers),
         StageEvent::ConvertRequest(s) => self.on_convert_request(request_id, attempt, &s.upstream_wire_body),
@@ -238,7 +238,7 @@ impl RequestEventHandler {
     attempt: u32,
     account_id: &str,
     provider_id: &str,
-    upstream_endpoint: &EndpointLabel,
+    upstream_endpoint: Option<&EndpointLabel>,
   ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let Some(conn) = self.db.conn_for_request(&id) else {
@@ -253,10 +253,12 @@ impl RequestEventHandler {
          provider_id = excluded.provider_id",
       params![id, account_id, provider_id],
     )?;
-    conn.execute(
-      "UPDATE request_connection SET endpoint = ?2 WHERE request_id = ?1",
-      params![id, upstream_endpoint.as_str()],
-    )?;
+    if let Some(upstream_endpoint) = upstream_endpoint {
+      conn.execute(
+        "UPDATE request_connection SET endpoint = ?2 WHERE request_id = ?1",
+        params![id, upstream_endpoint.as_str()],
+      )?;
+    }
     Ok(())
   }
 

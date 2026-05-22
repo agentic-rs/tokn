@@ -212,7 +212,7 @@ mod tests {
       agent_id: None,
       model: "gpt-4o".into(),
       upstream_model: "gpt-4o".into(),
-      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: "acct-1".into(),
       provider_id: provider_id.into(),
       account_handle: crate::test_support::mock_handle("acct-1", provider_id),

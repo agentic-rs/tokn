@@ -75,7 +75,7 @@ mod tests {
       agent_id: None,
       model: SmolStr::new("m"),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Endpoint::ChatCompletions,
+      upstream_endpoint: Some(Endpoint::ChatCompletions),
       account_id: SmolStr::new("a"),
       provider_id: SmolStr::new("openai"),
       account_handle: crate::test_support::mock_handle("a", "openai"),
