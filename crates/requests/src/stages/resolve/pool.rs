@@ -52,7 +52,7 @@ impl AccountSelector for PoolAccountSelector {
         Ok(SelectorOutcome::Selected {
           account_id,
           provider_id,
-          upstream_endpoint: endpoint,
+          upstream_endpoint: Some(endpoint),
           upstream_model: SmolStr::from(route.upstream_model.as_str()),
           account_handle: acct,
         })

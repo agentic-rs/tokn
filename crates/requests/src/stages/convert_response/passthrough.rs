@@ -191,6 +191,9 @@ impl ConvertResponseStage for PassthroughConvertResponse {
   }
 
   fn is_sse_response(&self, _ctx: &PipelineCtx, sent: &SentResponse) -> bool {
+    if sent.status >= 400 {
+      return false;
+    }
     is_sse_response(&sent.headers, sent.stream)
   }
 }
@@ -229,6 +232,24 @@ mod tests {
       PipelineCtx::new("req-pcr", Endpoint::ChatCompletions, events.clone()),
       events,
     )
+  }
+
+  fn response(status: u16, body: &'static str, content_type: &'static str) -> reqwest::Response {
+    let resp = http::Response::builder()
+      .status(status)
+      .header("content-type", content_type)
+      .body(body)
+      .unwrap();
+    reqwest::Response::from(resp)
+  }
+
+  fn headers(content_type: &str) -> HeaderMap {
+    let mut h = HeaderMap::new();
+    h.insert(
+      tokn_headers::keys::CONTENT_TYPE.clone(),
+      tokn_headers::HeaderValue::from_string(content_type.to_string()),
+    );
+    h
   }
 
   #[tokio::test]
@@ -333,6 +354,31 @@ mod tests {
       saw_usage,
       "background task should emit RecordEvent::Usage from SSE frames"
     );
+  }
+
+  #[tokio::test]
+  async fn upstream_4xx_is_buffered_even_for_streaming_requests() {
+    let (c, _events) = ctx();
+    let sent = SentResponse {
+      status: 403,
+      headers: headers("text/event-stream"),
+      stream: true,
+      upstream_endpoint: Endpoint::ChatCompletions,
+      response: response(403, "event: error\ndata: forbidden\n\n", "text/event-stream"),
+    };
+
+    let out = PassthroughConvertResponse::new()
+      .convert_response(&c, sent)
+      .await
+      .unwrap();
+
+    assert_eq!(out.status, 403);
+    match out.body {
+      ConvertedBody::Buffered { body_bytes, .. } => {
+        assert_eq!(body_bytes.as_ref(), b"event: error\ndata: forbidden\n\n");
+      }
+      ConvertedBody::Stream { .. } => panic!("4xx proxy errors must not be surfaced as SSE streams"),
+    }
   }
 
   #[tokio::test]
