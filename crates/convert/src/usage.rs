@@ -16,7 +16,7 @@
 //!   `Usage.input_tokens` to the total (input + cache_creation + cache_read).
 
 use serde_json::Value;
-use tokn_core::db::{Usage, UsageDetails};
+use tokn_core::db::{Usage, UsageDetails, UsageType};
 
 /// Extract `Usage` from an upstream response body. Returns an empty `Usage`
 /// (all `None`) when no recognizable shape is found.
@@ -29,7 +29,27 @@ pub fn parse_usage_any_value(v: &Value) -> Usage {
   if let Some(usage) = parse_openai_responses_usage(v.pointer("/response/usage")) {
     return usage;
   }
-  // Try OpenAI shape: top-level "usage"
+  // Top-level "usage" appears in multiple APIs, so detect first and then
+  // dispatch to the matching parser rather than relying on parser order.
+  match detect_usage_type(v.pointer("/usage")) {
+    Some(UsageType::Chat) => {
+      if let Some(usage) = parse_openai_chat_usage(v.pointer("/usage")) {
+        return usage;
+      }
+    }
+    Some(UsageType::Responses) => {
+      if let Some(usage) = parse_openai_responses_usage(v.pointer("/usage")) {
+        return usage;
+      }
+    }
+    Some(UsageType::Messages) => {
+      if let Some(usage) = parse_anthropic_usage(v.pointer("/usage")) {
+        return usage;
+      }
+    }
+    None => {}
+  }
+  // Fallbacks for odd mixed shapes.
   if let Some(usage) = parse_openai_chat_usage(v.pointer("/usage")) {
     return usage;
   }
@@ -57,6 +77,24 @@ fn ptr_u64(v: Option<&Value>, path: &str) -> Option<u64> {
   v.and_then(|value| value.pointer(path)).and_then(Value::as_u64)
 }
 
+fn detect_usage_type(u: Option<&Value>) -> Option<UsageType> {
+  let u = u?;
+  if has_anthropic_usage_markers(u) {
+    return Some(UsageType::Messages);
+  }
+  if ptr_u64(Some(u), "/prompt_tokens").is_some() || ptr_u64(Some(u), "/completion_tokens").is_some() {
+    return Some(UsageType::Chat);
+  }
+  if ptr_u64(Some(u), "/input_tokens").is_some() || ptr_u64(Some(u), "/output_tokens").is_some() {
+    return Some(UsageType::Responses);
+  }
+  None
+}
+
+fn has_anthropic_usage_markers(u: &Value) -> bool {
+  ptr_u64(Some(u), "/cache_creation_input_tokens").is_some() || ptr_u64(Some(u), "/cache_read_input_tokens").is_some()
+}
+
 /// Parse OpenAI chat-completions usage block.
 fn parse_openai_chat_usage(u: Option<&Value>) -> Option<Usage> {
   let input_tokens = ptr_u64(u, "/prompt_tokens");
@@ -71,6 +109,7 @@ fn parse_openai_chat_usage(u: Option<&Value>) -> Option<Usage> {
     input_tokens,
     output_tokens,
     total_tokens,
+    usage_type: Some(UsageType::Chat),
     details: UsageDetails {
       cache_read,
       cache_write: None,
@@ -93,6 +132,7 @@ fn parse_openai_responses_usage(u: Option<&Value>) -> Option<Usage> {
     input_tokens,
     output_tokens,
     total_tokens,
+    usage_type: Some(UsageType::Responses),
     details: UsageDetails {
       cache_read,
       cache_write: None,
@@ -110,7 +150,7 @@ fn parse_anthropic_usage(u: Option<&Value>) -> Option<Usage> {
   let cache_write = ptr_u64(u, "/cache_creation_input_tokens");
   let cache_read = ptr_u64(u, "/cache_read_input_tokens");
   // Require at least one Anthropic-specific marker.
-  if cache_write.is_none() && cache_read.is_none() {
+  if !has_anthropic_usage_markers(u?) {
     return None;
   }
   let output_tokens = ptr_u64(u, "/output_tokens");
@@ -122,6 +162,7 @@ fn parse_anthropic_usage(u: Option<&Value>) -> Option<Usage> {
     input_tokens: total_input,
     output_tokens,
     total_tokens: ptr_u64(u, "/total_tokens"),
+    usage_type: Some(UsageType::Messages),
     details: UsageDetails {
       cache_read,
       cache_write,
@@ -152,6 +193,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(11));
     assert_eq!(u.output_tokens, Some(22));
     assert_eq!(u.total_tokens, None);
+    assert_eq!(u.usage_type, Some(UsageType::Chat));
     assert_eq!(u.details.cache_read, None);
     assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, None);
@@ -164,6 +206,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(5));
     assert_eq!(u.output_tokens, Some(7));
     assert_eq!(u.total_tokens, None);
+    assert_eq!(u.usage_type, Some(UsageType::Responses));
   }
 
   #[test]
@@ -182,6 +225,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(15));
     assert_eq!(u.output_tokens, Some(1));
     assert_eq!(u.total_tokens, None);
+    assert_eq!(u.usage_type, Some(UsageType::Messages));
     assert_eq!(u.details.cache_read, Some(2));
     assert_eq!(u.details.cache_write, Some(4));
   }
@@ -196,6 +240,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(3));
     assert_eq!(u.output_tokens, Some(4));
     assert_eq!(u.total_tokens, None);
+    assert_eq!(u.usage_type, Some(UsageType::Responses));
   }
 
   #[test]
@@ -210,6 +255,7 @@ mod tests {
     assert_eq!(u.input_tokens, Some(100));
     assert_eq!(u.output_tokens, Some(50));
     assert_eq!(u.total_tokens, None);
+    assert_eq!(u.usage_type, Some(UsageType::Chat));
     assert_eq!(u.details.cache_read, Some(30));
     assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, Some(20));
@@ -228,9 +274,29 @@ mod tests {
     assert_eq!(u.input_tokens, Some(35973));
     assert_eq!(u.output_tokens, Some(989));
     assert_eq!(u.total_tokens, Some(36962));
+    assert_eq!(u.usage_type, Some(UsageType::Responses));
     assert_eq!(u.details.cache_read, Some(34176));
     assert_eq!(u.details.cache_write, None);
     assert_eq!(u.details.reasoning, Some(11));
+  }
+
+  #[test]
+  fn top_level_anthropic_usage_is_detected_before_openai_responses() {
+    let v = json!({
+      "type": "message_delta",
+      "usage": {
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "input_tokens": 8,
+        "output_tokens": 23
+      }
+    });
+    let u = parse_usage_any_value(&v);
+    assert_eq!(u.input_tokens, Some(8));
+    assert_eq!(u.output_tokens, Some(23));
+    assert_eq!(u.usage_type, Some(UsageType::Messages));
+    assert_eq!(u.details.cache_read, Some(0));
+    assert_eq!(u.details.cache_write, Some(0));
   }
 
   #[test]
