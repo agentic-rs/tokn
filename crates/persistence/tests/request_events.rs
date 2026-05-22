@@ -496,7 +496,7 @@ fn record_without_started_bootstraps_row() {
     as_text(&row["inbound_req_url"]).as_deref(),
     Some("https://example.test/v1/responses")
   );
-  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some(""));
+  assert!(is_null(&row["endpoint"]));
 }
 
 #[test]

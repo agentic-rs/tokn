@@ -53,7 +53,7 @@ impl EventHandler for RequestEventHandler {
     let result = match &r2.payload {
       RequestEventPayload::Custom(_) => return,
       RequestEventPayload::Stage(stage) => match stage {
-        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, r2.ts, endpoint),
+        StageEvent::Started { endpoint } => self.on_started(request_id, attempt, r2.ts, Some(endpoint)),
         StageEvent::Extract(s) => self.on_extract(
           request_id,
           attempt,
@@ -140,8 +140,7 @@ impl RequestEventHandler {
     if self.db.conn_for_request(&id).is_some() {
       return Ok(());
     }
-    let endpoint = EndpointLabel::custom("");
-    self.on_started(request_id, attempt, ts, &endpoint)
+    self.on_started(request_id, attempt, ts, None)
   }
 
   pub fn on_inbound_connection(
@@ -178,7 +177,13 @@ impl RequestEventHandler {
 
   /// Single anchor INSERT for a fresh request. Later handlers lazily upsert
   /// metadata and wire payload rows as those facts become available.
-  pub fn on_started(&mut self, request_id: &str, attempt: u32, ts: i64, endpoint: &EndpointLabel) -> Result<()> {
+  pub fn on_started(
+    &mut self,
+    request_id: &str,
+    attempt: u32,
+    ts: i64,
+    endpoint: Option<&EndpointLabel>,
+  ) -> Result<()> {
     let id = composite_request_id(request_id, attempt);
     let conn = self.db.conn_for_ts(ts)?;
     conn.execute(
@@ -187,10 +192,10 @@ impl RequestEventHandler {
        ON CONFLICT(request_id) DO UPDATE SET
          ver = COALESCE(request_connection.ver, excluded.ver),
          endpoint = CASE
-           WHEN request_connection.endpoint = '' THEN excluded.endpoint
+           WHEN request_connection.endpoint IS NULL OR request_connection.endpoint = '' THEN excluded.endpoint
            ELSE request_connection.endpoint
          END",
-      params![id, ts, tokn_core::util::version::full(), endpoint.as_str()],
+      params![id, ts, tokn_core::util::version::full(), endpoint.map(EndpointLabel::as_str)],
     )?;
     self.db.pin_request(&id, ts);
     Ok(())
