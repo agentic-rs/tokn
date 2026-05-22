@@ -4,23 +4,21 @@
 -- Must remain equivalent to the cumulative effect of 001..005.
 
 CREATE TABLE requests (
-  id             INTEGER PRIMARY KEY,
-  ts             INTEGER NOT NULL,
-  session_id     TEXT,
-  request_id     TEXT,
-  project_id     TEXT,
-  endpoint       TEXT,
-  account_id     TEXT,
-  provider_id    TEXT,
-  model          TEXT    NOT NULL,
-  initiator      TEXT    NOT NULL DEFAULT 'user',
-  input_tok      INTEGER,
-  output_tok     INTEGER,
-  cached_tok     INTEGER,
-  reasoning_tok  INTEGER,
-  latency_ms     INTEGER,
-  status         INTEGER,
-  stream         INTEGER NOT NULL DEFAULT 0
+  id            INTEGER PRIMARY KEY,
+  ts            INTEGER NOT NULL,
+  session_id    TEXT,
+  request_id    TEXT,
+  project_id    TEXT,
+  ver           TEXT,
+  request_error TEXT,
+  endpoint      TEXT,
+  account_id    TEXT,
+  provider_id   TEXT,
+  model         TEXT    NOT NULL,
+  params_json   TEXT,
+  usage_json    TEXT,
+  ctx_json      TEXT,
+  status        INTEGER
 );
 CREATE INDEX idx_requests_ts      ON requests(ts);
 CREATE INDEX idx_requests_session ON requests(session_id);

@@ -66,7 +66,7 @@ const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
 const USAGE_V0_1_1: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
 const USAGE_V0_2_0: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
 const USAGE_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/usage/v0.0.0_v0.1.1_0001_0004.sql");
-const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0004.sql");
+const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0005.sql");
 const USAGE_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -87,6 +87,11 @@ const USAGE_MIGRATIONS: &[Migration] = &[
     version: 4,
     name: "add_usage_breakdown",
     sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
+  },
+  Migration {
+    version: 5,
+    name: "request_metadata",
+    sql: include_str!("../schemas/migrations/usage/0005_request_metadata.sql"),
   },
 ];
 
@@ -174,12 +179,12 @@ const USAGE_V0_2_0_CASE: DbCase = DbCase {
   v0_0_0: USAGE_V0_0_0,
   target_snapshot: USAGE_V0_2_0,
   target_squash: USAGE_SQUASH_V0_2_0,
-  target_version: 4,
+  target_version: 5,
   squash_start_version: 4,
   migrations: USAGE_MIGRATIONS,
-  meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),
+  meta_json: include_str!("fixtures/usage_meta_v0.2.0.json"),
   seed_jsonl: include_str!("fixtures/usage_seed_v0.1.1.jsonl"),
-  expected_jsonl: include_str!("fixtures/usage_expected_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/usage_expected_v0.2.0.jsonl"),
 };
 
 #[test]

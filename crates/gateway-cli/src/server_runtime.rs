@@ -35,7 +35,9 @@ pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
   if cfg.db.enabled {
     let paths = cfg.db.resolve_paths()?;
     let request_handler = tokn_persistence::RequestEventHandler::new(paths.requests_dir)?;
+    let usage_handler = tokn_persistence::UsageEventHandler::new(paths.usage_db)?;
     handlers.push(Box::new(request_handler));
+    handlers.push(Box::new(usage_handler));
   }
 
   match crate::logging::resolve_logs_dir(&cfg.logging) {

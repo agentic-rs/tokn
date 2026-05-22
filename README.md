@@ -15,6 +15,12 @@ services. Just a focused CLI that:
 Inspired by [`sub2api`](https://github.com/Wei-Shaw/sub2api) but intentionally
 minimal.
 
+## Development Notes
+
+Schema snapshots track the active release line in [`VERSION`](/Users/clouds/.codex/worktrees/59e1/llm-router/VERSION).
+If `VERSION` is still on `v0.2.x`, keep schema snapshot updates on the `v0.2.0`
+files instead of introducing `v0.3.0` snapshot names early.
+
 ## Install
 
 ```sh
