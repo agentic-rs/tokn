@@ -21,10 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokn_accounts::AccountHandle;
 use tokn_core::account::AccountConfig;
-use tokn_core::AgentId;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
+use tokn_core::AgentId;
 use tokn_headers::HeaderMap;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
@@ -34,14 +34,11 @@ use tokn_requests::stages::{
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
-const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str =
-  include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
-const OPENCODE_OPENAI_SEND_HEADERS_JSON: &str =
-  include_str!("fixtures/agent_id_headers/opencode_openai_send.json");
+const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
+const OPENCODE_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/opencode_openai_send.json");
 const CLAUDE_CODE_OPENAI_SEND_HEADERS_JSON: &str =
   include_str!("fixtures/agent_id_headers/claude-code_openai_send.json");
-const CLINE_OPENAI_SEND_HEADERS_JSON: &str =
-  include_str!("fixtures/agent_id_headers/cline_openai_send.json");
+const CLINE_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.json");
 const COPILOT_CLI_OPENAI_SEND_HEADERS_JSON: &str =
   include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.json");
 
