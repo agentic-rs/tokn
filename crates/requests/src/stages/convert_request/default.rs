@@ -123,14 +123,19 @@ mod tests {
     PipelineCtx::new_with_config("req-cr", endpoint.into(), Arc::new(EventBus::new(64)), Arc::new(config))
   }
 
-  fn extracted_with(body: Value, encoding: Option<ContentEncodingKind>, wire: Bytes) -> Extracted {
+  fn extracted_with(
+    body: Value,
+    encoding: Option<ContentEncodingKind>,
+    wire: Bytes,
+    initiator: Option<&str>,
+  ) -> Extracted {
     Extracted {
       agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
       stream: false,
       session_id: None,
       project_id: None,
-      initiator: Some(smol_str::SmolStr::new("user")),
+      initiator: initiator.map(smol_str::SmolStr::new),
       header_initiator: None,
       route_mode_hint: None,
       headers: HeaderMap::new(),
@@ -163,7 +168,7 @@ mod tests {
   async fn passthrough_when_endpoints_match_and_no_transformer() {
     let body = serde_json::json!({"model": "input-model", "messages": [{"role":"user","content":"hi"}]});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body.clone(), None, raw.clone());
+    let ex = extracted_with(body.clone(), None, raw.clone(), None);
     let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::ChatCompletions,
@@ -182,7 +187,7 @@ mod tests {
   async fn rewrites_model_field() {
     let body = serde_json::json!({"model": "input-model", "messages": []});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body, None, raw);
+    let ex = extracted_with(body, None, raw, None);
     let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::ChatCompletions,
@@ -207,7 +212,7 @@ mod tests {
     }
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body, None, raw);
+    let ex = extracted_with(body, None, raw, None);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Stamp));
     let res = resolved_with(
       handle,
@@ -230,7 +235,7 @@ mod tests {
       "input": [{"role": "user", "content": "hi"}]
     });
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body.clone(), None, raw);
+    let ex = extracted_with(body.clone(), None, raw, None);
     let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::Responses,
@@ -258,7 +263,7 @@ mod tests {
       Some(ContentEncodingKind::Gzip),
     )
     .unwrap();
-    let ex = extracted_with(body, Some(ContentEncodingKind::Gzip), compressed);
+    let ex = extracted_with(body, Some(ContentEncodingKind::Gzip), compressed, None);
     // Different upstream model → body mutates → we must re-compress.
     let res = resolved_with(
       mock_handle("acct", "mock"),
@@ -278,7 +283,7 @@ mod tests {
   async fn content_encoding_propagates_to_output() {
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body, Some(ContentEncodingKind::Zstd), raw);
+    let ex = extracted_with(body, Some(ContentEncodingKind::Zstd), raw, None);
     let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::ChatCompletions,
@@ -300,7 +305,7 @@ mod tests {
     }
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body, None, raw);
+    let ex = extracted_with(body, None, raw, None);
     let handle = mock_handle_with_provider("acct", MockProvider::new("mock").with_transformer(Boom));
     let res = resolved_with(
       handle,
@@ -325,7 +330,7 @@ mod tests {
       "input": [{"role": "user", "content": "hi"}]
     });
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body.clone(), None, raw);
+    let ex = extracted_with(body.clone(), None, raw, None);
     let mut res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::Responses,
@@ -353,7 +358,7 @@ mod tests {
   async fn errors_when_no_resolved_endpoint_is_available() {
     let body = serde_json::json!({"model": "input-model"});
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
-    let ex = extracted_with(body, None, raw);
+    let ex = extracted_with(body, None, raw, None);
     let mut res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::ChatCompletions,
@@ -381,5 +386,26 @@ mod tests {
       }
       other => panic!("expected MissingResolvedEndpoint, got {other:?}"),
     }
+  }
+
+  #[test]
+  fn extracted_helper_preserves_user_agent_and_none_initiator() {
+    let body = serde_json::json!({"model": "input-model"});
+    let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
+
+    assert_eq!(
+      extracted_with(body.clone(), None, raw.clone(), None).initiator.as_deref(),
+      None
+    );
+    assert_eq!(
+      extracted_with(body.clone(), None, raw.clone(), Some("user"))
+        .initiator
+        .as_deref(),
+      Some("user")
+    );
+    assert_eq!(
+      extracted_with(body, None, raw, Some("agent")).initiator.as_deref(),
+      Some("agent")
+    );
   }
 }

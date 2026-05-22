@@ -151,7 +151,9 @@ impl CopilotProvider {
         if fallback == "user" || fallback == "agent" {
           return fallback.into();
         }
-        crate::util::initiator::classify_initiator(body).into()
+        crate::util::initiator::classify_initiator(body)
+          .unwrap_or("user")
+          .into()
       }
     }
   }
@@ -337,7 +339,9 @@ impl CopilotProvider {
         if fallback == "user" || fallback == "agent" {
           return fallback.into();
         }
-        crate::util::initiator::classify_initiator_responses(body).into()
+        crate::util::initiator::classify_initiator_responses(body)
+          .unwrap_or("user")
+          .into()
       }
     }
   }
