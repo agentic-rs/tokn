@@ -434,6 +434,25 @@ fn record_without_started_bootstraps_row() {
     as_text(&row["inbound_req_url"]).as_deref(),
     Some("https://example.test/v1/responses")
   );
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some(""));
+}
+
+#[test]
+fn custom_endpoint_label_persists_verbatim() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-custom-endpoint";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::custom("/v1/custom-endpoint"),
+    },
+  ));
+  h.handle(&r2(req, 0, completed(true, 1)));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/custom-endpoint"));
 }
 
 #[test]

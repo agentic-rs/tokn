@@ -1,13 +1,14 @@
 use super::{migrate, Result, Usage};
 use rusqlite::{params, Connection};
 use std::path::Path;
+use tokn_core::request_event::EndpointLabel;
 
 pub struct UsageRecord<'a> {
   pub ts: i64,
   pub session_id: &'a str,
   pub request_id: &'a str,
   pub project_id: Option<&'a str>,
-  pub endpoint: &'a str,
+  pub endpoint: &'a EndpointLabel,
   pub account_id: &'a str,
   pub provider_id: &'a str,
   pub model: &'a str,
@@ -77,7 +78,7 @@ impl UsageDb {
         r.session_id,
         r.request_id,
         r.project_id,
-        r.endpoint,
+        r.endpoint.as_str(),
         r.account_id,
         r.provider_id,
         r.model,
@@ -171,6 +172,7 @@ pub struct RowSummary {
 mod tests {
   use super::*;
   use crate::Usage;
+  use tokn_core::provider::Endpoint;
 
   #[test]
   fn fresh_usage_db_records_correlation_ids() {
@@ -184,7 +186,7 @@ mod tests {
       session_id: "session-1",
       request_id: "request-1",
       project_id: Some("project-1"),
-      endpoint: "chat_completions",
+      endpoint: &Endpoint::ChatCompletions.into(),
       account_id: "account",
       provider_id: "provider",
       model: "model",
