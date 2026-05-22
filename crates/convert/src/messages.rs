@@ -19,6 +19,12 @@ const REQUEST_KEYS: &[&str] = &[
   "metadata",
 ];
 
+fn usage_extras(u: &Value, known: &[&str]) -> BTreeMap<String, Value> {
+  u.as_object()
+    .map(|obj| crate::ir::extras_from_object(obj, known))
+    .unwrap_or_default()
+}
+
 pub fn request_from_value(v: &Value) -> Result<IrRequest> {
   let obj = v
     .as_object()
@@ -138,8 +144,9 @@ pub fn response_from_value(v: &Value) -> Result<IrResponse> {
       input_tokens: u.get("input_tokens").and_then(Value::as_u64),
       output_tokens: u.get("output_tokens").and_then(Value::as_u64),
       total_tokens: None,
-      cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
-      reasoning_output_tokens: None,
+      input_tokens_details: None,
+      output_tokens_details: None,
+      extras: usage_extras(u, &["input_tokens", "output_tokens"]),
     }),
     finish_reason: v.get("stop_reason").and_then(Value::as_str).map(str::to_string),
     extras: BTreeMap::new(),
@@ -173,10 +180,11 @@ pub fn response_to_value(resp: &IrResponse) -> Result<Value> {
     "stop_sequence": null,
   });
   if let Some(usage) = &resp.usage {
-    out["usage"] = json!({
-      "input_tokens": usage.input_tokens.unwrap_or(0),
-      "output_tokens": usage.output_tokens.unwrap_or(0),
-    });
+    let mut usage_json = serde_json::Map::new();
+    usage_json.extend(usage.extras.clone());
+    usage_json.insert("input_tokens".into(), Value::from(usage.input_tokens.unwrap_or(0)));
+    usage_json.insert("output_tokens".into(), Value::from(usage.output_tokens.unwrap_or(0)));
+    out["usage"] = Value::Object(usage_json);
   }
   Ok(out)
 }
@@ -224,8 +232,9 @@ pub fn delta_from_messages_event(v: &Value) -> Vec<IrDelta> {
           input_tokens: None,
           output_tokens: u.get("output_tokens").and_then(Value::as_u64),
           total_tokens: None,
-          cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
-          reasoning_output_tokens: None,
+          input_tokens_details: None,
+          output_tokens_details: None,
+          extras: usage_extras(u, &["output_tokens"]),
         }));
       }
     }
@@ -235,8 +244,9 @@ pub fn delta_from_messages_event(v: &Value) -> Vec<IrDelta> {
           input_tokens: u.get("input_tokens").and_then(Value::as_u64),
           output_tokens: u.get("output_tokens").and_then(Value::as_u64),
           total_tokens: None,
-          cached_input_tokens: u.get("cache_read_input_tokens").and_then(Value::as_u64),
-          reasoning_output_tokens: None,
+          input_tokens_details: None,
+          output_tokens_details: None,
+          extras: usage_extras(u, &["input_tokens", "output_tokens"]),
         }));
       }
     }
@@ -263,7 +273,15 @@ pub fn events_from_deltas(resp_id: &str, model: &str, deltas: &[IrDelta], finish
       )),
       IrDelta::Usage(usage) => events.push((
         "message_delta".into(),
-        json!({ "type": "message_delta", "delta": {}, "usage": { "output_tokens": usage.output_tokens.unwrap_or(0) } }),
+        {
+          let mut usage_json = serde_json::Map::new();
+          usage_json.extend(usage.extras.clone());
+          usage_json.insert(
+            "output_tokens".into(),
+            Value::from(usage.output_tokens.unwrap_or(0)),
+          );
+          json!({ "type": "message_delta", "delta": {}, "usage": usage_json })
+        },
       )),
       IrDelta::Finish(reason) => events.push((
         "message_delta".into(),
@@ -381,4 +399,41 @@ fn system_to_string(system: Option<&Value>) -> Option<String> {
 #[allow(dead_code)]
 fn _tool_args_string(call: &ToolCall) -> String {
   args_to_string(&call.arguments)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  #[test]
+  fn messages_response_preserves_usage_extras() {
+    let value = json!({
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-test",
+      "content": [],
+      "stop_reason": "end_turn",
+      "usage": {
+        "input_tokens": 12,
+        "output_tokens": 5,
+        "cache_creation_input_tokens": 4,
+        "cache_read_input_tokens": 3
+      }
+    });
+
+    let response = response_from_value(&value).expect("response");
+    let round_trip = response_to_value(&response).expect("round trip");
+
+    assert_eq!(
+      round_trip.get("usage"),
+      Some(&json!({
+        "input_tokens": 12,
+        "output_tokens": 5,
+        "cache_creation_input_tokens": 4,
+        "cache_read_input_tokens": 3
+      }))
+    );
+  }
 }
