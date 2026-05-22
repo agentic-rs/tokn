@@ -40,11 +40,6 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "add_usage_breakdown",
     sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
   },
-  migrate::Migration {
-    version: 5,
-    name: "mark_v0_2_0",
-    sql: include_str!("../schemas/migrations/usage/0005_mark_v0_2_0.sql"),
-  },
 ];
 
 pub fn latest_version() -> u32 {

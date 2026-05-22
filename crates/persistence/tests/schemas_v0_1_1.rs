@@ -55,17 +55,12 @@ const SESSIONS_V0_0_0: &str = include_str!("../schemas/snapshot/sessions/v0.0.0.
 const SESSIONS_V0_1_1: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
 const SESSIONS_V0_2_0: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const SESSIONS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/sessions/v0.0.0_v0.1.1_0001_0001.sql");
-const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0002.sql");
+const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0001.sql");
 const SESSIONS_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
     name: "initial",
     sql: SESSIONS_V0_0_0,
-  },
-  Migration {
-    version: 2,
-    name: "mark_v0_2_0",
-    sql: include_str!("../schemas/migrations/sessions/0002_mark_v0_2_0.sql"),
   },
 ];
 
@@ -73,7 +68,7 @@ const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
 const USAGE_V0_1_1: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
 const USAGE_V0_2_0: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
 const USAGE_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/usage/v0.0.0_v0.1.1_0001_0004.sql");
-const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0005.sql");
+const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0004.sql");
 const USAGE_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -94,11 +89,6 @@ const USAGE_MIGRATIONS: &[Migration] = &[
     version: 4,
     name: "add_usage_breakdown",
     sql: include_str!("../schemas/migrations/usage/0004_add_usage_breakdown.sql"),
-  },
-  Migration {
-    version: 5,
-    name: "mark_v0_2_0",
-    sql: include_str!("../schemas/migrations/usage/0005_mark_v0_2_0.sql"),
   },
 ];
 
@@ -160,7 +150,7 @@ const SESSIONS_V0_2_0_CASE: DbCase = DbCase {
   v0_0_0: SESSIONS_V0_0_0,
   target_snapshot: SESSIONS_V0_2_0,
   target_squash: SESSIONS_SQUASH_V0_2_0,
-  target_version: 2,
+  target_version: 1,
   squash_start_version: 1,
   migrations: SESSIONS_MIGRATIONS,
   meta_json: include_str!("fixtures/sessions_meta_v0.1.1.json"),
@@ -186,7 +176,7 @@ const USAGE_V0_2_0_CASE: DbCase = DbCase {
   v0_0_0: USAGE_V0_0_0,
   target_snapshot: USAGE_V0_2_0,
   target_squash: USAGE_SQUASH_V0_2_0,
-  target_version: 5,
+  target_version: 4,
   squash_start_version: 4,
   migrations: USAGE_MIGRATIONS,
   meta_json: include_str!("fixtures/usage_meta_v0.1.1.json"),

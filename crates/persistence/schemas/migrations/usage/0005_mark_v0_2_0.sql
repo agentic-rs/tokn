@@ -1,3 +1,0 @@
--- v0.2.0 keeps the usage schema unchanged.
--- This migration records that existing usage.db files have been reviewed
--- for the v0.2.0 release line.

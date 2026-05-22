@@ -23,11 +23,6 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "initial",
     sql: include_str!("../schemas/snapshot/sessions/v0.0.0.sql"),
   },
-  migrate::Migration {
-    version: 2,
-    name: "mark_v0_2_0",
-    sql: include_str!("../schemas/migrations/sessions/0002_mark_v0_2_0.sql"),
-  },
 ];
 
 pub fn latest_version() -> u32 {
