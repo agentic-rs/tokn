@@ -394,7 +394,9 @@ mod tests {
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
 
     assert_eq!(
-      extracted_with(body.clone(), None, raw.clone(), None).initiator.as_deref(),
+      extracted_with(body.clone(), None, raw.clone(), None)
+        .initiator
+        .as_deref(),
       None
     );
     assert_eq!(

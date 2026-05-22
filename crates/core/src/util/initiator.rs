@@ -3,9 +3,7 @@ use serde_json::Value;
 /// Classify a chat-like request as a fresh user turn ("user") or as a
 /// continuation of an in-flight tool-use loop ("agent").
 pub fn classify_initiator(body: &Value) -> Option<&'static str> {
-  let Some(msgs) = body.get("messages").and_then(|v| v.as_array()) else {
-    return None;
-  };
+  let msgs = body.get("messages").and_then(|v| v.as_array())?;
   for m in msgs.iter().rev() {
     match m.get("role").and_then(|r| r.as_str()) {
       Some("system") => continue,
@@ -20,9 +18,7 @@ pub fn classify_initiator(body: &Value) -> Option<&'static str> {
 
 /// Responses-API variant of [`classify_initiator`].
 pub fn classify_initiator_responses(body: &Value) -> Option<&'static str> {
-  let Some(input) = body.get("input") else {
-    return None;
-  };
+  let input = body.get("input")?;
   if input.is_string() {
     return None;
   }
