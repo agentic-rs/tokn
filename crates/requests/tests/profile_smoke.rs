@@ -34,6 +34,9 @@ use tokn_requests::stages::{
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
+const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str =
+  include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
+
 /// Minimal `Provider` used only to satisfy the new typed
 /// `AccountHandle` requirement on `SelectorOutcome::Selected`.
 struct StubProvider {
@@ -541,6 +544,21 @@ fn recording_handle(
   )
 }
 
+fn load_agent_id_header_fixture(json: &str) -> HeaderMap {
+  let entries: Vec<serde_json::Map<String, Value>> = serde_json::from_str(json).expect("fixture is a JSON array");
+  let mut headers = HeaderMap::new();
+  for entry in entries {
+    assert_eq!(entry.len(), 1, "each fixture row must contain exactly one header");
+    let (name, value) = entry.into_iter().next().expect("fixture row must contain one header");
+    let value = value
+      .as_str()
+      .expect("fixture header value must be a string")
+      .to_string();
+    headers.insert(name, value);
+  }
+  headers
+}
+
 #[tokio::test]
 async fn full_pipeline_buffered_happy_path() {
   let (bus, log) = capture_bus();
@@ -653,18 +671,15 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
     .unwrap()
     .clone()
     .expect("provider should observe client headers");
-  assert_eq!(
-    seen.get("originator").map(|value| value.as_str()),
-    Some("codex_exec")
-  );
-  assert_eq!(
-    seen.get("user-agent").map(|value| value.as_str()),
-    Some("codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)")
-  );
-  assert_eq!(
-    seen.get("openai-beta").map(|value| value.as_str()),
-    Some("responses=v1")
-  );
+  let expected = load_agent_id_header_fixture(CODEX_CLI_OPENAI_SEND_HEADERS_JSON);
+  for (name, value) in &expected {
+    assert_eq!(
+      seen.get(name).map(|seen_value| seen_value.as_str()),
+      Some(value.as_str()),
+      "header fixture mismatch for {}",
+      name.as_str()
+    );
+  }
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------
