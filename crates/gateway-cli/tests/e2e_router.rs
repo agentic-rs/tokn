@@ -212,8 +212,9 @@ async fn router_stream_returns_sse_and_persists_drained_stream_row() {
     response
       .headers()
       .get("content-type")
-      .and_then(|value| value.to_str().ok()),
-    Some("text/event-stream")
+      .and_then(|value| value.to_str().ok())
+      .map(|value| value.starts_with("text/event-stream")),
+    Some(true)
   );
   let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
   let body = std::str::from_utf8(&body).unwrap();
