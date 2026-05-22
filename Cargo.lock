@@ -2970,6 +2970,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "serde_yaml",
  "smol_str",
  "snafu",
  "tokio",

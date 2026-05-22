@@ -34,13 +34,13 @@ use tokn_requests::stages::{
 };
 use tokn_requests::{Event, EventBus, PipelineError, PipelineRunner, Profile, RawInbound, RetryPolicy};
 
-const CODEX_CLI_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/codex-cli_openai_send.json");
-const OPENCODE_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/opencode_openai_send.json");
-const CLAUDE_CODE_OPENAI_SEND_HEADERS_JSON: &str =
-  include_str!("fixtures/agent_id_headers/claude-code_openai_send.json");
-const CLINE_OPENAI_SEND_HEADERS_JSON: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.json");
-const COPILOT_CLI_OPENAI_SEND_HEADERS_JSON: &str =
-  include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.json");
+const CODEX_CLI_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/codex-cli_openai_send.yaml");
+const OPENCODE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/opencode_openai_send.yaml");
+const CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML: &str =
+  include_str!("fixtures/agent_id_headers/claude-code_openai_send.yaml");
+const CLINE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.yaml");
+const COPILOT_CLI_OPENAI_SEND_HEADERS_YAML: &str =
+  include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.yaml");
 
 #[derive(Debug, PartialEq, Eq)]
 struct HeaderFixtureEntry {
@@ -52,7 +52,7 @@ struct AgentHeaderCase {
   name: &'static str,
   agent_id: AgentId,
   provider_id: &'static str,
-  fixture_json: &'static str,
+  fixture_yaml: &'static str,
 }
 
 /// Minimal `Provider` used only to satisfy the new typed
@@ -562,8 +562,8 @@ fn recording_handle(
   )
 }
 
-fn load_agent_id_header_fixture(json: &str) -> Vec<HeaderFixtureEntry> {
-  let entries: Vec<serde_json::Map<String, Value>> = serde_json::from_str(json).expect("fixture is a JSON array");
+fn load_agent_id_header_fixture(yaml: &str) -> Vec<HeaderFixtureEntry> {
+  let entries: Vec<serde_json::Map<String, Value>> = serde_yaml::from_str(yaml).expect("fixture is a YAML array");
   let mut headers = Vec::with_capacity(entries.len());
   for entry in entries {
     assert_eq!(entry.len(), 1, "each fixture row must contain exactly one header");
@@ -660,31 +660,31 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
       name: "opencode_openai",
       agent_id: AgentId::Opencode,
       provider_id: "openai",
-      fixture_json: OPENCODE_OPENAI_SEND_HEADERS_JSON,
+      fixture_yaml: OPENCODE_OPENAI_SEND_HEADERS_YAML,
     },
     AgentHeaderCase {
       name: "codex_cli_openai",
       agent_id: AgentId::CodexCli,
       provider_id: "openai",
-      fixture_json: CODEX_CLI_OPENAI_SEND_HEADERS_JSON,
+      fixture_yaml: CODEX_CLI_OPENAI_SEND_HEADERS_YAML,
     },
     AgentHeaderCase {
       name: "claude_code_openai",
       agent_id: AgentId::ClaudeCode,
       provider_id: "openai",
-      fixture_json: CLAUDE_CODE_OPENAI_SEND_HEADERS_JSON,
+      fixture_yaml: CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML,
     },
     AgentHeaderCase {
       name: "cline_openai",
       agent_id: AgentId::Cline,
       provider_id: "openai",
-      fixture_json: CLINE_OPENAI_SEND_HEADERS_JSON,
+      fixture_yaml: CLINE_OPENAI_SEND_HEADERS_YAML,
     },
     AgentHeaderCase {
       name: "copilot_cli_openai",
       agent_id: AgentId::CopilotCli,
       provider_id: "openai",
-      fixture_json: COPILOT_CLI_OPENAI_SEND_HEADERS_JSON,
+      fixture_yaml: COPILOT_CLI_OPENAI_SEND_HEADERS_YAML,
     },
   ];
 
@@ -723,7 +723,7 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
       .unwrap()
       .clone()
       .unwrap_or_else(|| panic!("{}: provider should observe client headers", case.name));
-    let expected = load_agent_id_header_fixture(case.fixture_json);
+    let expected = load_agent_id_header_fixture(case.fixture_yaml);
     let actual = seen
       .iter()
       .map(|(name, value)| HeaderFixtureEntry {
