@@ -249,6 +249,8 @@ pub fn read_request_row(
   Ok(None)
 }
 
+const JSON_TEXT_COLUMNS: &[&str] = &["ctx_json", "params_json", "usage_json"];
+
 fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::Map<String, serde_json::Value>>> {
   let mut stmt = conn.prepare("SELECT * FROM requests WHERE request_id = ? LIMIT 1")?;
   let col_count = stmt.column_count();
@@ -269,9 +271,10 @@ fn select_row(conn: &Connection, request_id: &str) -> Result<Option<serde_json::
         .map(serde_json::Value::Number)
         .unwrap_or(serde_json::Value::Null),
       rusqlite::types::ValueRef::Text(t) => match std::str::from_utf8(t) {
-        Ok(s) => {
+        Ok(s) if JSON_TEXT_COLUMNS.contains(&name.as_str()) => {
           serde_json::from_str::<serde_json::Value>(s).unwrap_or_else(|_| serde_json::Value::String(s.to_string()))
         }
+        Ok(s) => serde_json::Value::String(s.to_string()),
         Err(_) => serde_json::Value::Array(t.iter().map(|b| serde_json::Value::from(*b)).collect()),
       },
       rusqlite::types::ValueRef::Blob(b) => match std::str::from_utf8(b) {
@@ -389,5 +392,35 @@ mod tests {
       .query_row([], |r| r.get(0))
       .unwrap();
     assert_eq!(v, 8);
+  }
+
+  #[test]
+  fn read_request_row_only_json_decodes_known_text_columns() {
+    let dir = std::env::temp_dir().join(format!("tokn-router-req-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("2099-01-01.db");
+    let conn = open_day_db(&path).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_connection (request_id, ts, endpoint, request_error, ctx_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params!["req-json-text", 1_i64, "null", "true", r#"{"mode":"route"}"#],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_metadata (request_id, model, params_json, usage_json)
+         VALUES (?1, ?2, ?3, ?4)",
+        params!["req-json-text", "model", r#"{"stream":true}"#, r#"{"input":1}"#],
+      )
+      .unwrap();
+
+    let row = select_row(&conn, "req-json-text").unwrap().unwrap();
+
+    assert_eq!(row["endpoint"], serde_json::Value::String("null".to_string()));
+    assert_eq!(row["request_error"], serde_json::Value::String("true".to_string()));
+    assert_eq!(row["ctx_json"], serde_json::json!({"mode": "route"}));
+    assert_eq!(row["params_json"], serde_json::json!({"stream": true}));
+    assert_eq!(row["usage_json"], serde_json::json!({"input": 1}));
   }
 }
