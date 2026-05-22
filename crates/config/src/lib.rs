@@ -9,10 +9,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tokn_core::provider::{
-  ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_LLAMA_CPP, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN, ID_ZHIPUAI,
-  ID_ZHIPUAI_CODING_PLAN,
-};
+use tokn_core::provider::ID_GITHUB_COPILOT;
 
 pub const DEFAULT_PORT: u16 = 4141;
 pub const DEFAULT_HOST: &str = "127.0.0.1";
@@ -311,14 +308,6 @@ impl ProxyModeConfig {
         return error::ProxyPassthroughHostSnafu { host: host.clone() }.fail();
       }
     }
-    for provider_id in self.provider_modes.keys() {
-      if !is_known_proxy_provider(provider_id) {
-        return error::ProxyProviderModeProviderSnafu {
-          provider_id: provider_id.clone(),
-        }
-        .fail();
-      }
-    }
     Ok(())
   }
 
@@ -527,21 +516,6 @@ fn is_proxy_host(s: &str) -> bool {
       .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*'))
 }
 
-fn is_known_proxy_provider(provider_id: &str) -> bool {
-  matches!(
-    provider_id,
-    ID_GITHUB_COPILOT
-      | ID_DEEPSEEK
-      | ID_LLAMA_CPP
-      | ID_OPENAI
-      | ID_CODEX
-      | ID_ZAI_CODING_PLAN
-      | ID_ZAI
-      | ID_ZHIPUAI_CODING_PLAN
-      | ID_ZHIPUAI
-  )
-}
-
 pub fn project_dirs() -> Result<ProjectDirs> {
   tokn_core::util::paths::project_dirs().ok_or(Error::NoProjectDirs)
 }
@@ -604,20 +578,6 @@ mod tests {
       cfg.proxy_mode.provider_modes.get("openai"),
       Some(&ProxyProviderMode::Switch)
     );
-  }
-
-  #[test]
-  fn proxy_mode_provider_modes_reject_unknown_provider() {
-    let cfg: Config = toml::from_str(
-      r#"
-        [proxy_mode.provider_modes]
-        made-up-provider = "switch"
-      "#,
-    )
-    .expect("config should deserialize");
-    let err = cfg.validate().expect_err("unknown provider id must fail validation");
-    assert!(err.to_string().contains("unknown provider id"));
-    assert!(err.to_string().contains("made-up-provider"));
   }
 
   #[test]
