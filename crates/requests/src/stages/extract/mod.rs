@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_core::util::initiator::{classify_initiator as classify_chat_initiator, classify_initiator_responses};
 use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
@@ -105,23 +106,18 @@ fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
     .unwrap_or(false)
 }
 
-/// Conservative heuristic mirroring `crates/router::util::initiator`.
-/// Returns `Some("agent")` only for concrete agent evidence and `None`
-/// otherwise, including both clear user turns and unknown shapes.
-///
-/// This is intentionally simpler than the legacy/shared implementation:
-/// requests still uses a local body-shape check until the classifier is
-/// extracted to a shared crate.
 fn classify_initiator(body: &Value) -> Option<&'static str> {
-  let has_tools = body
-    .get("tools")
-    .and_then(Value::as_array)
-    .map(|a| !a.is_empty())
-    .unwrap_or(false);
-  if has_tools {
-    Some("agent")
+  if body.get("input").is_some() {
+    classify_initiator_responses(body)
   } else {
-    None
+    classify_chat_initiator(body).or_else(|| {
+      let has_tools = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+      has_tools.then_some("agent")
+    })
   }
 }
 
@@ -210,6 +206,32 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(ex.initiator.as_deref(), Some("agent"));
+  }
+
+  #[tokio::test]
+  async fn user_initiator_when_messages_show_user_turn() {
+    let body = serde_json::json!({
+      "model": "m",
+      "messages": [{"role":"system","content":"x"},{"role":"user","content":"hi"}]
+    });
+    let ex = DefaultExtract
+      .extract(&ctx(), raw(HeaderMap::new(), body))
+      .await
+      .unwrap();
+    assert_eq!(ex.initiator.as_deref(), Some("user"));
+  }
+
+  #[tokio::test]
+  async fn user_initiator_for_single_response_input_object() {
+    let body = serde_json::json!({
+      "model": "m",
+      "input": {"role":"user","content":"hi"}
+    });
+    let ex = DefaultExtract
+      .extract(&ctx(), raw(HeaderMap::new(), body))
+      .await
+      .unwrap();
+    assert_eq!(ex.initiator.as_deref(), Some("user"));
   }
 
   #[tokio::test]

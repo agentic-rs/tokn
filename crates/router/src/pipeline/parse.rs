@@ -4,6 +4,7 @@ use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
 use serde_json::Value;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
+use tokn_core::util::initiator::{classify_initiator, classify_initiator_responses};
 use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 
 #[derive(Clone, Debug)]
@@ -44,7 +45,7 @@ pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExt
     .filter(|v| v == "user" || v == "agent");
   let initiator = header_initiator
     .clone()
-    .or_else(|| classify_initiator(body).map(str::to_string));
+    .or_else(|| classify_initiator_for_body(body).map(str::to_string));
   BodyExtract {
     model: body
       .get("model")
@@ -122,46 +123,10 @@ impl RequestParser for MessagesParser {
   }
 }
 
-fn classify_initiator(body: &Value) -> Option<&'static str> {
+fn classify_initiator_for_body(body: &Value) -> Option<&'static str> {
   if body.get("input").is_some() {
     classify_initiator_responses(body)
   } else {
-    classify_initiator_chat(body)
+    classify_initiator(body)
   }
-}
-
-fn classify_initiator_chat(body: &Value) -> Option<&'static str> {
-  let msgs = body.get("messages").and_then(|v| v.as_array())?;
-  for message in msgs.iter().rev() {
-    match message.get("role").and_then(|role| role.as_str()) {
-      Some("system") => continue,
-      Some("tool") | Some("assistant") => return Some("agent"),
-      Some("user") => return None,
-      _ => return None,
-    }
-  }
-  None
-}
-
-fn classify_initiator_responses(body: &Value) -> Option<&'static str> {
-  let input = body.get("input")?;
-  if input.is_string() {
-    return None;
-  }
-  let items = input.as_array()?;
-  for item in items.iter().rev() {
-    match item.get("type").and_then(|typ| typ.as_str()) {
-      Some("function_call_output" | "tool_result" | "computer_call_output") => return Some("agent"),
-      Some("function_call" | "tool_call" | "reasoning") => return Some("agent"),
-      Some("message") | None => {}
-      Some(_) => return None,
-    }
-    match item.get("role").and_then(|role| role.as_str()) {
-      Some("system") | Some("developer") => continue,
-      Some("tool") | Some("assistant") => return Some("agent"),
-      Some("user") => return None,
-      _ => return None,
-    }
-  }
-  None
 }
