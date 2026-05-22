@@ -217,7 +217,7 @@ async fn health() -> &'static str {
 pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
-  validate_proxy_provider_modes(cfg, provider_registry.as_ref())?;
+  validate_proxy_provider_modes(cfg, provider_registry.as_ref());
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
@@ -248,16 +248,15 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   })
 }
 
-fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) -> Result<()> {
+fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) {
   for provider_id in cfg.proxy_mode.provider_modes.keys() {
     if provider_registry.resolve(provider_id).is_none() {
-      anyhow::bail!(
-        "[proxy_mode].provider_modes contains an unknown provider id: {:?}",
-        provider_id
+      tracing::warn!(
+        provider_id = %provider_id,
+        "ignoring unresolved [proxy_mode].provider_modes entry"
       );
     }
   }
-  Ok(())
 }
 
 /// Construct the default `tokn-requests` pipeline for router-owned JSON
@@ -496,7 +495,7 @@ mod tests {
   }
 
   #[test]
-  fn build_state_rejects_unknown_proxy_provider_mode_provider() {
+  fn build_state_allows_unknown_proxy_provider_mode_provider() {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
     cfg
@@ -507,12 +506,9 @@ mod tests {
 
     let res = build_state(&cfg, &[], Arc::new(bus));
     assert!(
-      res.is_err(),
-      "unknown provider ids should fail against the real registry"
+      res.is_ok(),
+      "unknown provider ids should only warn and not fail state construction"
     );
-    let err = res.err().expect("checked above");
-    assert!(err.to_string().contains("unknown provider id"));
-    assert!(err.to_string().contains("made-up-provider"));
   }
 
   #[tokio::test]
