@@ -43,7 +43,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: UsageArgs) -> Result<()> {
       r.account,
       r.provider,
       r.model,
-      r.initiator,
+      r.initiator.as_deref().unwrap_or("unknown"),
       r.count,
       r.input_tokens,
       r.output_tokens,

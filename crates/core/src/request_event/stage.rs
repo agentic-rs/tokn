@@ -124,7 +124,7 @@ pub struct ExtractedSummary {
   pub stream: bool,
   pub session_id: Option<SmolStr>,
   pub project_id: Option<SmolStr>,
-  pub initiator: SmolStr,
+  pub initiator: Option<SmolStr>,
   pub header_initiator: Option<SmolStr>,
   pub route_mode_hint: Option<SmolStr>,
   pub headers: HeaderMap,

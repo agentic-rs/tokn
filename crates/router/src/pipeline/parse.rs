@@ -4,6 +4,7 @@ use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
 use serde_json::Value;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
+use tokn_core::util::initiator::{classify_initiator, classify_initiator_responses};
 use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 
 #[derive(Clone, Debug)]
@@ -16,7 +17,7 @@ pub(crate) struct HeaderExtract {
 pub(crate) struct BodyExtract {
   pub model: String,
   pub stream: bool,
-  pub initiator: String,
+  pub initiator: Option<String>,
   pub header_initiator: Option<String>,
 }
 
@@ -44,7 +45,7 @@ pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExt
     .filter(|v| v == "user" || v == "agent");
   let initiator = header_initiator
     .clone()
-    .unwrap_or_else(|| classify_initiator(body).to_string());
+    .or_else(|| classify_initiator_for_body(body).map(str::to_string));
   BodyExtract {
     model: body
       .get("model")
@@ -122,10 +123,10 @@ impl RequestParser for MessagesParser {
   }
 }
 
-fn classify_initiator(body: &Value) -> &'static str {
+fn classify_initiator_for_body(body: &Value) -> Option<&'static str> {
   if body.get("input").is_some() {
-    crate::util::initiator::classify_initiator_responses(body)
+    classify_initiator_responses(body)
   } else {
-    crate::util::initiator::classify_initiator(body)
+    classify_initiator(body)
   }
 }

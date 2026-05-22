@@ -221,7 +221,7 @@ pub fn dry_run_request(
         bearer_token: None,
         content_encoding: prepared.content_encoding.map(|encoding| encoding.as_str()),
         stream: prepared.meta.stream,
-        initiator: prepared.meta.initiator.as_str(),
+        initiator: prepared.meta.initiator.as_deref().unwrap_or("user"),
         inbound_headers: &inbound_lh,
         vars: &prepared.vars,
       },

@@ -1,53 +1,68 @@
 use serde_json::Value;
 
-/// Classify a chat-like request as a fresh user turn ("user") or as a
-/// continuation of an in-flight tool-use loop ("agent").
-pub fn classify_initiator(body: &Value) -> &'static str {
-  let Some(msgs) = body.get("messages").and_then(|v| v.as_array()) else {
-    return "user";
-  };
+/// Best-effort initiator classifier for chat-style payloads.
+///
+/// Contract:
+/// - `Some("user")`: the payload carries concrete evidence of a direct user
+///   turn.
+/// - `Some("agent")`: the payload carries concrete evidence that this is
+///   part of an agent/tool loop.
+/// - `None`: the shape is unknown or insufficiently structured, so we avoid
+///   asserting either initiator.
+pub fn classify_initiator(body: &Value) -> Option<&'static str> {
+  let msgs = body.get("messages").and_then(|v| v.as_array())?;
   for m in msgs.iter().rev() {
     match m.get("role").and_then(|r| r.as_str()) {
       Some("system") => continue,
-      Some("tool") => return "agent",
-      Some("assistant") => return "agent",
-      Some("user") => return "user",
-      _ => return "agent",
+      Some("tool") => return Some("agent"),
+      Some("assistant") => return Some("agent"),
+      Some("user") => return Some("user"),
+      _ => return None,
     }
   }
-  "user"
+  None
 }
 
 /// Responses-API variant of [`classify_initiator`].
-pub fn classify_initiator_responses(body: &Value) -> &'static str {
-  let Some(input) = body.get("input") else {
-    return "user";
-  };
+///
+/// Shares the same contract:
+/// - `Some("user")`: concrete user-turn evidence.
+/// - `Some("agent")`: concrete tool/assistant continuation evidence.
+/// - `None`: unknown or insufficiently structured input.
+pub fn classify_initiator_responses(body: &Value) -> Option<&'static str> {
+  let input = body.get("input")?;
   if input.is_string() {
-    return "user";
+    return Some("user");
   }
-  let Some(items) = input.as_array() else {
-    return "agent";
-  };
-  for it in items.iter().rev() {
-    let typ = it.get("type").and_then(|t| t.as_str());
-    if let Some(t) = typ {
-      match t {
-        "function_call_output" | "tool_result" | "computer_call_output" => return "agent",
-        "function_call" | "tool_call" | "reasoning" => return "agent",
-        "message" => {}
-        _ => return "agent",
+  if let Some(items) = input.as_array() {
+    for it in items.iter().rev() {
+      let classified = classify_initiator_response_item(it);
+      if classified.is_some() {
+        return classified;
       }
     }
-    match it.get("role").and_then(|r| r.as_str()) {
-      Some("system") | Some("developer") => continue,
-      Some("tool") => return "agent",
-      Some("assistant") => return "agent",
-      Some("user") => return "user",
-      _ => return "agent",
+    return None;
+  }
+  classify_initiator_response_item(input)
+}
+
+fn classify_initiator_response_item(item: &Value) -> Option<&'static str> {
+  let typ = item.get("type").and_then(|t| t.as_str());
+  if let Some(t) = typ {
+    match t {
+      "function_call_output" | "tool_result" | "computer_call_output" => return Some("agent"),
+      "function_call" | "tool_call" | "reasoning" => return Some("agent"),
+      "message" => {}
+      _ => return None,
     }
   }
-  "user"
+  match item.get("role").and_then(|r| r.as_str()) {
+    Some("system") | Some("developer") => None,
+    Some("tool") => Some("agent"),
+    Some("assistant") => Some("agent"),
+    Some("user") => Some("user"),
+    _ => None,
+  }
 }
 
 #[cfg(test)]
@@ -58,12 +73,12 @@ mod responses_tests {
   #[test]
   fn bare_string_input_is_user() {
     let b = json!({ "input": "hello" });
-    assert_eq!(classify_initiator_responses(&b), "user");
+    assert_eq!(classify_initiator_responses(&b), Some("user"));
   }
 
   #[test]
-  fn missing_input_defaults_to_user() {
-    assert_eq!(classify_initiator_responses(&json!({})), "user");
+  fn missing_input_is_unknown() {
+    assert_eq!(classify_initiator_responses(&json!({})), None);
   }
 
   #[test]
@@ -72,7 +87,7 @@ mod responses_tests {
         { "role": "system", "content": "x" },
         { "role": "user", "content": "hi" }
     ]});
-    assert_eq!(classify_initiator_responses(&b), "user");
+    assert_eq!(classify_initiator_responses(&b), Some("user"));
   }
 
   #[test]
@@ -82,7 +97,25 @@ mod responses_tests {
         { "type": "function_call", "name": "f" },
         { "type": "function_call_output", "output": "42" }
     ]});
-    assert_eq!(classify_initiator_responses(&b), "agent");
+    assert_eq!(classify_initiator_responses(&b), Some("agent"));
+  }
+
+  #[test]
+  fn non_array_input_detects_user_role() {
+    let b = json!({ "input": {"role": "user", "content": "x"} });
+    assert_eq!(classify_initiator_responses(&b), Some("user"));
+  }
+
+  #[test]
+  fn non_array_input_detects_agent_type() {
+    let b = json!({ "input": {"type": "function_call_output", "output": "x"} });
+    assert_eq!(classify_initiator_responses(&b), Some("agent"));
+  }
+
+  #[test]
+  fn unknown_response_type_is_unknown() {
+    let b = json!({ "input": [{ "type": "mystery" }] });
+    assert_eq!(classify_initiator_responses(&b), None);
   }
 }
 
@@ -97,7 +130,7 @@ mod tests {
         {"role":"system","content":"x"},
         {"role":"user","content":"hi"}
     ]});
-    assert_eq!(classify_initiator(&b), "user");
+    assert_eq!(classify_initiator(&b), Some("user"));
   }
 
   #[test]
@@ -107,7 +140,7 @@ mod tests {
         {"role":"assistant","tool_calls":[{"id":"1"}]},
         {"role":"tool","tool_call_id":"1","content":"42"}
     ]});
-    assert_eq!(classify_initiator(&b), "agent");
+    assert_eq!(classify_initiator(&b), Some("agent"));
   }
 
   #[test]
@@ -116,12 +149,18 @@ mod tests {
         {"role":"user","content":"hi"},
         {"role":"assistant","content":"ok"}
     ]});
-    assert_eq!(classify_initiator(&b), "agent");
+    assert_eq!(classify_initiator(&b), Some("agent"));
   }
 
   #[test]
-  fn empty_defaults_to_user() {
+  fn empty_is_unknown() {
     let b = json!({});
-    assert_eq!(classify_initiator(&b), "user");
+    assert_eq!(classify_initiator(&b), None);
+  }
+
+  #[test]
+  fn unknown_chat_role_is_unknown() {
+    let b = json!({"messages":[{"role":"mystery","content":"hi"}]});
+    assert_eq!(classify_initiator(&b), None);
   }
 }

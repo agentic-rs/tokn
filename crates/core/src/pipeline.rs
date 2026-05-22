@@ -19,8 +19,10 @@ pub struct RequestMeta {
   /// Retry attempt number (0 = first attempt, 1 = first retry, ...).
   pub attempt: u32,
   pub project_id: Option<String>,
-  /// Merged initiator (header takes precedence over body-derived).
-  pub initiator: String,
+  /// Persistable initiator when the request carried a concrete signal.
+  /// `None` means the runtime may still fall back internally, but we
+  /// should not treat that default as ground truth in storage.
+  pub initiator: Option<String>,
   /// Raw initiator from x-initiator header, if valid.
   pub header_initiator: Option<String>,
   pub inbound_headers: HeaderMap,

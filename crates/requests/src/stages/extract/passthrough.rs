@@ -70,9 +70,9 @@ impl ExtractStage for PassthroughExtract {
       .filter(|s| s == "user" || s == "agent")
       .map(SmolStr::new);
 
-    // Passthrough has no body-shape classifier — fall back to "user"
-    // when no header initiator is provided.
-    let initiator = header_initiator.clone().unwrap_or_else(|| SmolStr::new("user"));
+    // Passthrough has no body-shape classifier, so missing header
+    // initiator stays unknown for persistence purposes.
+    let initiator = header_initiator.clone();
 
     let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
     let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
@@ -210,7 +210,7 @@ mod tests {
     assert_eq!(ex.project_id.as_deref(), Some("/p"));
     assert_eq!(ex.route_mode_hint.as_deref(), Some("passthrough"));
     assert!(ex.agent_id.is_none());
-    assert_eq!(ex.initiator, "agent");
+    assert_eq!(ex.initiator.as_deref(), Some("agent"));
     assert_eq!(ex.header_initiator.as_deref(), Some("agent"));
   }
 }

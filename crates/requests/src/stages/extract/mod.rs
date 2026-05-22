@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_core::util::initiator::{classify_initiator as classify_chat_initiator, classify_initiator_responses};
 use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
@@ -54,7 +55,7 @@ impl ExtractStage for DefaultExtract {
 
     let initiator = header_initiator
       .clone()
-      .unwrap_or_else(|| SmolStr::new(classify_initiator(&body_json)));
+      .or_else(|| classify_initiator(&body_json).map(SmolStr::new));
 
     let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
     let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
@@ -105,22 +106,18 @@ fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
     .unwrap_or(false)
 }
 
-/// Conservative heuristic mirroring `crates/router::util::initiator`. We
-/// classify based purely on body shape since requests doesn't yet depend on
-/// the legacy crate's helpers. The detail is "agent" iff a `tools` array is
-/// present and non-empty (common signal of agent-style calls); otherwise
-/// "user". This is intentionally simpler than the legacy implementation —
-/// PR2 will port the full classifier when we extract it to a shared crate.
-fn classify_initiator(body: &Value) -> &'static str {
-  let has_tools = body
-    .get("tools")
-    .and_then(Value::as_array)
-    .map(|a| !a.is_empty())
-    .unwrap_or(false);
-  if has_tools {
-    "agent"
+fn classify_initiator(body: &Value) -> Option<&'static str> {
+  if body.get("input").is_some() {
+    classify_initiator_responses(body)
   } else {
-    "user"
+    classify_chat_initiator(body).or_else(|| {
+      let has_tools = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+      has_tools.then_some("agent")
+    })
   }
 }
 
@@ -165,14 +162,14 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn extracts_model_and_default_initiator() {
+  async fn extracts_model_and_unknown_initiator_without_signal() {
     let body = serde_json::json!({"model": "gpt-x", "messages": []});
     let ex = DefaultExtract
       .extract(&ctx(), raw(HeaderMap::new(), body))
       .await
       .expect("extract should succeed");
     assert_eq!(ex.model, "gpt-x");
-    assert_eq!(ex.initiator, "user");
+    assert_eq!(ex.initiator, None);
     assert!(!ex.stream);
     assert!(ex.agent_id.is_none());
   }
@@ -208,7 +205,33 @@ mod tests {
       .extract(&ctx(), raw(HeaderMap::new(), body))
       .await
       .unwrap();
-    assert_eq!(ex.initiator, "agent");
+    assert_eq!(ex.initiator.as_deref(), Some("agent"));
+  }
+
+  #[tokio::test]
+  async fn user_initiator_when_messages_show_user_turn() {
+    let body = serde_json::json!({
+      "model": "m",
+      "messages": [{"role":"system","content":"x"},{"role":"user","content":"hi"}]
+    });
+    let ex = DefaultExtract
+      .extract(&ctx(), raw(HeaderMap::new(), body))
+      .await
+      .unwrap();
+    assert_eq!(ex.initiator.as_deref(), Some("user"));
+  }
+
+  #[tokio::test]
+  async fn user_initiator_for_single_response_input_object() {
+    let body = serde_json::json!({
+      "model": "m",
+      "input": {"role":"user","content":"hi"}
+    });
+    let ex = DefaultExtract
+      .extract(&ctx(), raw(HeaderMap::new(), body))
+      .await
+      .unwrap();
+    assert_eq!(ex.initiator.as_deref(), Some("user"));
   }
 
   #[tokio::test]
@@ -216,7 +239,7 @@ mod tests {
     let body = serde_json::json!({"model": "m", "tools": [{"type":"function"}]});
     let headers = header_map(&[("x-initiator", "user")]);
     let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
-    assert_eq!(ex.initiator, "user");
+    assert_eq!(ex.initiator.as_deref(), Some("user"));
     assert_eq!(ex.header_initiator.as_deref(), Some("user"));
   }
 
