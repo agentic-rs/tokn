@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokn_accounts::AccountHandle;
 use tokn_core::account::AccountConfig;
+use tokn_core::AgentId;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
@@ -423,11 +424,28 @@ impl AccountSelector for CannedSelector {
   ) -> Result<SelectorOutcome, PipelineError> {
     Ok(SelectorOutcome::Selected {
       account_id: SmolStr::new(self.handle.config.load().id.clone()),
-      provider_id: SmolStr::new("zai-coding-plan"),
+      provider_id: SmolStr::new(self.handle.provider.id()),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("glm-4"),
       account_handle: self.handle.clone(),
     })
+  }
+}
+
+struct FixedAgentExtract {
+  agent_id: AgentId,
+}
+
+#[async_trait]
+impl tokn_requests::stage_traits::ExtractStage for FixedAgentExtract {
+  async fn extract(
+    &self,
+    ctx: &tokn_requests::PipelineCtx,
+    raw: RawInbound,
+  ) -> Result<tokn_requests::stage_traits::Extracted, PipelineError> {
+    let mut extracted = DefaultExtract.extract(ctx, raw).await?;
+    extracted.agent_id = Some(self.agent_id.clone());
+    Ok(extracted)
   }
 }
 
@@ -438,6 +456,89 @@ fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
     .body(body)
     .unwrap();
   reqwest::Response::from(resp)
+}
+
+struct RecordingProvider {
+  info: ProviderInfo,
+  resp: Mutex<Option<reqwest::Response>>,
+  seen_client_headers: Arc<Mutex<Option<HeaderMap>>>,
+}
+
+#[async_trait]
+impl Provider for RecordingProvider {
+  fn id(&self) -> &str {
+    &self.info.id
+  }
+
+  fn info(&self) -> &ProviderInfo {
+    &self.info
+  }
+
+  async fn list_models(&self, _http: &reqwest::Client) -> ProviderResult<Value> {
+    Ok(Value::Null)
+  }
+
+  async fn chat(&self, ctx: RequestCtx<'_>) -> ProviderResult<reqwest::Response> {
+    *self.seen_client_headers.lock().unwrap() = ctx.client_headers.clone();
+    Ok(
+      self
+        .resp
+        .lock()
+        .unwrap()
+        .take()
+        .expect("RecordingProvider::chat: no canned response armed"),
+    )
+  }
+}
+
+fn recording_handle(
+  provider_id: &str,
+  account_id: &str,
+  resp: reqwest::Response,
+) -> (Arc<AccountHandle>, Arc<Mutex<Option<HeaderMap>>>) {
+  let info = ProviderInfo {
+    id: provider_id.into(),
+    aliases: &[],
+    display_name: "recording",
+    upstream_url: String::new(),
+    auth_kind: AuthKind::StaticApiKey,
+    default_models: vec![],
+    default_endpoints: &[Endpoint::ChatCompletions],
+    model_cache: Arc::new(ModelCache::default()),
+  };
+  let cfg = AccountConfig {
+    id: account_id.to_string(),
+    provider: provider_id.to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  };
+  let seen_client_headers = Arc::new(Mutex::new(None));
+  let provider = RecordingProvider {
+    info,
+    resp: Mutex::new(Some(resp)),
+    seen_client_headers: seen_client_headers.clone(),
+  };
+  (
+    Arc::new(AccountHandle::new(Arc::new(cfg), Arc::new(provider))),
+    seen_client_headers,
+  )
 }
 
 #[tokio::test]
@@ -514,6 +615,56 @@ async fn full_pipeline_buffered_happy_path() {
     }
     other => panic!("expected Buffered, got {other:?}"),
   }
+}
+
+#[tokio::test]
+async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
+  let (bus, _log) = capture_bus();
+  let (handle, seen_client_headers) = recording_handle(
+    "openai",
+    "acct-1",
+    ok_response(
+      200,
+      r#"{"id":"resp-agent-id","choices":[{"message":{"role":"assistant","content":"hi"}}]}"#,
+    ),
+  );
+  let selector = Arc::new(CannedSelector { handle });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-agent-id-headers",
+    Arc::new(FixedAgentExtract {
+      agent_id: AgentId::CodexCli,
+    }),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  runner
+    .run(raw_chat("glm-4"))
+    .await
+    .expect("pipeline should succeed with injected agent_id");
+
+  let seen = seen_client_headers
+    .lock()
+    .unwrap()
+    .clone()
+    .expect("provider should observe client headers");
+  assert_eq!(
+    seen.get("originator").map(|value| value.as_str()),
+    Some("codex_exec")
+  );
+  assert_eq!(
+    seen.get("user-agent").map(|value| value.as_str()),
+    Some("codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)")
+  );
+  assert_eq!(
+    seen.get("openai-beta").map(|value| value.as_str()),
+    Some("responses=v1")
+  );
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------
