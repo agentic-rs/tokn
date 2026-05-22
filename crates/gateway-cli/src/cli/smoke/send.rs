@@ -351,6 +351,7 @@ struct Captured {
 
 #[derive(Default, Clone)]
 struct CapturedSnapshot {
+  started_endpoint: Option<String>,
   resolved: Option<ResolvedSummary>,
   built_headers: Option<BuiltHeadersSummary>,
   converted_request: Option<ConvertedRequestSummary>,
@@ -373,6 +374,9 @@ impl Captured {
                 snap.request_id = Some(event.request_id.to_string());
               }
               match &event.payload {
+                EventPayload::Stage(StageEvent::Started { endpoint }) => {
+                  snap.started_endpoint = Some(endpoint.as_str().to_string())
+                }
                 EventPayload::Stage(StageEvent::Resolve(r)) => snap.resolved = Some(r.clone()),
                 EventPayload::Stage(StageEvent::BuildHeaders(h)) => snap.built_headers = Some(h.clone()),
                 EventPayload::Stage(StageEvent::ConvertRequest(c)) => snap.converted_request = Some(c.clone()),
@@ -425,9 +429,13 @@ fn print_event(event: &Event) {
     }
     EventPayload::Stage(StageEvent::Resolve(r)) => {
       let cid = r.agent_id.as_ref().map(|c| c.as_str()).unwrap_or("(none)");
+      let upstream_endpoint = r
+        .upstream_endpoint
+        .map(|endpoint| endpoint.to_string())
+        .unwrap_or_else(|| "auto".to_string());
       println!(
         "[resolve]          model={} -> {} account={} provider={} upstream_endpoint={} agent_id={cid}",
-        r.model, r.upstream_model, r.account_id, r.provider_id, r.upstream_endpoint
+        r.model, r.upstream_model, r.account_id, r.provider_id, upstream_endpoint
       );
     }
     EventPayload::Stage(StageEvent::BuildHeaders(_)) => {
@@ -504,8 +512,13 @@ fn print_event(event: &Event) {
       }
       RecordEvent::Usage(usage) => {
         println!(
-          "[record:usage] input={:?} output={:?} cached={:?} reasoning={:?}",
-          usage.input_tokens, usage.output_tokens, usage.details.cache_read, usage.details.reasoning
+          "[record:usage] input={:?} output={:?} total={:?} cache_read={:?} cache_write={:?} reasoning={:?}",
+          usage.input_tokens,
+          usage.output_tokens,
+          usage.total_tokens,
+          usage.details.cache_read,
+          usage.details.cache_write,
+          usage.details.reasoning
         );
       }
     },
@@ -522,6 +535,7 @@ fn print_dry_run_outcome(
   redact: bool,
 ) -> Result<()> {
   let resolved = snap.resolved.as_ref();
+  let upstream_endpoint = snapshot_endpoint_label(snap);
   let headers = snap.built_headers.as_ref();
   let converted = snap.converted_request.as_ref();
 
@@ -539,7 +553,7 @@ fn print_dry_run_outcome(
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
         "upstream_model": resolved.map(|r| r.upstream_model.as_str()),
-        "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
+        "upstream_endpoint": upstream_endpoint,
         "headers": headers_json,
         "body": body_json,
         "content_encoding": converted.and_then(|c| c.content_encoding.as_deref()),
@@ -560,7 +574,9 @@ fn print_dry_run_outcome(
         println!("account:  {}", r.account_id);
         println!("provider: {}", r.provider_id);
         println!("model:    {} -> {}", r.model, r.upstream_model);
-        println!("upstream: {}", r.upstream_endpoint);
+      }
+      if let Some(endpoint) = snapshot_endpoint_label(snap) {
+        println!("upstream: {}", endpoint);
       }
       if let Some(h) = headers {
         println!("headers:");
@@ -595,6 +611,7 @@ async fn print_live_outcome(
   redact: bool,
 ) -> Result<()> {
   let resolved = snap.resolved.as_ref();
+  let upstream_endpoint = snapshot_endpoint_label(snap);
   let attempts = snap.attempts.unwrap_or(1);
 
   let ConvertedResponse { status, headers, body } = converted;
@@ -610,7 +627,7 @@ async fn print_live_outcome(
           "provider": resolved.map(|r| r.provider_id.as_str()),
           "model": resolved.map(|r| r.model.as_str()),
           "upstream_model": resolved.map(|r| r.upstream_model.as_str()),
-          "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
+          "upstream_endpoint": upstream_endpoint,
           "status": status,
           "headers": headers_json_value(&headers, redact),
           "body": body_json.as_deref(),
@@ -629,7 +646,9 @@ async fn print_live_outcome(
           println!("account:  {}", r.account_id);
           println!("provider: {}", r.provider_id);
           println!("model:    {} -> {}", r.model, r.upstream_model);
-          println!("upstream: {}", r.upstream_endpoint);
+        }
+        if let Some(endpoint) = snapshot_endpoint_label(snap) {
+          println!("upstream: {}", endpoint);
         }
         println!("status:   {}", status);
         println!("headers:");
@@ -657,7 +676,9 @@ async fn print_live_outcome(
           println!("account:  {}", r.account_id);
           println!("provider: {}", r.provider_id);
           println!("model:    {} -> {}", r.model, r.upstream_model);
-          println!("upstream: {}", r.upstream_endpoint);
+        }
+        if let Some(endpoint) = snapshot_endpoint_label(snap) {
+          println!("upstream: {}", endpoint);
         }
         println!("status:   {}", status);
         println!("headers:");
@@ -700,6 +721,7 @@ fn print_failure_outcome(
   redact: bool,
 ) -> Result<()> {
   let resolved = snap.resolved.as_ref();
+  let upstream_endpoint = snapshot_endpoint_label(snap);
   let headers = snap.built_headers.as_ref();
   let converted_req = snap.converted_request.as_ref();
 
@@ -723,7 +745,7 @@ fn print_failure_outcome(
         "provider": resolved.map(|r| r.provider_id.as_str()),
         "model": resolved.map(|r| r.model.as_str()),
         "upstream_model": resolved.map(|r| r.upstream_model.as_str()),
-        "upstream_endpoint": resolved.map(|r| r.upstream_endpoint.to_string()),
+        "upstream_endpoint": upstream_endpoint,
         "headers": headers_json,
         "body": body_json,
         "content_encoding": converted_req.and_then(|c| c.content_encoding.as_deref()),
@@ -747,7 +769,9 @@ fn print_failure_outcome(
         println!("account:  {}", r.account_id);
         println!("provider: {}", r.provider_id);
         println!("model:    {} -> {}", r.model, r.upstream_model);
-        println!("upstream: {}", r.upstream_endpoint);
+      }
+      if let Some(endpoint) = snapshot_endpoint_label(snap) {
+        println!("upstream: {}", endpoint);
       }
       if let Some(h) = headers {
         println!("headers:");
@@ -767,6 +791,14 @@ fn print_failure_outcome(
     }
   }
   Ok(())
+}
+
+fn snapshot_endpoint_label(snap: &CapturedSnapshot) -> Option<String> {
+  snap
+    .resolved
+    .as_ref()
+    .and_then(|resolved| resolved.upstream_endpoint.map(|endpoint| endpoint.to_string()))
+    .or_else(|| snap.started_endpoint.clone())
 }
 
 /// Print the persisted row in a compact, line-per-column form. BLOB columns

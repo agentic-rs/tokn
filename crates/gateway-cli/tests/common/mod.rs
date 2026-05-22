@@ -36,7 +36,7 @@ impl RequestsHarness {
   pub async fn row(&self, request_id: &str) -> Map<String, Value> {
     for _ in 0..100 {
       if let Some(row) = read_request_row(&self.requests_dir, request_id).expect("read request row") {
-        if row.get("latency_ms").and_then(Value::as_i64).is_some() {
+        if ctx(&row).get("latency_ms").and_then(Value::as_i64).is_some() {
           return row;
         }
       }
@@ -98,6 +98,18 @@ pub fn text(row: &Map<String, Value>, key: &str) -> Option<String> {
 
 pub fn int(row: &Map<String, Value>, key: &str) -> Option<i64> {
   row.get(key).and_then(Value::as_i64)
+}
+
+pub fn ctx(row: &Map<String, Value>) -> Map<String, Value> {
+  row
+    .get("ctx_json")
+    .and_then(Value::as_object)
+    .cloned()
+    .unwrap_or_default()
+}
+
+pub fn json_obj(row: &Map<String, Value>, key: &str) -> Map<String, Value> {
+  row.get(key).and_then(Value::as_object).cloned().unwrap_or_default()
 }
 
 pub fn body_json(row: &Map<String, Value>, key: &str) -> Value {

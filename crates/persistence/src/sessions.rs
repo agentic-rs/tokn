@@ -3,20 +3,21 @@ use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokn_core::db::SessionSource;
+use tokn_core::request_event::EndpointLabel;
 use tracing::{debug, trace};
 
 pub struct SessionRecord<'a> {
   pub ts: i64,
   pub session_id: &'a str,
   pub session_source: SessionSource,
-  pub endpoint: &'a str,
+  pub endpoint: &'a EndpointLabel,
   pub account_id: &'a str,
   pub provider_id: &'a str,
   pub model: &'a str,
   pub messages: &'a [MessageRecord],
 }
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const MIGRATIONS: &[migrate::Migration] = &[migrate::Migration {
   version: 1,
   name: "initial",
@@ -131,7 +132,7 @@ fn append_message(
         message_seq,
         idx as i64,
         r.ts,
-        r.endpoint,
+        r.endpoint.as_str(),
         m.role,
         m.status.map(|v| v as i64),
         hash_part(&part.part_type, part.content.as_ref()),
@@ -163,6 +164,7 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
 mod tests {
   use super::*;
   use bytes::Bytes;
+  use tokn_core::provider::Endpoint;
 
   fn rec(parts: Vec<(String, Bytes)>) -> Vec<MessageRecord> {
     vec![MessageRecord {
@@ -190,7 +192,7 @@ mod tests {
       ts: 100,
       session_id: "s1",
       session_source: SessionSource::Header,
-      endpoint: "chat_completions",
+      endpoint: &Endpoint::ChatCompletions.into(),
       account_id: "a",
       provider_id: "p",
       model: "m",
@@ -201,7 +203,7 @@ mod tests {
       ts: 100,
       session_id: "s2",
       session_source: SessionSource::Header,
-      endpoint: "chat_completions",
+      endpoint: &Endpoint::ChatCompletions.into(),
       account_id: "a",
       provider_id: "p",
       model: "m",
@@ -233,7 +235,7 @@ mod tests {
       ts: 100,
       session_id: "s1",
       session_source: SessionSource::Header,
-      endpoint: "chat_completions",
+      endpoint: &Endpoint::ChatCompletions.into(),
       account_id: "a",
       provider_id: "p",
       model: "m",
@@ -245,7 +247,7 @@ mod tests {
       ts: 100,
       session_id: "s1",
       session_source: SessionSource::Header,
-      endpoint: "chat_completions",
+      endpoint: &Endpoint::ChatCompletions.into(),
       account_id: "a",
       provider_id: "p",
       model: "m",

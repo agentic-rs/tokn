@@ -3,7 +3,7 @@ mod common;
 use axum::body::to_bytes;
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
-use common::{body_json, cfg_for, int, missing_or_null, text, RequestsHarness};
+use common::{body_json, cfg_for, ctx, int, missing_or_null, text, RequestsHarness};
 use serde_json::{json, Map, Value};
 use tokn_config::RouteMode;
 use tokn_mock_server::{MockEndpoint, MockLlmConfig, MockLlmServer, MockResponse, MockRoute};
@@ -19,8 +19,19 @@ struct ProxyCase {
 }
 
 fn assert_proxy_row(row: &Map<String, Value>, case: ProxyCase, inbound_body: &Bytes) {
-  assert_eq!(text(row, "mode").as_deref(), Some("passthrough"), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("proxy"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some("passthrough"),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("proxy"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "endpoint").as_deref(),
     Some("chat_completions"),
@@ -186,8 +197,9 @@ async fn proxy_switch_failure_returns_bad_request_and_persists_error_row() {
   harness.shutdown().await;
 
   let row = harness.row(request_id).await;
-  assert_eq!(text(&row, "mode").as_deref(), Some("switch"));
-  assert_eq!(text(&row, "method").as_deref(), Some("proxy"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx.get("mode").and_then(Value::as_str), Some("switch"));
+  assert_eq!(ctx.get("pipeline_id").and_then(Value::as_str), Some("proxy"));
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "inbound_req_method").as_deref(), Some("POST"));
   assert_eq!(

@@ -66,7 +66,7 @@ fn resolved(account: &str, provider: &str) -> StageEvent {
     agent_id: None,
     model: SmolStr::new("client-model"),
     upstream_model: SmolStr::new("upstream-model"),
-    upstream_endpoint: Endpoint::Responses,
+    upstream_endpoint: Some(Endpoint::Responses),
     account_id: SmolStr::new(account),
     provider_id: SmolStr::new(provider),
   })
@@ -162,6 +162,14 @@ fn count_rows(dir: &Path) -> usize {
   n
 }
 
+fn first_db_path(dir: &Path) -> PathBuf {
+  std::fs::read_dir(dir)
+    .unwrap()
+    .map(|entry| entry.unwrap().path())
+    .find(|p| p.extension().and_then(|e| e.to_str()) == Some("db"))
+    .unwrap()
+}
+
 fn as_text(v: &rusqlite::types::Value) -> Option<String> {
   use rusqlite::types::Value;
   match v {
@@ -169,6 +177,12 @@ fn as_text(v: &rusqlite::types::Value) -> Option<String> {
     Value::Blob(b) => Some(String::from_utf8_lossy(b).to_string()),
     _ => None,
   }
+}
+fn as_json(v: &rusqlite::types::Value) -> Option<Value> {
+  as_text(v).and_then(|text| serde_json::from_str(&text).ok())
+}
+fn ctx(row: &std::collections::HashMap<String, rusqlite::types::Value>) -> Value {
+  as_json(&row["ctx_json"]).unwrap_or_else(|| serde_json::json!({}))
 }
 fn as_int(v: &rusqlite::types::Value) -> Option<i64> {
   match v {
@@ -209,11 +223,14 @@ fn happy_path_persists_all_stages() {
   h.handle(&r2(req, 0, completed(true, 1)));
 
   let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["ver"]).as_deref(), Some(tokn_core::util::version::full()));
   assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("responses"));
   assert_eq!(as_text(&row["model"]).as_deref(), Some("client-model"));
-  assert_eq!(as_int(&row["stream"]), Some(1));
+  assert_eq!(
+    as_json(&row["params_json"]),
+    Some(serde_json::json!({"initiator": "user", "stream": true}))
+  );
   assert_eq!(as_text(&row["session_id"]).as_deref(), Some("sess-1"));
-  assert_eq!(as_text(&row["initiator"]).as_deref(), Some("user"));
   assert_eq!(as_text(&row["account_id"]).as_deref(), Some("acct-1"));
   assert_eq!(as_text(&row["provider_id"]).as_deref(), Some("prov-1"));
   assert!(as_text(&row["inbound_req_headers"])
@@ -231,9 +248,52 @@ fn happy_path_persists_all_stages() {
     .contains("\"x-upstream\":\"yes\""));
   assert_eq!(as_int(&row["inbound_resp_status"]), Some(200));
   assert_eq!(as_text(&row["inbound_resp_body"]).as_deref(), Some("{\"ok\":true}"));
-  assert!(!is_null(&row["latency_header_ms"]));
-  assert!(!is_null(&row["latency_ms"]));
+  assert!(ctx(&row)["latency_header_ms"].as_i64().is_some());
+  assert!(ctx(&row)["latency_ms"].as_i64().is_some());
   assert!(is_null(&row["request_error"]));
+}
+
+#[test]
+fn extract_merges_params_json_with_existing_keys() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-params-merge";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
+    },
+  ));
+  h.handle(&r2(
+    req,
+    0,
+    extracted("client-model", true, Some("sess-1"), b"{\"in\":1}"),
+  ));
+
+  let conn = Connection::open(first_db_path(&dir)).unwrap();
+  conn
+    .execute(
+      "UPDATE request_metadata
+       SET params_json = json_set(params_json, '$.temperature', 0.7)
+       WHERE request_id = ?1",
+      params![req],
+    )
+    .unwrap();
+  drop(conn);
+
+  h.handle(&r2(req, 0, extracted("client-model-2", false, None, b"{\"in\":2}")));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["model"]).as_deref(), Some("client-model-2"));
+  assert_eq!(
+    as_json(&row["params_json"]),
+    Some(serde_json::json!({
+      "initiator": "user",
+      "stream": false,
+      "temperature": 0.7
+    }))
+  );
 }
 
 #[test]
@@ -256,7 +316,7 @@ fn error_before_send_leaves_status_null_and_records_error() {
   assert!(is_null(&row["status"]));
   assert!(is_null(&row["outbound_resp_status"]));
   assert_eq!(as_text(&row["request_error"]).as_deref(), Some("resolve: no account"));
-  assert!(!is_null(&row["latency_ms"]));
+  assert!(ctx(&row)["latency_ms"].as_i64().is_some());
 }
 
 #[test]
@@ -311,8 +371,8 @@ fn upstream_error_status_persists_response_snapshot_and_error() {
     as_text(&row["request_error"]).as_deref(),
     Some("send: upstream 502: {\"error\":\"boom\"}")
   );
-  assert!(!is_null(&row["latency_header_ms"]));
-  assert!(!is_null(&row["latency_ms"]));
+  assert!(ctx(&row)["latency_header_ms"].as_i64().is_some());
+  assert!(ctx(&row)["latency_ms"].as_i64().is_some());
 }
 
 #[test]
@@ -395,10 +455,11 @@ fn inbound_connection_record_updates_connection_fields() {
   ));
 
   let row = fetch_row(&dir, req);
-  assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
-  assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
-  assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
-  assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx["local_addr"], serde_json::json!("127.0.0.1:4141"));
+  assert_eq!(ctx["peer_addr"], serde_json::json!("127.0.0.1:4142"));
+  assert_eq!(ctx["mode"], serde_json::json!("route"));
+  assert_eq!(ctx["pipeline_id"], serde_json::json!("requests"));
   assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
   assert_eq!(
     as_text(&row["inbound_req_url"]).as_deref(),
@@ -425,15 +486,64 @@ fn record_without_started_bootstraps_row() {
   ));
 
   let row = fetch_row(&dir, req);
-  assert_eq!(as_text(&row["local_addr"]).as_deref(), Some("127.0.0.1:4141"));
-  assert_eq!(as_text(&row["peer_addr"]).as_deref(), Some("127.0.0.1:4142"));
-  assert_eq!(as_text(&row["mode"]).as_deref(), Some("route"));
-  assert_eq!(as_text(&row["method"]).as_deref(), Some("requests"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx["local_addr"], serde_json::json!("127.0.0.1:4141"));
+  assert_eq!(ctx["peer_addr"], serde_json::json!("127.0.0.1:4142"));
+  assert_eq!(ctx["mode"], serde_json::json!("route"));
+  assert_eq!(ctx["pipeline_id"], serde_json::json!("requests"));
   assert_eq!(as_text(&row["inbound_req_method"]).as_deref(), Some("POST"));
   assert_eq!(
     as_text(&row["inbound_req_url"]).as_deref(),
     Some("https://example.test/v1/responses")
   );
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some(""));
+}
+
+#[test]
+fn resolve_without_upstream_endpoint_keeps_started_endpoint_label() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-auto-endpoint";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::custom("/v1/unknown"),
+    },
+  ));
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Resolve(ResolvedSummary {
+      agent_id: None,
+      model: SmolStr::new("client-model"),
+      upstream_model: SmolStr::new("upstream-model"),
+      upstream_endpoint: None,
+      account_id: SmolStr::new("acct"),
+      provider_id: SmolStr::new("prov"),
+    }),
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/unknown"));
+}
+
+#[test]
+fn custom_endpoint_label_persists_verbatim() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-custom-endpoint";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::custom("/v1/custom-endpoint"),
+    },
+  ));
+  h.handle(&r2(req, 0, completed(true, 1)));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(as_text(&row["endpoint"]).as_deref(), Some("/v1/custom-endpoint"));
 }
 
 #[test]
@@ -454,16 +564,59 @@ fn usage_record_updates_token_columns() {
     RecordEvent::Usage(Usage {
       input_tokens: Some(11),
       output_tokens: Some(22),
+      total_tokens: Some(40),
       details: UsageDetails {
         cache_read: Some(3),
+        cache_write: Some(5),
         reasoning: Some(4),
       },
     }),
   ));
 
   let row = fetch_row(&dir, req);
-  assert_eq!(as_int(&row["input_tok"]), Some(11));
-  assert_eq!(as_int(&row["output_tok"]), Some(22));
-  assert_eq!(as_int(&row["cached_tok"]), Some(3));
-  assert_eq!(as_int(&row["reasoning_tok"]), Some(4));
+  assert_eq!(
+    as_json(&row["usage_json"]),
+    Some(serde_json::json!({
+      "input": 11,
+      "output": 22,
+      "cache_read": 3,
+      "cache_write": 5,
+      "reasoning": 4,
+      "total": 40
+    }))
+  );
+}
+
+#[test]
+fn usage_json_omits_missing_token_keys_and_does_not_calculate_total() {
+  let dir = tempdir();
+  let mut h = RequestEventHandler::new(dir.clone()).unwrap();
+  let req = "req-usage-partial";
+  h.handle(&r2(
+    req,
+    0,
+    StageEvent::Started {
+      endpoint: EndpointLabel::Known(Endpoint::Responses),
+    },
+  ));
+  h.handle(&rr(
+    req,
+    0,
+    RecordEvent::Usage(Usage {
+      input_tokens: Some(11),
+      output_tokens: Some(13),
+      total_tokens: None,
+      details: UsageDetails {
+        cache_read: None,
+        cache_write: None,
+        reasoning: None,
+      },
+    }),
+  ));
+
+  let row = fetch_row(&dir, req);
+  assert_eq!(
+    as_json(&row["usage_json"]),
+    Some(serde_json::json!({"input": 11, "output": 13}))
+  );
 }

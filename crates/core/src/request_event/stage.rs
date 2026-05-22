@@ -141,7 +141,7 @@ pub struct ResolvedSummary {
   pub agent_id: Option<AgentId>,
   pub model: SmolStr,
   pub upstream_model: SmolStr,
-  pub upstream_endpoint: Endpoint,
+  pub upstream_endpoint: Option<Endpoint>,
   pub account_id: SmolStr,
   pub provider_id: SmolStr,
 }

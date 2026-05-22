@@ -2,7 +2,7 @@ mod common;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
-use common::{body_json, body_text, cfg_for, int, missing_or_null, text, zai_account, RequestsHarness};
+use common::{body_json, body_text, cfg_for, ctx, int, json_obj, missing_or_null, text, zai_account, RequestsHarness};
 use serde_json::{json, Map, Value};
 use tokn_config::RouteMode;
 use tokn_mock_server::{MockLlmConfig, MockLlmServer, MockRoute};
@@ -20,8 +20,19 @@ struct RouterCase {
 }
 
 fn assert_router_row(row: &Map<String, Value>, case: RouterCase) {
-  assert_eq!(text(row, "mode").as_deref(), Some(case.mode), "{}", case.name);
-  assert_eq!(text(row, "method").as_deref(), Some("requests"), "{}", case.name);
+  let ctx = ctx(row);
+  assert_eq!(
+    ctx.get("mode").and_then(Value::as_str),
+    Some(case.mode),
+    "{}",
+    case.name
+  );
+  assert_eq!(
+    ctx.get("pipeline_id").and_then(Value::as_str),
+    Some("requests"),
+    "{}",
+    case.name
+  );
   assert_eq!(
     text(row, "inbound_req_method").as_deref(),
     Some("POST"),
@@ -220,16 +231,19 @@ async fn router_stream_returns_sse_and_persists_drained_stream_row() {
   harness.shutdown().await;
 
   let row = harness.row(request_id).await;
-  assert_eq!(text(&row, "mode").as_deref(), Some("route"));
-  assert_eq!(text(&row, "method").as_deref(), Some("requests"));
+  let ctx = ctx(&row);
+  assert_eq!(ctx.get("mode").and_then(Value::as_str), Some("route"));
+  assert_eq!(ctx.get("pipeline_id").and_then(Value::as_str), Some("requests"));
+  let params = json_obj(&row, "params_json");
+  let usage = json_obj(&row, "usage_json");
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "model").as_deref(), Some("glm-4.7"));
-  assert_eq!(int(&row, "stream"), Some(1));
+  assert_eq!(params.get("stream").and_then(Value::as_bool), Some(true));
   assert_eq!(int(&row, "status"), Some(200));
   assert_eq!(int(&row, "outbound_resp_status"), Some(200));
   assert_eq!(int(&row, "inbound_resp_status"), Some(200));
-  assert_eq!(int(&row, "input_tok"), Some(3));
-  assert_eq!(int(&row, "output_tok"), Some(2));
+  assert_eq!(usage.get("input").and_then(Value::as_i64), Some(3));
+  assert_eq!(usage.get("output").and_then(Value::as_i64), Some(2));
   let persisted_outbound = body_json(&row, "outbound_req_body");
   assert_eq!(persisted_outbound["model"], "glm-4.7");
   assert_eq!(persisted_outbound["stream"], true);
