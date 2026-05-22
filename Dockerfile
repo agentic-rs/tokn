@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1-alpine3.22 AS builder
 
 WORKDIR /app
 
@@ -8,11 +8,9 @@ COPY crates ./crates
 
 RUN cargo build --locked --release --package tokn-gateway-cli --bin tokn-gateway
 
-FROM debian:bookworm-slim
+FROM alpine:3.22
 
-RUN apt-get update \
-  && apt-get install --yes --no-install-recommends ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /app/target/release/tokn-gateway /usr/local/bin/tokn-gateway
 
