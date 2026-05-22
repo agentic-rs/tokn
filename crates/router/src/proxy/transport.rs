@@ -218,13 +218,15 @@ async fn route_intercepted_request(
   let path = req.uri().path().to_string();
   let method = req.method().clone();
 
-  let route_mode = req
-    .headers()
-    .get(RouteResolver::mode_header())
-    .and_then(|v| v.to_str().ok());
-
-  let resolved_mode = route_resolver.resolve_mode(route_mode);
-  tracing::trace!(%host, path = %path, method = %method, route_mode = ?route_mode, resolved_mode = ?resolved_mode, "resolved route mode for intercepted request");
+  let route_mode = resolve_proxy_route_mode(
+    state.as_ref(),
+    route_resolver.as_ref(),
+    req.headers(),
+    &host,
+    req.uri().path_and_query().map(|v| v.as_str()).unwrap_or(&path),
+  );
+  tracing::trace!(%host, path = %path, method = %method, resolved_mode = ?route_mode, "resolved route mode for intercepted request");
+  let resolved_mode = route_mode;
   if matches!(resolved_mode, Ok(RouteMode::Passthrough | RouteMode::Switch)) {
     let response = match resolved_mode {
       Ok(RouteMode::Passthrough) => {
@@ -308,6 +310,45 @@ async fn route_intercepted_request(
     .await
     .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
   Ok(response)
+}
+
+fn default_proxy_provider_mode(
+  state: &AppState,
+  headers: &HeaderMap,
+  intercepted_host: &str,
+  path_and_query: &str,
+) -> Option<RouteMode> {
+  let host = headers
+    .get(HOST)
+    .and_then(|v| v.to_str().ok())
+    .map(|s| s.split(':').next().unwrap_or(s).trim())
+    .filter(|s| !s.is_empty())
+    .unwrap_or(intercepted_host);
+  let full_url = format!("https://{host}{path_and_query}");
+  let provider_id = state.provider_registry.provider_id_for_url(&full_url)?;
+  state
+    .proxy_provider_modes
+    .get(provider_id)
+    .copied()
+    .map(|mode| mode.as_route_mode())
+}
+
+fn resolve_proxy_route_mode(
+  state: &AppState,
+  route_resolver: &RouteResolver,
+  headers: &HeaderMap,
+  intercepted_host: &str,
+  path_and_query: &str,
+) -> std::result::Result<RouteMode, tokn_accounts::routing::ResolveError> {
+  let route_mode = headers
+    .get(RouteResolver::mode_header())
+    .and_then(|v| v.to_str().ok())
+    .map(str::to_string)
+    .or_else(|| {
+      default_proxy_provider_mode(state, headers, intercepted_host, path_and_query)
+        .map(|mode| route_mode_as_str(mode).to_string())
+    });
+  route_resolver.resolve_mode(route_mode.as_deref())
 }
 
 fn emit_router_not_implemented(
@@ -429,6 +470,21 @@ fn websocket_upgrade_response() -> Response<Body> {
 mod tests {
   use super::*;
   use axum::http::StatusCode;
+  use std::collections::BTreeMap;
+  use std::sync::Arc;
+  use tokn_config::Config;
+  use tokn_config::ProxyProviderMode;
+  use tokn_core::event::EventBus;
+
+  fn state_with_provider_modes(provider_modes: &[(&str, ProxyProviderMode)]) -> AppState {
+    let mut cfg = Config::default();
+    cfg.server.route_mode = RouteMode::Passthrough;
+    cfg.proxy_mode.provider_modes = provider_modes
+      .iter()
+      .map(|(provider_id, mode)| ((*provider_id).to_string(), *mode))
+      .collect::<BTreeMap<_, _>>();
+    crate::api::build_state(&cfg, &[], Arc::new(EventBus::new(8))).expect("state")
+  }
 
   #[test]
   fn error_responses_close_intercepted_connection() {
@@ -451,5 +507,80 @@ mod tests {
     close_intercepted_connection_on_error(&mut resp);
 
     assert!(resp.headers().get(CONNECTION).is_none());
+  }
+
+  #[test]
+  fn provider_mode_uses_recognized_provider_url() {
+    let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+
+    assert_eq!(
+      default_proxy_provider_mode(&state, &headers, "api.openai.com", "/v1/chat/completions"),
+      Some(RouteMode::Switch)
+    );
+  }
+
+  #[test]
+  fn provider_mode_uses_intercepted_host_when_host_header_missing() {
+    let state = state_with_provider_modes(&[("codex", ProxyProviderMode::Passthrough)]);
+    let headers = HeaderMap::new();
+
+    assert_eq!(
+      default_proxy_provider_mode(&state, &headers, "chatgpt.com", "/backend-api/codex/responses"),
+      Some(RouteMode::Passthrough)
+    );
+  }
+
+  #[test]
+  fn provider_mode_ignores_unknown_provider_urls() {
+    let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.anthropic.com"));
+
+    assert_eq!(
+      default_proxy_provider_mode(&state, &headers, "api.anthropic.com", "/v1/messages"),
+      None
+    );
+  }
+
+  #[test]
+  fn explicit_route_mode_overrides_provider_policy() {
+    let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
+    let route = RouteResolver::new(RouteMode::Passthrough, &[]);
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+    headers.insert(RouteResolver::mode_header(), HeaderValue::from_static("route"));
+
+    assert_eq!(
+      resolve_proxy_route_mode(&state, &route, &headers, "api.openai.com", "/v1/chat/completions"),
+      Ok(RouteMode::Route)
+    );
+  }
+
+  #[test]
+  fn provider_policy_overrides_global_proxy_mode() {
+    let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
+    let route = RouteResolver::new(RouteMode::Passthrough, &[]);
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+
+    assert_eq!(
+      resolve_proxy_route_mode(&state, &route, &headers, "api.openai.com", "/v1/chat/completions"),
+      Ok(RouteMode::Switch)
+    );
+  }
+
+  #[test]
+  fn unknown_provider_falls_back_to_global_proxy_mode() {
+    let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
+    let route = RouteResolver::new(RouteMode::Passthrough, &[]);
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.anthropic.com"));
+
+    assert_eq!(
+      resolve_proxy_route_mode(&state, &route, &headers, "api.anthropic.com", "/v1/messages"),
+      Ok(RouteMode::Passthrough)
+    );
   }
 }

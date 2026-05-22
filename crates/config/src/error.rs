@@ -52,6 +52,9 @@ pub enum Error {
   #[snafu(display("[proxy_mode].passthrough_hosts contains an invalid hostname: {host:?}"))]
   ProxyPassthroughHost { host: String },
 
+  #[snafu(display("[proxy_mode].provider_modes contains an unknown provider id: {provider_id:?}"))]
+  ProxyProviderModeProvider { provider_id: String },
+
   #[snafu(display("invalid header name in [copilot.extra_headers]: {name:?}"))]
   InvalidHeaderName { name: String },
 

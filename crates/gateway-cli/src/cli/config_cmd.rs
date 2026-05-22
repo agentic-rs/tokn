@@ -764,6 +764,20 @@ mod tests {
   }
 
   #[test]
+  fn insert_nested_hyphenated_proxy_provider_mode_key() {
+    let mut d = doc("");
+    insert(
+      &mut d,
+      &["proxy_mode".into(), "provider_modes".into(), "github-copilot".into()],
+      value("passthrough"),
+    )
+    .unwrap();
+    let s = d.to_string();
+    assert!(s.contains("[proxy_mode.provider_modes]"));
+    assert!(s.contains("github-copilot = \"passthrough\""));
+  }
+
+  #[test]
   fn parse_account_spec_happy_path() {
     let spec = parse_account_spec("id=work,provider=github-copilot,from=gh").unwrap();
     assert_eq!(spec.id, "work");

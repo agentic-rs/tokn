@@ -18,6 +18,7 @@ use tokn_accounts::registry::Registry as ProviderRegistry;
 use tokn_accounts::routing::RouteResolver;
 use tokn_accounts::AccountPool;
 use tokn_config::Config;
+use tokn_config::ProxyProviderMode;
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
 use tokn_core::event::EventBus;
@@ -37,6 +38,7 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
+  pub proxy_provider_modes: Arc<std::collections::BTreeMap<String, ProxyProviderMode>>,
   /// Shared `tokn-requests` pipeline used for router-owned JSON endpoints.
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
   /// Shared `tokn-requests` pipeline used when the resolved route mode is
@@ -237,6 +239,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     http,
     events,
     body_max_bytes,
+    proxy_provider_modes: Arc::new(cfg.proxy_mode.provider_modes.clone()),
     request_pipeline,
     passthrough_pipeline,
     proxy_passthrough_pipeline,
