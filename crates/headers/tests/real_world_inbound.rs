@@ -136,6 +136,38 @@ fn opencode_schema_parses_real_deepseek_capture() {
 }
 
 #[test]
+fn opencode_schema_parses_real_copilot_responses_capture() {
+  use tokn_headers::schemas::OpencodeHeaders;
+  use tokn_headers::HeaderSchema;
+
+  let cells = load_cells();
+  let (key, map) = cells
+    .iter()
+    .find(|(k, _)| k == "github-copilot__responses__opencode")
+    .expect("fixture must contain a github-copilot opencode responses cell");
+  OpencodeHeaders::parse(map).unwrap_or_else(|e| panic!("OpencodeHeaders::parse failed for `{key}`: {e}"));
+}
+
+#[test]
+fn copilot_overlay_builds_from_real_opencode_copilot_capture() {
+  use tokn_headers::keys;
+  use tokn_headers::schemas::CopilotOverlay;
+
+  let cells = load_cells();
+  let (_, map) = cells
+    .iter()
+    .find(|(k, _)| k == "github-copilot__responses__opencode")
+    .expect("fixture must contain a github-copilot opencode responses cell");
+
+  let overlay = CopilotOverlay::build(&Default::default(), map);
+  assert_eq!(overlay.editor_version.as_str(), "vscode/1.95.0");
+  assert_eq!(overlay.editor_plugin_version.as_str(), "copilot-chat/0.23.0");
+  assert_eq!(overlay.integration_id.as_str(), "vscode-chat");
+  assert_eq!(overlay.initiator.as_deref(), map.get(&keys::X_INITIATOR).map(|v| v.as_str()));
+  assert!(overlay.vision_request.is_none());
+}
+
+#[test]
 fn codex_cli_schema_parses_real_router_sse_capture() {
   use tokn_headers::schemas::CodexCliHeaders;
   use tokn_headers::HeaderSchema;
