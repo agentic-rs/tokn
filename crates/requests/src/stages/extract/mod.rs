@@ -21,18 +21,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
-
-const SESSION_ID_HEADERS: &[&str] = &[
-  "x-session-id",
-  "x-client-session-id",
-  "session_id",
-  "x-session-affinity",
-  "x-opencode-session",
-];
-#[allow(dead_code)] // request_id propagation lives in the runner; PR2 may consume this.
-const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
-const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub struct DefaultExtract;
 
@@ -66,8 +56,8 @@ impl ExtractStage for DefaultExtract {
       .clone()
       .unwrap_or_else(|| SmolStr::new(classify_initiator(&body_json)));
 
-    let session_id = first_header(&headers, SESSION_ID_HEADERS).map(SmolStr::new);
-    let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(SmolStr::new);
+    let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
+    let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
 
     let route_mode_hint = header_str(&headers, "x-route-mode")
       .map(str::trim)
@@ -101,12 +91,6 @@ impl ExtractStage for DefaultExtract {
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
   headers.get(name).map(|v| v.as_str())
-}
-
-fn first_header<'a>(headers: &'a HeaderMap, names: &[&str]) -> Option<&'a str> {
-  names
-    .iter()
-    .find_map(|name| header_str(headers, name).map(str::trim).filter(|s| !s.is_empty()))
 }
 
 fn infer_stream(headers: &HeaderMap, body: &Value) -> bool {
@@ -147,6 +131,7 @@ mod tests {
   use bytes::Bytes;
   use std::sync::Arc;
   use tokn_core::provider::Endpoint;
+  use tokn_headers::inbound::first_present;
 
   fn ctx() -> PipelineCtx {
     PipelineCtx::new("req-test", Endpoint::ChatCompletions, Arc::new(EventBus::new(64)))
@@ -240,7 +225,7 @@ mod tests {
       ("x-opencode-project", "proj-9"),
     ]);
     let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
-    assert_eq!(ex.session_id.as_deref(), Some("sess-2"));
+    assert_eq!(ex.session_id.as_deref(), first_present(&ex.headers, SESSION_ID_HEADERS));
     assert_eq!(ex.project_id.as_deref(), Some("proj-9"));
   }
 }

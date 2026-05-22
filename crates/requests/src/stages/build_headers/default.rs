@@ -28,35 +28,10 @@ use smol_str::SmolStr;
 use std::collections::HashMap;
 use tokn_core::AgentId;
 use tokn_headers::agent::build_agent_headers;
+use tokn_headers::inbound::build_template_vars;
 use tokn_headers::registry::{lookup, OverlayKind, ResolvedSchema};
 use tokn_headers::schemas::{CodexOverlay, CopilotOverlay};
 use tokn_headers::{HeaderMap, TemplateVars};
-
-/// Inbound header names (lowercase) scanned, in order, to populate
-/// [`TemplateVars::session_id`]. Mirrors `tokn_router::api::SESSION_ID_HEADERS`.
-const SESSION_ID_HEADERS: &[&str] = &[
-  "x-session-id",
-  "x-client-session-id",
-  "session_id",
-  "x-session-affinity",
-  "x-opencode-session",
-];
-
-/// Inbound header names (lowercase) scanned, in order, for
-/// [`TemplateVars::request_id`].
-const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
-
-/// Inbound header names (lowercase) scanned, in order, for
-/// [`TemplateVars::project_cwd`].
-const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project", "x-project-cwd"];
-
-/// Inbound header names (lowercase) scanned for
-/// [`TemplateVars::interaction_id`].
-const INTERACTION_ID_HEADERS: &[&str] = &["x-interaction-id"];
-
-/// Inbound header names (lowercase) scanned for
-/// [`TemplateVars::account_id`].
-const ACCOUNT_ID_HEADERS: &[&str] = &["chatgpt-account-id"];
 
 /// Default BuildHeaders stage. See module docs for the resolution
 /// algorithm.
@@ -124,32 +99,6 @@ impl BuildHeadersStage for DefaultBuildHeaders {
     };
 
     Ok(BuiltHeaders { headers, vars })
-  }
-}
-
-/// Read the first non-empty value from `headers` matching any name in `names`
-/// (case-insensitively, since `HeaderMap::get` is case-insensitive).
-fn first_header(headers: &HeaderMap, names: &[&str]) -> Option<SmolStr> {
-  for name in names {
-    if let Some(v) = headers.get(*name) {
-      let s = v.as_str();
-      if !s.is_empty() {
-        return Some(SmolStr::new(s));
-      }
-    }
-  }
-  None
-}
-
-/// Build [`TemplateVars`] from inbound headers. Mirrors the legacy
-/// `pipeline/parse.rs` scan order.
-fn build_template_vars(inbound: &HeaderMap) -> TemplateVars {
-  TemplateVars {
-    session_id: first_header(inbound, SESSION_ID_HEADERS),
-    request_id: first_header(inbound, REQUEST_ID_HEADERS),
-    project_cwd: first_header(inbound, PROJECT_ID_HEADERS),
-    interaction_id: first_header(inbound, INTERACTION_ID_HEADERS),
-    account_id: first_header(inbound, ACCOUNT_ID_HEADERS),
   }
 }
 

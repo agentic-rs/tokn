@@ -16,13 +16,15 @@
 //! (called from inside `DefaultSend` via `provider.chat/responses/messages`)
 //! still adds `Authorization` based on `Resolved.account_handle`.
 //!
-//! `TemplateVars` is default — passthrough does not interpolate any header.
+//! `TemplateVars` still mirrors the inbound correlation headers so downstream
+//! consumers see the same request metadata contract as the default path.
 
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
-use tokn_headers::{HeaderMap, TemplateVars};
+use tokn_headers::inbound::build_template_vars;
+use tokn_headers::HeaderMap;
 
 /// Hop-by-hop header names (lowercase) that must not be forwarded
 /// verbatim to the upstream. The transport layer sets its own value for
@@ -38,22 +40,6 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
   "upgrade",
   "keep-alive",
 ];
-
-const SESSION_ID_HEADERS: &[&str] = &[
-  "x-session-id",
-  "x-client-session-id",
-  "session_id",
-  "x-session-affinity",
-  "x-opencode-session",
-];
-
-const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
-
-const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project", "x-project-cwd"];
-
-const INTERACTION_ID_HEADERS: &[&str] = &["x-interaction-id"];
-
-const ACCOUNT_ID_HEADERS: &[&str] = &["chatgpt-account-id"];
 
 /// Router-owned header names (lowercase) that must never leak upstream.
 /// Mirrors `tokn_router::api::is_router_owned_header` — duplicated here
@@ -127,28 +113,6 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
       headers: out,
       vars: build_template_vars(&extracted.headers),
     })
-  }
-}
-
-fn first_header(headers: &HeaderMap, names: &[&str]) -> Option<smol_str::SmolStr> {
-  for name in names {
-    if let Some(value) = headers.get(*name) {
-      let value = value.as_str().trim();
-      if !value.is_empty() {
-        return Some(value.into());
-      }
-    }
-  }
-  None
-}
-
-fn build_template_vars(inbound: &HeaderMap) -> TemplateVars {
-  TemplateVars {
-    session_id: first_header(inbound, SESSION_ID_HEADERS),
-    request_id: first_header(inbound, REQUEST_ID_HEADERS),
-    project_cwd: first_header(inbound, PROJECT_ID_HEADERS),
-    interaction_id: first_header(inbound, INTERACTION_ID_HEADERS),
-    account_id: first_header(inbound, ACCOUNT_ID_HEADERS),
   }
 }
 

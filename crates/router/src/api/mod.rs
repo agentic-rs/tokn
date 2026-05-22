@@ -62,15 +62,6 @@ pub struct AppState {
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
 pub const REQUEST_ID_HEADER: &str = "x-request-id";
 pub const SESSION_ID_HEADER: &str = "x-session-id";
-pub const SESSION_ID_HEADERS: &[&str] = &[
-  "x-session-id",
-  "x-client-session-id",
-  "session_id",
-  "x-session-affinity",
-  "x-opencode-session",
-];
-pub const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
-pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project"];
 
 pub(crate) fn is_router_owned_header(name: &axum::http::HeaderName) -> bool {
   let name = name.as_str();
@@ -382,6 +373,7 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use axum::routing::get;
   use bytes::Bytes;
+  use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
   use tower::ServiceExt;
 
   fn zai_account() -> AccountCfg {

@@ -1,9 +1,10 @@
-use crate::api::{first_header, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
+use crate::api::first_header;
 use crate::provider::Endpoint;
 use axum::http::header::ACCEPT;
 use axum::http::HeaderMap;
 use serde_json::Value;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
+use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HeaderExtract {
