@@ -18,6 +18,7 @@ use tokn_accounts::registry::Registry as ProviderRegistry;
 use tokn_accounts::routing::RouteResolver;
 use tokn_accounts::AccountPool;
 use tokn_config::Config;
+use tokn_config::ProxyProviderMode;
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
 use tokn_core::event::EventBus;
@@ -37,6 +38,7 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
+  pub proxy_provider_modes: Arc<std::collections::BTreeMap<String, ProxyProviderMode>>,
   /// Shared `tokn-requests` pipeline used for router-owned JSON endpoints.
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
   /// Shared `tokn-requests` pipeline used when the resolved route mode is
@@ -215,6 +217,7 @@ async fn health() -> &'static str {
 pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
+  let _ = validate_proxy_provider_modes(cfg, provider_registry.as_ref());
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let pool = if accounts.is_empty() && matches!(cfg.server.route_mode, RouteMode::Passthrough) {
     AccountPool::empty(cfg)
@@ -237,11 +240,32 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     http,
     events,
     body_max_bytes,
+    proxy_provider_modes: Arc::new(cfg.proxy_mode.provider_modes.clone()),
     request_pipeline,
     passthrough_pipeline,
     proxy_passthrough_pipeline,
     proxy_switch_pipeline,
   })
+}
+
+fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) -> Result<()> {
+  let mut unresolved = Vec::new();
+  for provider_id in cfg.proxy_mode.provider_modes.keys() {
+    if provider_registry.resolve(provider_id).is_none() {
+      tracing::warn!(
+        provider_id = %provider_id,
+        "ignoring unresolved [proxy_mode].provider_modes entry"
+      );
+      unresolved.push(provider_id.clone());
+    }
+  }
+  if unresolved.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "[proxy_mode].provider_modes contains unresolved provider ids: {}",
+    unresolved.join(", ")
+  );
 }
 
 /// Construct the default `tokn-requests` pipeline for router-owned JSON
@@ -477,6 +501,38 @@ mod tests {
     assert!(res.is_err(), "non-passthrough mode should require accounts");
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("no accounts configured"));
+  }
+
+  #[test]
+  fn build_state_allows_unknown_proxy_provider_mode_provider() {
+    let mut cfg = Config::default();
+    cfg.server.route_mode = RouteMode::Passthrough;
+    cfg
+      .proxy_mode
+      .provider_modes
+      .insert("made-up-provider".into(), ProxyProviderMode::Switch);
+    let bus = EventBus::new(16);
+
+    let res = build_state(&cfg, &[], Arc::new(bus));
+    assert!(
+      res.is_ok(),
+      "unknown provider ids should only warn and not fail state construction"
+    );
+  }
+
+  #[test]
+  fn validate_proxy_provider_modes_returns_error_for_unknown_provider() {
+    let mut cfg = Config::default();
+    cfg
+      .proxy_mode
+      .provider_modes
+      .insert("made-up-provider".into(), ProxyProviderMode::Switch);
+    let registry = ProviderRegistry::builtin();
+
+    let res = validate_proxy_provider_modes(&cfg, &registry);
+    let err = res.expect_err("helper should still return an error for outside callers");
+    assert!(err.to_string().contains("unresolved provider ids"));
+    assert!(err.to_string().contains("made-up-provider"));
   }
 
   #[tokio::test]

@@ -7,6 +7,7 @@ pub use tokn_core::account::{Account, AccountConfig, AccountState, AccountTier, 
 
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use tokn_core::provider::ID_GITHUB_COPILOT;
 
@@ -42,6 +43,22 @@ pub enum RouteMode {
   #[default]
   Route,
   Fuzzy,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProviderMode {
+  Passthrough,
+  Switch,
+}
+
+impl ProxyProviderMode {
+  pub fn as_route_mode(self) -> RouteMode {
+    match self {
+      Self::Passthrough => RouteMode::Passthrough,
+      Self::Switch => RouteMode::Switch,
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -261,6 +278,8 @@ pub struct ProxyModeConfig {
   pub intercept_hosts: Vec<String>,
   #[serde(default)]
   pub passthrough_hosts: Vec<String>,
+  #[serde(default)]
+  pub provider_modes: BTreeMap<String, ProxyProviderMode>,
 }
 
 impl Default for ProxyModeConfig {
@@ -272,6 +291,7 @@ impl Default for ProxyModeConfig {
       ca_dir: None,
       intercept_hosts: Vec::new(),
       passthrough_hosts: Vec::new(),
+      provider_modes: BTreeMap::new(),
     }
   }
 }
@@ -535,5 +555,41 @@ mod tests {
     )
     .expect("config should deserialize");
     assert_eq!(cfg.proxy_mode.route_mode, RouteMode::Exact);
+  }
+
+  #[test]
+  fn proxy_mode_provider_modes_deserialize() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [proxy_mode]
+        route_mode = "route"
+
+        [proxy_mode.provider_modes]
+        github-copilot = "passthrough"
+        openai = "switch"
+      "#,
+    )
+    .expect("config should deserialize");
+    assert_eq!(
+      cfg.proxy_mode.provider_modes.get("github-copilot"),
+      Some(&ProxyProviderMode::Passthrough)
+    );
+    assert_eq!(
+      cfg.proxy_mode.provider_modes.get("openai"),
+      Some(&ProxyProviderMode::Switch)
+    );
+  }
+
+  #[test]
+  fn proxy_mode_provider_modes_reject_invalid_mode_value() {
+    let err = toml::from_str::<Config>(
+      r#"
+        [proxy_mode.provider_modes]
+        openai = "route"
+      "#,
+    )
+    .expect_err("invalid provider mode must fail deserialization");
+    assert!(err.to_string().contains("unknown variant"));
+    assert!(err.to_string().contains("route"));
   }
 }

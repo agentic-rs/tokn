@@ -165,6 +165,11 @@ host = "127.0.0.1"
 port = 4142
 route_mode = "route"
 
+# optionally default recognized providers to proxy-only modes
+[proxy_mode.provider_modes]
+# github-copilot = "passthrough"
+# openai = "switch"
+
 # optional; defaults to ~/.config/tokn-router/ca
 # ca_dir = "/some/path"
 
@@ -176,6 +181,10 @@ route_mode = "route"
 ```
 
 Requests to hosts outside the allowlist are tunneled through untouched.
+
+When a request does not explicitly choose a route mode, proxy interception
+applies mode precedence in this order: request override, provider-specific
+`[proxy_mode.provider_modes]`, then global `[proxy_mode].route_mode`.
 
 `tokn-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
 MITM proxy together in one process. They share the same account pool and event
