@@ -30,6 +30,15 @@ use crate::schema::{
 use crate::vars::TemplateVars;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
+use uuid::Uuid;
+
+/// Lazily mint a fresh UUID v7 as a [`SmolStr`]. Used by `build_strict` to
+/// synthesize correlation IDs when neither inbound nor template vars supply
+/// one; v7 is monotonic + time-sortable, matching the `019e...`-prefixed IDs
+/// observed in real codex-cli captures.
+fn fresh_uuid_v7() -> SmolStr {
+  SmolStr::from(Uuid::now_v7().to_string())
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodexCliHeaders {
@@ -238,6 +247,18 @@ impl CodexCliHeaders {
   }
 
   /// Build (strict).
+  ///
+  /// Targets the **SSE-HTTP** real-world shape (e.g. POST `/responses` to a
+  /// non-chatgpt upstream): `Accept: text/event-stream`,
+  /// `Content-Type: application/json`, body framing present, codex correlation
+  /// IDs populated. The chatgpt.com WebSocket-upgrade shape (no body framing,
+  /// no `Accept`) is intentionally a *subset* of this output — strict mode
+  /// produces a superset to keep the public API single-signature.
+  ///
+  /// Missing `session_id` / `thread_id` / `x-client-request-id` are
+  /// synthesized as a **shared** UUID v7 (mirroring real captures where all
+  /// three slots carry the same id). Vars and inbound headers still win in
+  /// the usual order.
   pub fn build_strict(vars: &TemplateVars, inbound: &HeaderMap) -> Result<Self, Error> {
     let d = Self::defaults();
     let mut base = Self::build(vars, inbound)?;
@@ -264,15 +285,21 @@ impl CodexCliHeaders {
     base.content_length = base
       .content_length
       .or_else(|| std_strict(inbound, &keys::CONTENT_LENGTH, || "0".into()));
+
+    // Shared UUID v7 for the correlation triple, computed at most once and
+    // only if at least one slot still needs synthesis after inbound + vars.
+    let correlation_uuid = std::cell::OnceCell::<SmolStr>::new();
+    let mut take_uuid = || correlation_uuid.get_or_init(fresh_uuid_v7).clone();
+
     base.session_id = base
       .session_id
-      .or_else(|| std_strict(inbound, &keys::SESSION_ID_LOWER, || "unknown".into()));
+      .or_else(|| std_strict(inbound, &keys::SESSION_ID_LOWER, &mut take_uuid));
     base.thread_id = base
       .thread_id
-      .or_else(|| std_strict(inbound, &keys::THREAD_ID, || "unknown".into()));
+      .or_else(|| std_strict(inbound, &keys::THREAD_ID, &mut take_uuid));
     base.client_request_id = base
       .client_request_id
-      .or_else(|| std_strict(inbound, &keys::X_CLIENT_REQUEST_ID, || "unknown".into()));
+      .or_else(|| std_strict(inbound, &keys::X_CLIENT_REQUEST_ID, &mut take_uuid));
     // Extra: strict mode passes through inbound only.
     base.host = extra_strict(inbound, &keys::HOST);
     base.connection = extra_strict(inbound, &keys::CONNECTION);
@@ -399,5 +426,36 @@ mod tests {
     // Extra still skipped.
     assert!(h.host.is_none());
     assert!(h.openai_beta.is_none());
+  }
+
+  #[test]
+  fn build_strict_synthesizes_shared_uuid_for_correlation_triple() {
+    // When inbound + vars supply no correlation IDs, strict mode mints a
+    // single fresh UUID v7 and reuses it across session_id, thread_id,
+    // x-client-request-id (mirroring real codex-cli captures).
+    let h = CodexCliHeaders::build_strict(&TemplateVars::default(), &HeaderMap::new()).unwrap();
+    let s = h.session_id.as_deref().expect("session_id synthesized");
+    let t = h.thread_id.as_deref().expect("thread_id synthesized");
+    let c = h.client_request_id.as_deref().expect("client_request_id synthesized");
+    assert_eq!(s, t, "session_id and thread_id should share the synthesized UUID");
+    assert_eq!(s, c, "client_request_id should share the synthesized UUID");
+    // Sanity: 36-char canonical UUID form, not the old 'unknown' sentinel.
+    assert_eq!(s.len(), 36, "expected canonical UUID form, got {s}");
+    assert_ne!(s, "unknown");
+  }
+
+  #[test]
+  fn build_strict_prefers_vars_then_inbound_over_synthesis() {
+    let vars = TemplateVars {
+      session_id: Some("ses_from_vars".into()),
+      request_id: Some("req_from_vars".into()),
+      ..Default::default()
+    };
+    let mut inbound = HeaderMap::new();
+    inbound.insert(&keys::THREAD_ID, "thr_from_inbound");
+    let h = CodexCliHeaders::build_strict(&vars, &inbound).unwrap();
+    assert_eq!(h.session_id.as_deref(), Some("ses_from_vars"));
+    assert_eq!(h.thread_id.as_deref(), Some("thr_from_inbound"));
+    assert_eq!(h.client_request_id.as_deref(), Some("req_from_vars"));
   }
 }
