@@ -101,9 +101,26 @@ impl InputTransformer for CodexProvider {
         if !obj.get("instructions").map(Value::is_string).unwrap_or(false) {
           obj.insert("instructions".into(), Value::String(String::new()));
         }
+        normalize_reasoning_effort(obj);
       }
     }
     Ok(body)
+  }
+}
+
+fn normalize_reasoning_effort(obj: &mut serde_json::Map<String, Value>) {
+  let Some(effort) = obj.remove("reasoning_effort").and_then(|v| v.as_str().map(str::to_string)) else {
+    return;
+  };
+
+  match obj.get_mut("reasoning") {
+    Some(Value::Object(reasoning)) => {
+      reasoning.entry("effort").or_insert_with(|| Value::String(effort));
+    }
+    Some(_) => {}
+    None => {
+      obj.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
+    }
   }
 }
 
@@ -389,6 +406,31 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("stream"), Some(&Value::Bool(true)));
+  }
+
+  #[test]
+  fn codex_transform_promotes_reasoning_effort_into_reasoning() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["reasoning_effort"] = Value::String("high".into());
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert!(out.get("reasoning_effort").is_none());
+    assert_eq!(out.get("reasoning"), Some(&serde_json::json!({ "effort": "high" })));
+  }
+
+  #[test]
+  fn codex_transform_preserves_existing_reasoning_effort_field() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["reasoning_effort"] = Value::String("high".into());
+    body["reasoning"] = serde_json::json!({ "effort": "low", "summary": "auto" });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert!(out.get("reasoning_effort").is_none());
+    assert_eq!(out.get("reasoning"), Some(&serde_json::json!({ "effort": "low", "summary": "auto" })));
   }
 
   #[test]
