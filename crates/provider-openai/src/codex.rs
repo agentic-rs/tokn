@@ -95,6 +95,7 @@ impl InputTransformer for CodexProvider {
         obj.remove("max_output_tokens");
         obj.insert("store".into(), Value::Bool(false));
         obj.insert("stream".into(), Value::Bool(true));
+        normalize_text_controls(obj);
         if let Some(input) = obj.get_mut("input") {
           normalize_codex_input(input);
         }
@@ -124,6 +125,17 @@ fn normalize_reasoning_effort(obj: &mut serde_json::Map<String, Value>) {
     None => {
       obj.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
     }
+  }
+}
+
+fn normalize_text_controls(obj: &mut serde_json::Map<String, Value>) {
+  let Some(Value::Object(text)) = obj.get_mut("text") else {
+    return;
+  };
+
+  text.remove("verbosity");
+  if text.is_empty() {
+    obj.remove("text");
   }
 }
 
@@ -409,6 +421,17 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("stream"), Some(&Value::Bool(true)));
+  }
+
+  #[test]
+  fn codex_transform_removes_text_verbosity() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["text"] = serde_json::json!({ "verbosity": "low", "format": { "type": "text" } });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("text"), Some(&serde_json::json!({ "format": { "type": "text" } })));
   }
 
   #[test]
