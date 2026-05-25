@@ -109,7 +109,10 @@ impl InputTransformer for CodexProvider {
 }
 
 fn normalize_reasoning_effort(obj: &mut serde_json::Map<String, Value>) {
-  let Some(effort) = obj.remove("reasoning_effort").and_then(|v| v.as_str().map(str::to_string)) else {
+  let Some(effort) = obj
+    .remove("reasoning_effort")
+    .and_then(|v| v.as_str().map(str::to_string))
+  else {
     return;
   };
 
@@ -430,7 +433,10 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert!(out.get("reasoning_effort").is_none());
-    assert_eq!(out.get("reasoning"), Some(&serde_json::json!({ "effort": "low", "summary": "auto" })));
+    assert_eq!(
+      out.get("reasoning"),
+      Some(&serde_json::json!({ "effort": "low", "summary": "auto" }))
+    );
   }
 
   #[test]

@@ -93,7 +93,10 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   if let Some(v) = &req.sampling.stop {
     out.insert("stop".into(), v.clone());
   }
-  if let Some(v) = normalize_reasoning(req.reasoning.clone(), req.extras.get("reasoning_effort").and_then(Value::as_str)) {
+  if let Some(v) = normalize_reasoning(
+    req.reasoning.clone(),
+    req.extras.get("reasoning_effort").and_then(Value::as_str),
+  ) {
     out.insert("reasoning".into(), v.clone());
   }
   out.insert(
@@ -579,7 +582,10 @@ mod tests {
 
     let body = request_to_value(&req).expect("request should render");
 
-    assert_eq!(body.get("reasoning"), Some(&json!({ "effort": "low", "summary": "auto" })));
+    assert_eq!(
+      body.get("reasoning"),
+      Some(&json!({ "effort": "low", "summary": "auto" }))
+    );
     assert!(body.get("reasoning_effort").is_none());
   }
 
