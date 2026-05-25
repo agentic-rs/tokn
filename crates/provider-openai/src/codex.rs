@@ -4,6 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
 use tokn_core::account::AccountConfig;
+use tokn_core::pipeline::InputTransformer;
 use tokn_headers::keys::CHATGPT_ACCOUNT_ID;
 use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
@@ -87,6 +88,37 @@ impl CodexProvider {
   }
 }
 
+impl InputTransformer for CodexProvider {
+  fn transform_input(&self, endpoint: Endpoint, mut body: Value) -> Result<Value> {
+    if endpoint == Endpoint::Responses {
+      if let Some(obj) = body.as_object_mut() {
+        obj.remove("max_output_tokens");
+        obj.insert("store".into(), Value::Bool(false));
+        obj.insert("stream".into(), Value::Bool(true));
+        if let Some(input) = obj.get_mut("input") {
+          normalize_codex_input(input);
+        }
+        if !obj.get("instructions").map(Value::is_string).unwrap_or(false) {
+          obj.insert("instructions".into(), Value::String(String::new()));
+        }
+      }
+    }
+    Ok(body)
+  }
+}
+
+fn normalize_codex_input(input: &mut Value) {
+  let replacement = match input.clone() {
+    Value::Array(_) => return,
+    Value::String(text) => {
+      serde_json::json!([{"role": "user", "content": [{"type": "input_text", "text": text.clone()}]}])
+    }
+    Value::Null => Value::Array(Vec::new()),
+    other => Value::Array(vec![other]),
+  };
+  *input = replacement;
+}
+
 pub fn validate(account: &AccountConfig) -> Result<()> {
   if account.provider != ID_CODEX {
     return error::ProviderMismatchSnafu {
@@ -119,6 +151,10 @@ impl Provider for CodexProvider {
 
   fn info(&self) -> &ProviderInfo {
     &self.info
+  }
+
+  fn input_transformer(&self) -> Option<&dyn InputTransformer> {
+    Some(self)
   }
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
@@ -268,6 +304,14 @@ mod tests {
     }
   }
 
+  fn request_body() -> Value {
+    serde_json::json!({
+      "model": "gpt-5.4-mini",
+      "input": [{"role": "user", "content": "hi"}],
+      "max_output_tokens": 1024,
+    })
+  }
+
   #[test]
   fn codex_requires_access_token() {
     let err = CodexProvider::from_account(Arc::new(acct(None))).err().unwrap();
@@ -303,6 +347,79 @@ mod tests {
     assert_eq!(codex.info().upstream_url, CODEX_BASE_URL);
     assert!(codex.supports("", Endpoint::Responses));
     assert!(!codex.supports("", Endpoint::ChatCompletions));
+  }
+
+  #[test]
+  fn codex_transform_removes_max_output_tokens_and_adds_instructions() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let out = codex.transform_input(Endpoint::Responses, request_body()).unwrap();
+
+    assert!(out.get("max_output_tokens").is_none());
+    assert_eq!(out.get("instructions").and_then(Value::as_str), Some(""));
+  }
+
+  #[test]
+  fn codex_transform_preserves_existing_instructions() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["instructions"] = Value::String("be terse".into());
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("instructions").and_then(Value::as_str), Some("be terse"));
+  }
+
+  #[test]
+  fn codex_transform_forces_store_false() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["store"] = Value::Bool(true);
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("store"), Some(&Value::Bool(false)));
+  }
+
+  #[test]
+  fn codex_transform_forces_stream_true() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["stream"] = Value::Bool(false);
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("stream"), Some(&Value::Bool(true)));
+  }
+
+  #[test]
+  fn codex_transform_wraps_single_input_object() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let body = serde_json::json!({
+      "model": "gpt-5.4-mini",
+      "input": {"role": "user", "content": "hi"}
+    });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out["input"], serde_json::json!([{"role": "user", "content": "hi"}]));
+  }
+
+  #[test]
+  fn codex_transform_wraps_string_input_as_user_message() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let body = serde_json::json!({
+      "model": "gpt-5.4-mini",
+      "input": "hi"
+    });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(
+      out["input"],
+      serde_json::json!([
+        {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+      ])
+    );
   }
 
   #[test]
