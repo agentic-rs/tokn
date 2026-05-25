@@ -99,7 +99,6 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   ) {
     out.insert("reasoning".into(), v.clone());
   }
-  normalize_text_verbosity(&mut out, req.extras.get("verbosity"));
   out.insert(
     "store".into(),
     req.extras.get("store").cloned().unwrap_or(Value::Bool(false)),
@@ -113,6 +112,7 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
     }
     out.entry(k.clone()).or_insert_with(|| v.clone());
   }
+  normalize_text_verbosity(&mut out, req.extras.get("verbosity"));
   Ok(Value::Object(out))
 }
 
@@ -667,6 +667,38 @@ mod tests {
     assert_eq!(
       body.get("text"),
       Some(&json!({ "verbosity": "high", "format": { "type": "text" } }))
+    );
+    assert!(body.get("verbosity").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_explicit_text_extra_before_normalizing_verbosity() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    extras.insert("text".into(), json!({ "format": { "type": "text" } }));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(
+      body.get("text"),
+      Some(&json!({ "format": { "type": "text" }, "verbosity": "low" }))
     );
     assert!(body.get("verbosity").is_none());
   }
