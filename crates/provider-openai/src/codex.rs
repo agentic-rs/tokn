@@ -93,6 +93,9 @@ impl InputTransformer for CodexProvider {
     if endpoint == Endpoint::Responses {
       if let Some(obj) = body.as_object_mut() {
         obj.remove("max_output_tokens");
+        if let Some(input) = obj.get_mut("input") {
+          normalize_codex_input(input);
+        }
         if !obj.get("instructions").map(Value::is_string).unwrap_or(false) {
           obj.insert("instructions".into(), Value::String(String::new()));
         }
@@ -100,6 +103,18 @@ impl InputTransformer for CodexProvider {
     }
     Ok(body)
   }
+}
+
+fn normalize_codex_input(input: &mut Value) {
+  let replacement = match input.clone() {
+    Value::Array(_) => return,
+    Value::String(text) => {
+      serde_json::json!([{"role": "user", "content": [{"type": "input_text", "text": text.clone()}]}])
+    }
+    Value::Null => Value::Array(Vec::new()),
+    other => Value::Array(vec![other]),
+  };
+  *input = replacement;
 }
 
 pub fn validate(account: &AccountConfig) -> Result<()> {
@@ -350,6 +365,37 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("instructions").and_then(Value::as_str), Some("be terse"));
+  }
+
+  #[test]
+  fn codex_transform_wraps_single_input_object() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let body = serde_json::json!({
+      "model": "gpt-5.4-mini",
+      "input": {"role": "user", "content": "hi"}
+    });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out["input"], serde_json::json!([{"role": "user", "content": "hi"}]));
+  }
+
+  #[test]
+  fn codex_transform_wraps_string_input_as_user_message() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let body = serde_json::json!({
+      "model": "gpt-5.4-mini",
+      "input": "hi"
+    });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(
+      out["input"],
+      serde_json::json!([
+        {"role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+      ])
+    );
   }
 
   #[test]
