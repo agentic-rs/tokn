@@ -94,6 +94,7 @@ impl InputTransformer for CodexProvider {
       if let Some(obj) = body.as_object_mut() {
         obj.remove("max_output_tokens");
         obj.insert("store".into(), Value::Bool(false));
+        obj.insert("stream".into(), Value::Bool(true));
         if let Some(input) = obj.get_mut("input") {
           normalize_codex_input(input);
         }
@@ -377,6 +378,17 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("store"), Some(&Value::Bool(false)));
+  }
+
+  #[test]
+  fn codex_transform_forces_stream_true() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["stream"] = Value::Bool(false);
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("stream"), Some(&Value::Bool(true)));
   }
 
   #[test]
