@@ -93,7 +93,10 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   if let Some(v) = &req.sampling.stop {
     out.insert("stop".into(), v.clone());
   }
-  if let Some(v) = &req.reasoning {
+  if let Some(v) = normalize_reasoning(
+    req.reasoning.clone(),
+    req.extras.get("reasoning_effort").and_then(Value::as_str),
+  ) {
     out.insert("reasoning".into(), v.clone());
   }
   out.insert(
@@ -104,9 +107,27 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
     out.insert("stream".into(), Value::Bool(true));
   }
   for (k, v) in &req.extras {
+    if k == "reasoning_effort" {
+      continue;
+    }
     out.entry(k.clone()).or_insert_with(|| v.clone());
   }
   Ok(Value::Object(out))
+}
+
+fn normalize_reasoning(reasoning: Option<Value>, reasoning_effort: Option<&str>) -> Option<Value> {
+  let Some(effort) = reasoning_effort else {
+    return reasoning;
+  };
+
+  match reasoning {
+    Some(Value::Object(mut obj)) => {
+      obj.entry("effort").or_insert_with(|| Value::String(effort.to_string()));
+      Some(Value::Object(obj))
+    }
+    Some(other) => Some(other),
+    None => Some(json!({ "effort": effort })),
+  }
 }
 
 pub fn response_from_value(v: &Value) -> Result<IrResponse> {
@@ -507,6 +528,65 @@ mod tests {
     let body = request_to_value(&req).expect("request should render");
 
     assert_eq!(body.get("store"), Some(&Value::Bool(false)));
+  }
+
+  #[test]
+  fn request_to_value_promotes_reasoning_effort_extra() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("reasoning_effort".into(), json!("high"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body.get("reasoning"), Some(&json!({ "effort": "high" })));
+    assert!(body.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_existing_reasoning_effort() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("reasoning_effort".into(), json!("high"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: Some(json!({ "effort": "low", "summary": "auto" })),
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(
+      body.get("reasoning"),
+      Some(&json!({ "effort": "low", "summary": "auto" }))
+    );
+    assert!(body.get("reasoning_effort").is_none());
   }
 
   #[test]
