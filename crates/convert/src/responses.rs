@@ -657,10 +657,10 @@ mod tests {
     };
 
     let mut body = request_to_value(&req).expect("request should render");
-    body
-      .as_object_mut()
-      .expect("request body object")
-      .insert("text".into(), json!({ "verbosity": "high", "format": { "type": "text" } }));
+    body.as_object_mut().expect("request body object").insert(
+      "text".into(),
+      json!({ "verbosity": "high", "format": { "type": "text" } }),
+    );
 
     normalize_text_verbosity(body.as_object_mut().expect("request body object"), Some(&json!("low")));
 
