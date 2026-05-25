@@ -95,6 +95,7 @@ impl InputTransformer for CodexProvider {
         obj.remove("max_output_tokens");
         obj.insert("store".into(), Value::Bool(false));
         obj.insert("stream".into(), Value::Bool(true));
+        normalize_verbosity(obj);
         if let Some(input) = obj.get_mut("input") {
           normalize_codex_input(input);
         }
@@ -123,6 +124,22 @@ fn normalize_reasoning_effort(obj: &mut serde_json::Map<String, Value>) {
     Some(_) => {}
     None => {
       obj.insert("reasoning".into(), serde_json::json!({ "effort": effort }));
+    }
+  }
+}
+
+fn normalize_verbosity(obj: &mut serde_json::Map<String, Value>) {
+  let Some(verbosity) = obj.remove("verbosity") else {
+    return;
+  };
+
+  match obj.get_mut("text") {
+    Some(Value::Object(text)) => {
+      text.entry("verbosity").or_insert(verbosity);
+    }
+    Some(_) => {}
+    None => {
+      obj.insert("text".into(), serde_json::json!({ "verbosity": verbosity }));
     }
   }
 }
@@ -409,6 +426,34 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("stream"), Some(&Value::Bool(true)));
+  }
+
+  #[test]
+  fn codex_transform_moves_top_level_verbosity_into_text() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["verbosity"] = Value::String("low".into());
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert!(out.get("verbosity").is_none());
+    assert_eq!(out.get("text"), Some(&serde_json::json!({ "verbosity": "low" })));
+  }
+
+  #[test]
+  fn codex_transform_preserves_existing_text_verbosity() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["verbosity"] = Value::String("low".into());
+    body["text"] = serde_json::json!({ "verbosity": "high", "format": { "type": "text" } });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert!(out.get("verbosity").is_none());
+    assert_eq!(
+      out.get("text"),
+      Some(&serde_json::json!({ "verbosity": "high", "format": { "type": "text" } }))
+    );
   }
 
   #[test]

@@ -107,12 +107,29 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
     out.insert("stream".into(), Value::Bool(true));
   }
   for (k, v) in &req.extras {
-    if k == "reasoning_effort" {
+    if k == "reasoning_effort" || k == "verbosity" {
       continue;
     }
     out.entry(k.clone()).or_insert_with(|| v.clone());
   }
+  normalize_text_verbosity(&mut out, req.extras.get("verbosity"));
   Ok(Value::Object(out))
+}
+
+fn normalize_text_verbosity(out: &mut Map<String, Value>, verbosity: Option<&Value>) {
+  let Some(verbosity) = verbosity.cloned() else {
+    return;
+  };
+
+  match out.get_mut("text") {
+    Some(Value::Object(text)) => {
+      text.entry("verbosity").or_insert(verbosity);
+    }
+    Some(_) => {}
+    None => {
+      out.insert("text".into(), json!({ "verbosity": verbosity }));
+    }
+  }
 }
 
 fn normalize_reasoning(reasoning: Option<Value>, reasoning_effort: Option<&str>) -> Option<Value> {
@@ -587,6 +604,103 @@ mod tests {
       Some(&json!({ "effort": "low", "summary": "auto" }))
     );
     assert!(body.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn request_to_value_promotes_verbosity_extra_into_text() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body.get("text"), Some(&json!({ "verbosity": "low" })));
+    assert!(body.get("verbosity").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_existing_text_verbosity() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let mut body = request_to_value(&req).expect("request should render");
+    body.as_object_mut().expect("request body object").insert(
+      "text".into(),
+      json!({ "verbosity": "high", "format": { "type": "text" } }),
+    );
+
+    normalize_text_verbosity(body.as_object_mut().expect("request body object"), Some(&json!("low")));
+
+    assert_eq!(
+      body.get("text"),
+      Some(&json!({ "verbosity": "high", "format": { "type": "text" } }))
+    );
+    assert!(body.get("verbosity").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_explicit_text_extra_before_normalizing_verbosity() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    extras.insert("text".into(), json!({ "format": { "type": "text" } }));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(
+      body.get("text"),
+      Some(&json!({ "format": { "type": "text" }, "verbosity": "low" }))
+    );
+    assert!(body.get("verbosity").is_none());
   }
 
   #[test]
