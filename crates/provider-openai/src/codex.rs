@@ -93,6 +93,7 @@ impl InputTransformer for CodexProvider {
     if endpoint == Endpoint::Responses {
       if let Some(obj) = body.as_object_mut() {
         obj.remove("max_output_tokens");
+        obj.insert("store".into(), Value::Bool(false));
         if let Some(input) = obj.get_mut("input") {
           normalize_codex_input(input);
         }
@@ -365,6 +366,17 @@ mod tests {
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
     assert_eq!(out.get("instructions").and_then(Value::as_str), Some("be terse"));
+  }
+
+  #[test]
+  fn codex_transform_forces_store_false() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["store"] = Value::Bool(true);
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert_eq!(out.get("store"), Some(&Value::Bool(false)));
   }
 
   #[test]
