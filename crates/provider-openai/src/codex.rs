@@ -95,7 +95,7 @@ impl InputTransformer for CodexProvider {
         obj.remove("max_output_tokens");
         obj.insert("store".into(), Value::Bool(false));
         obj.insert("stream".into(), Value::Bool(true));
-        normalize_text_controls(obj);
+        normalize_verbosity(obj);
         if let Some(input) = obj.get_mut("input") {
           normalize_codex_input(input);
         }
@@ -128,14 +128,19 @@ fn normalize_reasoning_effort(obj: &mut serde_json::Map<String, Value>) {
   }
 }
 
-fn normalize_text_controls(obj: &mut serde_json::Map<String, Value>) {
-  let Some(Value::Object(text)) = obj.get_mut("text") else {
+fn normalize_verbosity(obj: &mut serde_json::Map<String, Value>) {
+  let Some(verbosity) = obj.remove("verbosity") else {
     return;
   };
 
-  text.remove("verbosity");
-  if text.is_empty() {
-    obj.remove("text");
+  match obj.get_mut("text") {
+    Some(Value::Object(text)) => {
+      text.entry("verbosity").or_insert(verbosity);
+    }
+    Some(_) => {}
+    None => {
+      obj.insert("text".into(), serde_json::json!({ "verbosity": verbosity }));
+    }
   }
 }
 
@@ -424,14 +429,31 @@ mod tests {
   }
 
   #[test]
-  fn codex_transform_removes_text_verbosity() {
+  fn codex_transform_moves_top_level_verbosity_into_text() {
     let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
     let mut body = request_body();
-    body["text"] = serde_json::json!({ "verbosity": "low", "format": { "type": "text" } });
+    body["verbosity"] = Value::String("low".into());
 
     let out = codex.transform_input(Endpoint::Responses, body).unwrap();
 
-    assert_eq!(out.get("text"), Some(&serde_json::json!({ "format": { "type": "text" } })));
+    assert!(out.get("verbosity").is_none());
+    assert_eq!(out.get("text"), Some(&serde_json::json!({ "verbosity": "low" })));
+  }
+
+  #[test]
+  fn codex_transform_preserves_existing_text_verbosity() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut body = request_body();
+    body["verbosity"] = Value::String("low".into());
+    body["text"] = serde_json::json!({ "verbosity": "high", "format": { "type": "text" } });
+
+    let out = codex.transform_input(Endpoint::Responses, body).unwrap();
+
+    assert!(out.get("verbosity").is_none());
+    assert_eq!(
+      out.get("text"),
+      Some(&serde_json::json!({ "verbosity": "high", "format": { "type": "text" } }))
+    );
   }
 
   #[test]
