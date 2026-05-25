@@ -32,6 +32,22 @@ use tracing::{debug, instrument, warn};
 
 use crate::stages::resolve::proxy::keys;
 
+fn proxy_send_error_hint(err_text: &str, has_inner_source: bool) -> &'static str {
+  if err_text.contains("with no inner error")
+    || (!has_inner_source && err_text.contains("error sending request for url"))
+  {
+    " (upstream/network details were not exposed by reqwest; this is often a TLS shutdown or connection reset by the upstream)"
+  } else {
+    ""
+  }
+}
+
+fn format_proxy_send_error(url: &str, err: &reqwest::Error) -> String {
+  let err_text = err.to_string();
+  let hint = proxy_send_error_hint(&err_text, std::error::Error::source(err).is_some());
+  format!("proxy upstream `{url}` failed: {err_text}{hint}")
+}
+
 /// Config keys consumed by [`ProxySend`]. These complement the keys
 /// read by [`ProxyResolve`](crate::stages::ProxyResolve) and must be
 /// populated by the proxy transport layer before calling
@@ -163,7 +179,7 @@ impl SendStage for ProxySend {
       Err(err) => {
         let recoverable = err.is_connect() || err.is_timeout() || err.is_request();
         let source = RequestsError::Other {
-          source: format!("proxy upstream `{url}` failed: {err}").into(),
+          source: format_proxy_send_error(&url, &err).into(),
         };
         return Err(if recoverable {
           PipelineError::recoverable(Stage::Send, source)
@@ -257,6 +273,24 @@ mod tests {
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokn_core::provider::Endpoint;
   use tokn_headers::{HeaderName, HeaderValue};
+
+  #[test]
+  fn proxy_send_error_hint_matches_no_inner_error_text() {
+    let hint = proxy_send_error_hint(
+      "error sending request for url (https://api.z.ai/api/coding/paas/v4/chat/completions) with no inner error",
+      false,
+    );
+    assert!(hint.contains("TLS shutdown or connection reset"));
+  }
+
+  #[test]
+  fn proxy_send_error_hint_omits_regular_transport_errors() {
+    let hint = proxy_send_error_hint(
+      "error sending request for url (http://127.0.0.1:1): tcp connect error",
+      true,
+    );
+    assert!(hint.is_empty());
+  }
 
   fn ctx_with(config: RunConfig) -> PipelineCtx {
     PipelineCtx::new_with_config(
