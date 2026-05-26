@@ -157,6 +157,7 @@ impl AccountPool {
         Lookup::Hit(account_id) => {
           if let Some(acct) = self.account_by_id(&account_id) {
             if acct.is_healthy() && self.account_matches(&acct, model, endpoint) {
+              self.record_session(id, &acct.id());
               return SessionAcquire::Account(acct);
             }
           }
@@ -189,6 +190,7 @@ impl AccountPool {
           if let Some(acct) = self.account_by_id(&account_id) {
             if acct.is_healthy() {
               if let Some(endpoint) = self.account_matching_endpoint(&acct, model, requested) {
+                self.record_session(id, &acct.id());
                 return EndpointAcquire::Account { acct, endpoint };
               }
             }
@@ -222,6 +224,7 @@ impl AccountPool {
           if let Some(acct) = self.account_by_id(&account_id) {
             if acct.is_healthy() {
               if let Some(endpoint) = self.account_matching_route_endpoint(&acct, route, requested) {
+                self.record_session(id, &acct.id());
                 return EndpointAcquire::Account { acct, endpoint };
               }
             }
@@ -592,6 +595,10 @@ mod tests {
   }
 
   fn pool() -> AccountPool {
+    pool_with_ttls(Duration::from_secs(60), Duration::from_secs(120))
+  }
+
+  fn pool_with_ttls(session_ttl: Duration, tombstone_ttl: Duration) -> AccountPool {
     static A: &[&str] = &["provider-a"];
     static B: &[&str] = &["provider-b"];
     let pa = MockProvider::new("provider-a", A, &["model-a"]);
@@ -624,7 +631,7 @@ mod tests {
       buckets,
       accounts: vec![a1, a2, b1],
       cooldown_base: Duration::from_secs(1),
-      affinity: Affinity::new(Duration::from_secs(60), Duration::from_secs(120)),
+      affinity: Affinity::new(session_ttl, tombstone_ttl),
     }
   }
 
@@ -663,5 +670,28 @@ mod tests {
       };
       assert_eq!(next.id(), first.id());
     }
+  }
+
+  #[test]
+  fn session_hit_refreshes_ttl() {
+    let p = pool_with_ttls(Duration::from_millis(120), Duration::from_millis(240));
+    let SessionAcquire::Account(first) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected account");
+    };
+
+    std::thread::sleep(Duration::from_millis(80));
+    let SessionAcquire::Account(second) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected refreshed account");
+    };
+    assert_eq!(second.id(), first.id());
+
+    std::thread::sleep(Duration::from_millis(80));
+    let SessionAcquire::Account(third) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected session to stay alive after refresh");
+    };
+    assert_eq!(third.id(), first.id());
   }
 }
