@@ -613,7 +613,9 @@ mod tests {
       system: None,
       messages: vec![IrMessage {
         role: Role::Tool,
-        content: vec![ContentPart::Text { text: "tool result".into() }],
+        content: vec![ContentPart::Text {
+          text: "tool result".into(),
+        }],
         tool_call_id: Some("call_1".into()),
         name: None,
         raw: None,
@@ -642,7 +644,9 @@ mod tests {
       messages: vec![IrMessage {
         role: Role::Assistant,
         content: vec![
-          ContentPart::Text { text: "I'll inspect it.".into() },
+          ContentPart::Text {
+            text: "I'll inspect it.".into(),
+          },
           ContentPart::ToolCall {
             call: ToolCall {
               id: Some("call_1".into()),
