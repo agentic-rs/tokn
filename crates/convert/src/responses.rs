@@ -76,7 +76,7 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   }
   out.insert(
     "input".into(),
-    Value::Array(req.messages.iter().map(message_to_responses_input).collect()),
+    Value::Array(req.messages.iter().flat_map(message_to_responses_input_items).collect()),
   );
   if !req.tools.is_empty() {
     out.insert(
@@ -480,13 +480,13 @@ fn part_from_responses(v: &Value) -> ContentPart {
   }
 }
 
-fn message_to_responses_input(msg: &IrMessage) -> Value {
+fn message_to_responses_input_items(msg: &IrMessage) -> Vec<Value> {
   if msg.role == Role::Tool {
-    return json!({
+    return vec![json!({
       "type": "function_call_output",
       "call_id": msg.tool_call_id.clone().unwrap_or_default(),
       "output": text_from_parts(&msg.content),
-    });
+    })];
   }
   let text_type = match msg.role {
     Role::Assistant => "output_text",
@@ -501,7 +501,20 @@ fn message_to_responses_input(msg: &IrMessage) -> Value {
       _ => None,
     })
     .collect();
-  json!({ "role": msg.role.as_str(), "content": parts })
+  let mut items = Vec::new();
+  if !parts.is_empty() || !matches!(msg.role, Role::Assistant) {
+    items.push(json!({ "role": msg.role.as_str(), "content": parts }));
+  }
+  items.extend(msg.content.iter().filter_map(|p| match p {
+    ContentPart::ToolCall { call } => Some(json!({
+      "type": "function_call",
+      "call_id": call.id.clone().unwrap_or_default(),
+      "name": call.name,
+      "arguments": args_to_string(&call.arguments),
+    })),
+    _ => None,
+  }));
+  items
 }
 
 #[cfg(test)]
@@ -619,6 +632,47 @@ mod tests {
     assert_eq!(body["input"][0]["call_id"], "call_1");
     assert_eq!(body["input"][0]["output"], "tool result");
     assert!(body["input"][0].get("role").is_none());
+  }
+
+  #[test]
+  fn request_to_value_renders_assistant_tool_calls_as_function_call_items() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::Assistant,
+        content: vec![
+          ContentPart::Text { text: "I'll inspect it.".into() },
+          ContentPart::ToolCall {
+            call: ToolCall {
+              id: Some("call_1".into()),
+              name: "bash".into(),
+              arguments: json!({ "command": "ls \"/tmp\"", "description": "Verifies temporary directory exists" }),
+            },
+          },
+        ],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["role"], "assistant");
+    assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
+    assert_eq!(body["input"][1]["type"], "function_call");
+    assert_eq!(body["input"][1]["call_id"], "call_1");
+    assert_eq!(body["input"][1]["name"], "bash");
+    let args: Value = serde_json::from_str(body["input"][1]["arguments"].as_str().unwrap()).unwrap();
+    assert_eq!(args["command"], "ls \"/tmp\"");
+    assert!(body["input"][1].get("role").is_none());
   }
 
   #[test]
