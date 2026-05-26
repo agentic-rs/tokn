@@ -166,7 +166,7 @@ impl Provider for ZaiProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    Ok(())
+    self.normalize_headers(headers, ctx)
   }
 
   #[instrument(

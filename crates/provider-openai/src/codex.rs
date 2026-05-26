@@ -4,8 +4,7 @@ use reqwest::Method;
 use serde_json::Value;
 use std::sync::Arc;
 use tokn_core::account::AccountConfig;
-use tokn_headers::keys::CHATGPT_ACCOUNT_ID;
-use tokn_headers::{HeaderMap, HeaderValue};
+use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
 use crate::{
@@ -123,9 +122,17 @@ impl Provider for CodexProvider {
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     common::patch_openai_headers(headers, self.credential.expose(), ctx)?;
-    if let Some(pid) = self.provider_account_id.as_deref().filter(|s| !s.is_empty()) {
-      headers.insert(&CHATGPT_ACCOUNT_ID, HeaderValue::from_string(pid.to_string()));
-    }
+    self.normalize_headers(headers, ctx)?;
+    Ok(())
+  }
+
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    common::normalize_codex_headers(
+      headers,
+      self.credential.expose(),
+      self.provider_account_id.as_deref(),
+      ctx,
+    );
     Ok(())
   }
 
@@ -280,9 +287,32 @@ mod tests {
     a.provider_account_id = Some("acc-77".into());
     let codex = CodexProvider::from_account(Arc::new(a)).unwrap();
     let mut h = HeaderMap::new();
+    h.insert("originator", "Codex Desktop");
+    h.insert("session_id", "sess-1");
+    h.insert("x-api-key", "wrong");
     codex.patch_headers(&mut h, &patch_ctx()).unwrap();
     assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer atk-test");
+    assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
+    assert_eq!(h.get("OpenAI-Beta").unwrap().as_str(), "responses=experimental");
+    assert_eq!(h.get("originator").unwrap().as_str(), "Codex Desktop");
+    assert_eq!(h.get("version").unwrap().as_str(), "0.125.0");
+    assert_eq!(h.get("user-agent").unwrap().as_str(), "codex_cli_rs/0.125.0");
+    assert_eq!(h.get("session_id").unwrap().as_str(), "sess-1");
     assert_eq!(h.get("chatgpt-account-id").unwrap().as_str(), "acc-77");
+    assert!(h.get("x-api-key").is_none());
+  }
+
+  #[test]
+  fn codex_patch_headers_defaults_originator_and_stream_accept() {
+    let codex = CodexProvider::from_account(Arc::new(acct(Some("atk-test")))).unwrap();
+    let mut h = HeaderMap::new();
+    let mut ctx = patch_ctx();
+    ctx.stream = true;
+    codex.patch_headers(&mut h, &ctx).unwrap();
+    assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
+    assert_eq!(h.get("originator").unwrap().as_str(), "codex_cli_rs");
+    assert_eq!(h.get("OpenAI-Beta").unwrap().as_str(), "responses=experimental");
   }
 
   #[test]

@@ -395,6 +395,17 @@ pub trait Provider: Send + Sync {
     Ok(())
   }
 
+  /// Final provider-owned header shape enforcement.
+  ///
+  /// Implementations use this after auth/content patching to canonicalize
+  /// provider-specific order and casing, remove forbidden inbound residue, and
+  /// fill required defaults. `patch_headers` remains the public hook so older
+  /// call sites continue to work; provider `patch_headers` implementations
+  /// should call this as their last step.
+  fn normalize_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    Ok(())
+  }
+
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value>;
   async fn chat(&self, ctx: RequestCtx<'_>) -> Result<reqwest::Response>;
 

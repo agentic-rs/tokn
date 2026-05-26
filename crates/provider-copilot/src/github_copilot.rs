@@ -204,7 +204,7 @@ impl Provider for CopilotProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    Ok(())
+    self.normalize_headers(headers, ctx)
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {

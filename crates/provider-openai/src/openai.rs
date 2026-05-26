@@ -111,7 +111,13 @@ impl Provider for OpenAiProvider {
   }
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::patch_openai_headers(headers, self.credential.expose(), ctx)
+    common::patch_openai_headers(headers, self.credential.expose(), ctx)?;
+    self.normalize_headers(headers, ctx)
+  }
+
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    common::normalize_openai_platform_headers(headers, self.credential.expose(), ctx);
+    Ok(())
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
@@ -215,8 +221,19 @@ mod tests {
     a.provider_account_id = Some("acc-ignored".into());
     let openai = OpenAiProvider::from_account(Arc::new(a)).unwrap();
     let mut h = HeaderMap::new();
+    h.insert("OpenAI-Beta", "responses=experimental");
+    h.insert("originator", "codex_cli_rs");
+    h.insert("session_id", "sess-leak");
+    h.insert("x-api-key", "wrong");
     openai.patch_headers(&mut h, &patch_ctx()).unwrap();
+    assert_eq!(h.get("authorization").unwrap().as_str(), "Bearer sk-test");
+    assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
+    assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
     assert!(h.get("chatgpt-account-id").is_none());
+    assert!(h.get("OpenAI-Beta").is_none());
+    assert!(h.get("originator").is_none());
+    assert!(h.get("session_id").is_none());
+    assert!(h.get("x-api-key").is_none());
   }
 
   #[test]

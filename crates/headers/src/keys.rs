@@ -84,6 +84,7 @@ key!(
   "X-Stainless-Retry-Count",
   "x-stainless-retry-count"
 );
+key!(X_STAINLESS_TIMEOUT, "X-Stainless-Timeout", "x-stainless-timeout");
 key!(X_STAINLESS_LANG, "X-Stainless-Lang", "x-stainless-lang");
 key!(
   X_STAINLESS_PACKAGE_VERSION,
@@ -98,6 +99,18 @@ key!(
   "X-Stainless-Runtime-Version",
   "x-stainless-runtime-version"
 );
+key!(
+  X_STAINLESS_HELPER_METHOD,
+  "x-stainless-helper-method",
+  "x-stainless-helper-method"
+);
+key!(X_APP, "X-App", "x-app");
+key!(
+  ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS,
+  "Anthropic-Dangerous-Direct-Browser-Access",
+  "anthropic-dangerous-direct-browser-access"
+);
+key!(X_GOOG_API_KEY, "x-goog-api-key", "x-goog-api-key");
 
 #[cfg(test)]
 mod tests {
@@ -167,12 +180,17 @@ mod tests {
       SEC_WEBSOCKET_KEY,
       SEC_WEBSOCKET_VERSION,
       X_STAINLESS_RETRY_COUNT,
+      X_STAINLESS_TIMEOUT,
       X_STAINLESS_LANG,
       X_STAINLESS_PACKAGE_VERSION,
       X_STAINLESS_OS,
       X_STAINLESS_ARCH,
       X_STAINLESS_RUNTIME,
       X_STAINLESS_RUNTIME_VERSION,
+      X_STAINLESS_HELPER_METHOD,
+      X_APP,
+      ANTHROPIC_DANGEROUS_DIRECT_BROWSER_ACCESS,
+      X_GOOG_API_KEY,
     );
   }
 
