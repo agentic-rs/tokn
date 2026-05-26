@@ -481,11 +481,15 @@ fn part_from_responses(v: &Value) -> ContentPart {
 }
 
 fn message_to_responses_input(msg: &IrMessage) -> Value {
+  let text_type = match msg.role {
+    Role::Assistant => "output_text",
+    _ => "input_text",
+  };
   let parts: Vec<_> = msg
     .content
     .iter()
     .filter_map(|p| match p {
-      ContentPart::Text { text } => Some(json!({ "type": "input_text", "text": text })),
+      ContentPart::Text { text } => Some(json!({ "type": text_type, "text": text })),
       ContentPart::Raw { value } => Some(value.clone()),
       _ => None,
     })
@@ -545,6 +549,41 @@ mod tests {
     let body = request_to_value(&req).expect("request should render");
 
     assert_eq!(body.get("store"), Some(&Value::Bool(false)));
+  }
+
+  #[test]
+  fn request_to_value_uses_output_text_for_assistant_message_content() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![
+        IrMessage {
+          role: Role::User,
+          content: vec![ContentPart::Text { text: "hi".into() }],
+          tool_call_id: None,
+          name: None,
+          raw: None,
+        },
+        IrMessage {
+          role: Role::Assistant,
+          content: vec![ContentPart::Text { text: "hello".into() }],
+          tool_call_id: None,
+          name: None,
+          raw: None,
+        },
+      ],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(body["input"][1]["content"][0]["type"], "output_text");
   }
 
   #[test]
