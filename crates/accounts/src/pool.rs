@@ -250,6 +250,11 @@ impl AccountPool {
     self.affinity.record(session_id, account_id);
   }
 
+  #[cfg(test)]
+  fn rewind_session_for_test(&self, session_id: &str, delta: Duration) -> bool {
+    self.affinity.rewind_live_entry(session_id, delta)
+  }
+
   pub fn all(&self) -> &[Arc<AccountHandle>] {
     &self.accounts
   }
@@ -680,14 +685,14 @@ mod tests {
       panic!("expected account");
     };
 
-    std::thread::sleep(Duration::from_millis(80));
+    assert!(p.rewind_session_for_test("s1", Duration::from_millis(80)));
     let SessionAcquire::Account(second) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
     else {
       panic!("expected refreshed account");
     };
     assert_eq!(second.id(), first.id());
 
-    std::thread::sleep(Duration::from_millis(80));
+    assert!(p.rewind_session_for_test("s1", Duration::from_millis(80)));
     let SessionAcquire::Account(third) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
     else {
       panic!("expected session to stay alive after refresh");

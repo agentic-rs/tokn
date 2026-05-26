@@ -76,6 +76,22 @@ impl Affinity<SystemClock> {
   pub fn new(ttl: Duration, tombstone_ttl: Duration) -> Self {
     Affinity::<SystemClock>::with_clock(ttl, tombstone_ttl, SystemClock)
   }
+
+  #[cfg(test)]
+  pub(crate) fn rewind_live_entry(&self, key: &str, delta: Duration) -> bool {
+    let mut g = self.map.write();
+    let Some(entry) = g.get_mut(key) else {
+      return false;
+    };
+    if entry.account_id.is_empty() {
+      return false;
+    }
+    let Some(stamped_at) = entry.stamped_at.checked_sub(delta) else {
+      return false;
+    };
+    entry.stamped_at = stamped_at;
+    true
+  }
 }
 
 impl<C: Clock> Affinity<C> {
