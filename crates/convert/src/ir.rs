@@ -99,12 +99,14 @@ pub struct Usage {
   pub input_tokens: Option<u64>,
   pub output_tokens: Option<u64>,
   pub total_tokens: Option<u64>,
-  /// `prompt_tokens_details.cached_tokens` (chat) /
-  /// `input_tokens_details.cached_tokens` (responses).
-  pub cached_input_tokens: Option<u64>,
-  /// `completion_tokens_details.reasoning_tokens` (chat) /
-  /// `output_tokens_details.reasoning_tokens` (responses).
-  pub reasoning_output_tokens: Option<u64>,
+  /// Normalized usage-details payload. Maps from either
+  /// `prompt_tokens_details` or `input_tokens_details`.
+  pub input_tokens_details: Option<Value>,
+  /// Normalized usage-details payload. Maps from either
+  /// `completion_tokens_details` or `output_tokens_details`.
+  pub output_tokens_details: Option<Value>,
+  /// Unknown or provider-specific top-level usage keys.
+  pub extras: BTreeMap<String, Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -199,19 +201,33 @@ pub fn reasoning_from_parts(parts: &[ContentPart]) -> Option<String> {
 
 pub fn usage_from_openai(v: &Value) -> Option<Usage> {
   let u = v.get("usage")?;
-  let cached_input_tokens = u
+  let input_tokens_details = u
     .get("input_tokens_details")
-    .and_then(|d| d.get("cached_tokens"))
-    .or_else(|| u.get("prompt_tokens_details").and_then(|d| d.get("cached_tokens")))
-    .and_then(Value::as_u64);
-  let reasoning_output_tokens = u
+    .cloned()
+    .or_else(|| u.get("prompt_tokens_details").cloned());
+  let output_tokens_details = u
     .get("output_tokens_details")
-    .and_then(|d| d.get("reasoning_tokens"))
-    .or_else(|| {
-      u.get("completion_tokens_details")
-        .and_then(|d| d.get("reasoning_tokens"))
+    .cloned()
+    .or_else(|| u.get("completion_tokens_details").cloned());
+  let extras = u
+    .as_object()
+    .map(|obj| {
+      extras_from_object(
+        obj,
+        &[
+          "prompt_tokens",
+          "completion_tokens",
+          "input_tokens",
+          "output_tokens",
+          "total_tokens",
+          "prompt_tokens_details",
+          "completion_tokens_details",
+          "input_tokens_details",
+          "output_tokens_details",
+        ],
+      )
     })
-    .and_then(Value::as_u64);
+    .unwrap_or_default();
   Some(Usage {
     input_tokens: u
       .get("prompt_tokens")
@@ -222,39 +238,57 @@ pub fn usage_from_openai(v: &Value) -> Option<Usage> {
       .or_else(|| u.get("output_tokens"))
       .and_then(Value::as_u64),
     total_tokens: u.get("total_tokens").and_then(Value::as_u64),
-    cached_input_tokens,
-    reasoning_output_tokens,
+    input_tokens_details,
+    output_tokens_details,
+    extras,
   })
 }
 
 pub fn usage_to_chat(usage: &Usage) -> Value {
-  let mut v = serde_json::json!({
-    "prompt_tokens": usage.input_tokens.unwrap_or(0),
-    "completion_tokens": usage.output_tokens.unwrap_or(0),
-    "total_tokens": usage.total_tokens.unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
-  });
-  if let Some(c) = usage.cached_input_tokens {
-    v["prompt_tokens_details"] = serde_json::json!({ "cached_tokens": c });
+  let mut v = Map::new();
+  v.extend(usage.extras.clone());
+  v.insert("prompt_tokens".into(), Value::from(usage.input_tokens.unwrap_or(0)));
+  v.insert(
+    "completion_tokens".into(),
+    Value::from(usage.output_tokens.unwrap_or(0)),
+  );
+  v.insert(
+    "total_tokens".into(),
+    Value::from(
+      usage
+        .total_tokens
+        .unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
+    ),
+  );
+  if let Some(details) = &usage.input_tokens_details {
+    v.insert("prompt_tokens_details".into(), details.clone());
   }
-  if let Some(r) = usage.reasoning_output_tokens {
-    v["completion_tokens_details"] = serde_json::json!({ "reasoning_tokens": r });
+  if let Some(details) = &usage.output_tokens_details {
+    v.insert("completion_tokens_details".into(), details.clone());
   }
-  v
+  Value::Object(v)
 }
 
 pub fn usage_to_io(usage: &Usage) -> Value {
-  let mut v = serde_json::json!({
-    "input_tokens": usage.input_tokens.unwrap_or(0),
-    "output_tokens": usage.output_tokens.unwrap_or(0),
-    "total_tokens": usage.total_tokens.unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
-  });
-  if let Some(c) = usage.cached_input_tokens {
-    v["input_tokens_details"] = serde_json::json!({ "cached_tokens": c });
+  let mut v = Map::new();
+  v.extend(usage.extras.clone());
+  v.insert("input_tokens".into(), Value::from(usage.input_tokens.unwrap_or(0)));
+  v.insert("output_tokens".into(), Value::from(usage.output_tokens.unwrap_or(0)));
+  v.insert(
+    "total_tokens".into(),
+    Value::from(
+      usage
+        .total_tokens
+        .unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)),
+    ),
+  );
+  if let Some(details) = &usage.input_tokens_details {
+    v.insert("input_tokens_details".into(), details.clone());
   }
-  if let Some(r) = usage.reasoning_output_tokens {
-    v["output_tokens_details"] = serde_json::json!({ "reasoning_tokens": r });
+  if let Some(details) = &usage.output_tokens_details {
+    v.insert("output_tokens_details".into(), details.clone());
   }
-  v
+  Value::Object(v)
 }
 
 pub fn extras_from_object(obj: &Map<String, Value>, known: &[&str]) -> BTreeMap<String, Value> {
@@ -274,5 +308,58 @@ pub fn insert_opt_f64(out: &mut Map<String, Value>, key: &str, value: Option<f64
 pub fn insert_opt_u64(out: &mut Map<String, Value>, key: &str, value: Option<u64>) {
   if let Some(value) = value {
     out.insert(key.into(), Value::Number(value.into()));
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use serde_json::json;
+
+  #[test]
+  fn usage_round_trip_preserves_extra_usage_fields() {
+    let wire = json!({
+      "usage": {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "total_tokens": 14,
+        "input_tokens_details": {
+          "cached_tokens": 3,
+          "text_tokens": 7
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 2,
+          "text_tokens": 2
+        },
+        "service_tier": "flex"
+      }
+    });
+    let usage = usage_from_openai(&wire).expect("usage");
+    assert_eq!(
+      usage.input_tokens_details,
+      Some(json!({ "cached_tokens": 3, "text_tokens": 7 }))
+    );
+    assert_eq!(
+      usage.output_tokens_details,
+      Some(json!({ "reasoning_tokens": 2, "text_tokens": 2 }))
+    );
+    assert_eq!(usage.extras.get("service_tier"), Some(&json!("flex")));
+    assert_eq!(
+      usage_to_io(&usage),
+      json!({
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "total_tokens": 14,
+        "input_tokens_details": {
+          "cached_tokens": 3,
+          "text_tokens": 7
+        },
+        "output_tokens_details": {
+          "reasoning_tokens": 2,
+          "text_tokens": 2
+        },
+        "service_tier": "flex"
+      })
+    );
   }
 }

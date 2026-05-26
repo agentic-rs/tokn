@@ -575,6 +575,9 @@ fn patch_json_column(
 
 fn usage_json(usage: &tokn_core::db::Usage) -> Option<String> {
   let mut out = Map::new();
+  if let Some(v) = usage.usage_type {
+    out.insert("kind".to_string(), Value::from(v.as_str()));
+  }
   if let Some(v) = usage.input_tokens {
     out.insert("input".to_string(), Value::from(v));
   }

@@ -19,6 +19,26 @@ use tokn_auth::descriptor::RewriteTarget;
 use tokn_core::util::http::HttpClientOptions;
 use transport::handle_client;
 
+fn is_benign_disconnect(err: &anyhow::Error) -> bool {
+  let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
+  while let Some(source) = current {
+    if let Some(io_err) = source.downcast_ref::<std::io::Error>() {
+      if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+        return true;
+      }
+    }
+    let message = source.to_string();
+    if message.contains("peer closed connection without sending TLS close_notify")
+      || message.contains("unexpected eof")
+      || message.contains("UnexpectedEof")
+    {
+      return true;
+    }
+    current = source.source();
+  }
+  false
+}
+
 /// Full built-in intercept set. Keep this explicit so default interception
 /// does not shrink when a provider crate is conditionally unavailable.
 pub(crate) const INTERCEPT_HOSTS: &[&str] = &[
@@ -74,7 +94,11 @@ where
         let route_resolver = route_resolver.clone();
         tokio::spawn(async move {
           if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver).await {
-            tracing::warn!(%peer, error = %err, "proxy connection failed");
+            if is_benign_disconnect(&err) {
+              tracing::debug!(%peer, error = %err, "proxy connection closed by peer");
+            } else {
+              tracing::warn!(%peer, error = %err, "proxy connection failed");
+            }
           }
         });
       }
@@ -156,4 +180,27 @@ fn split_authority(authority: &str) -> Result<(String, u16)> {
       .parse()
       .with_context(|| format!("invalid CONNECT port in '{authority}'"))?,
   ))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn benign_disconnect_matches_unexpected_eof() {
+    let err = anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "stream ended"));
+    assert!(is_benign_disconnect(&err));
+  }
+
+  #[test]
+  fn benign_disconnect_matches_rustls_close_notify_message() {
+    let err = anyhow::anyhow!("TLS handshake failed: peer closed connection without sending TLS close_notify");
+    assert!(is_benign_disconnect(&err));
+  }
+
+  #[test]
+  fn benign_disconnect_rejects_other_errors() {
+    let err = anyhow::anyhow!("invalid CONNECT authority");
+    assert!(!is_benign_disconnect(&err));
+  }
 }

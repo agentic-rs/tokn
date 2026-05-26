@@ -121,6 +121,7 @@ pub struct PoolConfig {
   /// After eviction, remember the session id as a tombstone for this long
   /// so subsequent requests get an explicit `session expired` error
   /// instead of being silently re-bound to a different account.
+  /// Set to `0` to disable tombstones.
   #[serde(default = "default_session_tombstone")]
   pub session_tombstone_secs: u64,
 }
@@ -145,11 +146,11 @@ fn default_cooldown() -> u64 {
 }
 
 fn default_session_ttl() -> u64 {
-  1800
+  18000
 }
 
 fn default_session_tombstone() -> u64 {
-  7200
+  0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

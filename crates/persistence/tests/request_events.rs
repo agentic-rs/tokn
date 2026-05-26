@@ -6,7 +6,7 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokn_core::db::{Usage, UsageDetails};
+use tokn_core::db::{Usage, UsageDetails, UsageType};
 use tokn_core::event::{Event, EventHandler};
 use tokn_core::provider::Endpoint;
 use tokn_core::request_event::stage::{
@@ -629,6 +629,7 @@ fn usage_record_updates_token_columns() {
       input_tokens: Some(11),
       output_tokens: Some(22),
       total_tokens: Some(40),
+      usage_type: Some(UsageType::Responses),
       details: UsageDetails {
         cache_read: Some(3),
         cache_write: Some(5),
@@ -641,6 +642,7 @@ fn usage_record_updates_token_columns() {
   assert_eq!(
     as_json(&row["usage_json"]),
     Some(serde_json::json!({
+      "kind": "responses",
       "input": 11,
       "output": 22,
       "cache_read": 3,
@@ -670,6 +672,7 @@ fn usage_json_omits_missing_token_keys_and_does_not_calculate_total() {
       input_tokens: Some(11),
       output_tokens: Some(13),
       total_tokens: None,
+      usage_type: Some(UsageType::Messages),
       details: UsageDetails {
         cache_read: None,
         cache_write: None,
@@ -681,6 +684,10 @@ fn usage_json_omits_missing_token_keys_and_does_not_calculate_total() {
   let row = fetch_row(&dir, req);
   assert_eq!(
     as_json(&row["usage_json"]),
-    Some(serde_json::json!({"input": 11, "output": 13}))
+    Some(serde_json::json!({
+      "kind": "messages",
+      "input": 11,
+      "output": 13
+    }))
   );
 }

@@ -76,7 +76,7 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   }
   out.insert(
     "input".into(),
-    Value::Array(req.messages.iter().map(message_to_responses_input).collect()),
+    Value::Array(req.messages.iter().flat_map(message_to_responses_input_items).collect()),
   );
   if !req.tools.is_empty() {
     out.insert(
@@ -93,7 +93,10 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   if let Some(v) = &req.sampling.stop {
     out.insert("stop".into(), v.clone());
   }
-  if let Some(v) = &req.reasoning {
+  if let Some(v) = normalize_reasoning(
+    req.reasoning.clone(),
+    req.extras.get("reasoning_effort").and_then(Value::as_str),
+  ) {
     out.insert("reasoning".into(), v.clone());
   }
   out.insert(
@@ -104,9 +107,44 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
     out.insert("stream".into(), Value::Bool(true));
   }
   for (k, v) in &req.extras {
+    if k == "reasoning_effort" || k == "verbosity" {
+      continue;
+    }
     out.entry(k.clone()).or_insert_with(|| v.clone());
   }
+  normalize_text_verbosity(&mut out, req.extras.get("verbosity"));
   Ok(Value::Object(out))
+}
+
+fn normalize_text_verbosity(out: &mut Map<String, Value>, verbosity: Option<&Value>) {
+  let Some(verbosity) = verbosity.cloned() else {
+    return;
+  };
+
+  match out.get_mut("text") {
+    Some(Value::Object(text)) => {
+      text.entry("verbosity").or_insert(verbosity);
+    }
+    Some(_) => {}
+    None => {
+      out.insert("text".into(), json!({ "verbosity": verbosity }));
+    }
+  }
+}
+
+fn normalize_reasoning(reasoning: Option<Value>, reasoning_effort: Option<&str>) -> Option<Value> {
+  let Some(effort) = reasoning_effort else {
+    return reasoning;
+  };
+
+  match reasoning {
+    Some(Value::Object(mut obj)) => {
+      obj.entry("effort").or_insert_with(|| Value::String(effort.to_string()));
+      Some(Value::Object(obj))
+    }
+    Some(other) => Some(other),
+    None => Some(json!({ "effort": effort })),
+  }
 }
 
 pub fn response_from_value(v: &Value) -> Result<IrResponse> {
@@ -442,17 +480,41 @@ fn part_from_responses(v: &Value) -> ContentPart {
   }
 }
 
-fn message_to_responses_input(msg: &IrMessage) -> Value {
+fn message_to_responses_input_items(msg: &IrMessage) -> Vec<Value> {
+  if msg.role == Role::Tool {
+    return vec![json!({
+      "type": "function_call_output",
+      "call_id": msg.tool_call_id.clone().unwrap_or_default(),
+      "output": text_from_parts(&msg.content),
+    })];
+  }
+  let text_type = match msg.role {
+    Role::Assistant => "output_text",
+    _ => "input_text",
+  };
   let parts: Vec<_> = msg
     .content
     .iter()
     .filter_map(|p| match p {
-      ContentPart::Text { text } => Some(json!({ "type": "input_text", "text": text })),
+      ContentPart::Text { text } => Some(json!({ "type": text_type, "text": text })),
       ContentPart::Raw { value } => Some(value.clone()),
       _ => None,
     })
     .collect();
-  json!({ "role": msg.role.as_str(), "content": parts })
+  let mut items = Vec::new();
+  if !parts.is_empty() || !matches!(msg.role, Role::Assistant) {
+    items.push(json!({ "role": msg.role.as_str(), "content": parts }));
+  }
+  items.extend(msg.content.iter().filter_map(|p| match p {
+    ContentPart::ToolCall { call } => Some(json!({
+      "type": "function_call",
+      "call_id": call.id.clone().unwrap_or_default(),
+      "name": call.name,
+      "arguments": args_to_string(&call.arguments),
+    })),
+    _ => None,
+  }));
+  items
 }
 
 #[cfg(test)]
@@ -507,6 +569,270 @@ mod tests {
     let body = request_to_value(&req).expect("request should render");
 
     assert_eq!(body.get("store"), Some(&Value::Bool(false)));
+  }
+
+  #[test]
+  fn request_to_value_uses_output_text_for_assistant_message_content() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![
+        IrMessage {
+          role: Role::User,
+          content: vec![ContentPart::Text { text: "hi".into() }],
+          tool_call_id: None,
+          name: None,
+          raw: None,
+        },
+        IrMessage {
+          role: Role::Assistant,
+          content: vec![ContentPart::Text { text: "hello".into() }],
+          tool_call_id: None,
+          name: None,
+          raw: None,
+        },
+      ],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
+    assert_eq!(body["input"][1]["content"][0]["type"], "output_text");
+  }
+
+  #[test]
+  fn request_to_value_renders_tool_messages_as_function_call_output_items() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::Tool,
+        content: vec![ContentPart::Text {
+          text: "tool result".into(),
+        }],
+        tool_call_id: Some("call_1".into()),
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["type"], "function_call_output");
+    assert_eq!(body["input"][0]["call_id"], "call_1");
+    assert_eq!(body["input"][0]["output"], "tool result");
+    assert!(body["input"][0].get("role").is_none());
+  }
+
+  #[test]
+  fn request_to_value_renders_assistant_tool_calls_as_function_call_items() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::Assistant,
+        content: vec![
+          ContentPart::Text {
+            text: "I'll inspect it.".into(),
+          },
+          ContentPart::ToolCall {
+            call: ToolCall {
+              id: Some("call_1".into()),
+              name: "bash".into(),
+              arguments: json!({ "command": "ls \"/tmp\"", "description": "Verifies temporary directory exists" }),
+            },
+          },
+        ],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["role"], "assistant");
+    assert_eq!(body["input"][0]["content"][0]["type"], "output_text");
+    assert_eq!(body["input"][1]["type"], "function_call");
+    assert_eq!(body["input"][1]["call_id"], "call_1");
+    assert_eq!(body["input"][1]["name"], "bash");
+    let args: Value = serde_json::from_str(body["input"][1]["arguments"].as_str().unwrap()).unwrap();
+    assert_eq!(args["command"], "ls \"/tmp\"");
+    assert!(body["input"][1].get("role").is_none());
+  }
+
+  #[test]
+  fn request_to_value_promotes_reasoning_effort_extra() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("reasoning_effort".into(), json!("high"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body.get("reasoning"), Some(&json!({ "effort": "high" })));
+    assert!(body.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_existing_reasoning_effort() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("reasoning_effort".into(), json!("high"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: Some(json!({ "effort": "low", "summary": "auto" })),
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(
+      body.get("reasoning"),
+      Some(&json!({ "effort": "low", "summary": "auto" }))
+    );
+    assert!(body.get("reasoning_effort").is_none());
+  }
+
+  #[test]
+  fn request_to_value_promotes_verbosity_extra_into_text() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body.get("text"), Some(&json!({ "verbosity": "low" })));
+    assert!(body.get("verbosity").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_existing_text_verbosity() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let mut body = request_to_value(&req).expect("request should render");
+    body.as_object_mut().expect("request body object").insert(
+      "text".into(),
+      json!({ "verbosity": "high", "format": { "type": "text" } }),
+    );
+
+    normalize_text_verbosity(body.as_object_mut().expect("request body object"), Some(&json!("low")));
+
+    assert_eq!(
+      body.get("text"),
+      Some(&json!({ "verbosity": "high", "format": { "type": "text" } }))
+    );
+    assert!(body.get("verbosity").is_none());
+  }
+
+  #[test]
+  fn request_to_value_preserves_explicit_text_extra_before_normalizing_verbosity() {
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("verbosity".into(), json!("low"));
+    extras.insert("text".into(), json!({ "format": { "type": "text" } }));
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::User,
+        content: vec![ContentPart::Text { text: "hello".into() }],
+        tool_call_id: None,
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras,
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(
+      body.get("text"),
+      Some(&json!({ "format": { "type": "text" }, "verbosity": "low" }))
+    );
+    assert!(body.get("verbosity").is_none());
   }
 
   #[test]
