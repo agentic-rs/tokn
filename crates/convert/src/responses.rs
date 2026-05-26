@@ -481,6 +481,13 @@ fn part_from_responses(v: &Value) -> ContentPart {
 }
 
 fn message_to_responses_input(msg: &IrMessage) -> Value {
+  if msg.role == Role::Tool {
+    return json!({
+      "type": "function_call_output",
+      "call_id": msg.tool_call_id.clone().unwrap_or_default(),
+      "output": text_from_parts(&msg.content),
+    });
+  }
   let text_type = match msg.role {
     Role::Assistant => "output_text",
     _ => "input_text",
@@ -584,6 +591,34 @@ mod tests {
 
     assert_eq!(body["input"][0]["content"][0]["type"], "input_text");
     assert_eq!(body["input"][1]["content"][0]["type"], "output_text");
+  }
+
+  #[test]
+  fn request_to_value_renders_tool_messages_as_function_call_output_items() {
+    let req = IrRequest {
+      model: "gpt-5.4".into(),
+      system: None,
+      messages: vec![IrMessage {
+        role: Role::Tool,
+        content: vec![ContentPart::Text { text: "tool result".into() }],
+        tool_call_id: Some("call_1".into()),
+        name: None,
+        raw: None,
+      }],
+      tools: Vec::new(),
+      tool_choice: None,
+      sampling: Sampling::default(),
+      reasoning: None,
+      stream: false,
+      extras: Default::default(),
+    };
+
+    let body = request_to_value(&req).expect("request should render");
+
+    assert_eq!(body["input"][0]["type"], "function_call_output");
+    assert_eq!(body["input"][0]["call_id"], "call_1");
+    assert_eq!(body["input"][0]["output"], "tool result");
+    assert!(body["input"][0].get("role").is_none());
   }
 
   #[test]
