@@ -7,10 +7,10 @@
 //! 1. **Router-owned** — anything matching `is_router_owned_header` (i.e.
 //!    `x-tokn-router-*`, `x-route-mode`, `x-behave-as`). These are internal
 //!    transport metadata that must never leave the router.
-//! 2. **Hop-by-hop** — `host`, `connection`, `proxy-authorization`,
-//!    `proxy-connection`, `te`, `trailer`, `transfer-encoding`, `upgrade`,
-//!    `keep-alive`. RFC 7230 §6.1; reqwest / hyper will set its own values
-//!    for any it needs.
+//! 2. **Hop-by-hop** — `host`, `proxy-authorization`, `proxy-connection`,
+//!    `te`, `trailer`, `transfer-encoding`, `upgrade`. We intentionally keep
+//!    `connection` / `keep-alive` for replay debugging even though they are
+//!    hop-by-hop per RFC 7230 §6.1.
 //!
 //! Upstream auth is **not** injected here — the provider's `patch_headers`
 //! (called from inside `DefaultSend` via `provider.chat/responses/messages`)
@@ -27,18 +27,16 @@ use tokn_headers::inbound::build_template_vars;
 use tokn_headers::HeaderMap;
 
 /// Hop-by-hop header names (lowercase) that must not be forwarded
-/// verbatim to the upstream. The transport layer sets its own value for
-/// any it needs.
+/// verbatim to the upstream. `connection` / `keep-alive` are intentionally
+/// omitted so replay flows can pass them through unchanged.
 const HOP_BY_HOP_HEADERS: &[&str] = &[
   "host",
-  "connection",
   "proxy-authorization",
   "proxy-connection",
   "te",
   "trailer",
   "transfer-encoding",
   "upgrade",
-  "keep-alive",
 ];
 
 /// Router-owned header names (lowercase) that must never leak upstream.
@@ -193,7 +191,7 @@ mod tests {
     assert!(out.headers.contains_key("accept"));
     assert!(out.headers.contains_key("x-custom-thing"));
     assert!(!out.headers.contains_key("host"), "host stripped");
-    assert!(!out.headers.contains_key("connection"), "connection stripped");
+    assert_eq!(out.headers.get("connection").map(|v| v.as_str()), Some("keep-alive"));
     assert!(
       !out.headers.contains_key("x-tokn-router-local-addr"),
       "router-owned stripped"
@@ -239,9 +237,10 @@ mod tests {
       Some("api.example.com:8443"),
       "Host preserved verbatim"
     );
-    assert!(
-      !out.headers.contains_key("connection"),
-      "other hop-by-hop still stripped"
+    assert_eq!(
+      out.headers.get("connection").map(|v| v.as_str()),
+      Some("keep-alive"),
+      "connection preserved for replay debugging"
     );
     assert!(
       !out.headers.contains_key("x-tokn-router-local-addr"),
