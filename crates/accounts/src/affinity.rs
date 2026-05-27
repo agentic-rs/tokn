@@ -9,10 +9,11 @@
 //!   still retained for debug/observability.
 //! - `Unknown` — first-use; the dispatcher allocates an account and records.
 //!
-//! Entries use a single last-touch timestamp. An entry remains retained for
-//! `session_ttl + session_tombstone_ttl` from its last successful record; once
-//! older than that it is forgotten and a future request with the same id is
-//! treated as a brand new session.
+//! Entries use a single last-touch timestamp. An entry remains retained until
+//! `retained_ttl` from its last successful record, where `retained_ttl` is
+//! computed once at construction as `max(session_ttl, configured_retention)`.
+//! Once older than that it is forgotten and a future request with the same id
+//! is treated as a brand new session.
 //!
 //! In-memory only — by design. Cross-restart affinity would need durable
 //! state, which we explicitly chose not to keep here.
@@ -24,7 +25,6 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::ops::Add;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,7 @@ struct Entry<I> {
 #[doc(hidden)]
 pub trait Clock {
   type Instant: Copy;
-  type Duration: Copy + Ord + Add<Output = Self::Duration>;
+  type Duration: Copy + Ord;
 
   fn now(&self) -> Self::Instant;
   fn elapsed(&self, stamped_at: Self::Instant) -> Self::Duration;
@@ -70,15 +70,15 @@ impl Clock for SystemClock {
 pub struct Affinity<C: Clock = SystemClock> {
   map: RwLock<HashMap<String, Entry<C::Instant>>>,
   ttl: C::Duration,
-  tombstone_ttl: C::Duration,
+  retained_ttl: C::Duration,
   gc_every: usize,
   ops_since_gc: AtomicUsize,
   clock: C,
 }
 
 impl Affinity<SystemClock> {
-  pub fn new(ttl: Duration, tombstone_ttl: Duration) -> Self {
-    Affinity::<SystemClock>::with_clock(ttl, tombstone_ttl, SystemClock)
+  pub fn new(ttl: Duration, retained_ttl: Duration) -> Self {
+    Affinity::<SystemClock>::with_clock(ttl, retained_ttl, SystemClock)
   }
 
   #[cfg(test)]
@@ -99,19 +99,15 @@ impl Affinity<SystemClock> {
 }
 
 impl<C: Clock> Affinity<C> {
-  fn with_clock(ttl: C::Duration, tombstone_ttl: C::Duration, clock: C) -> Self {
+  fn with_clock(ttl: C::Duration, retained_ttl: C::Duration, clock: C) -> Self {
     Self {
       map: RwLock::new(HashMap::new()),
       ttl,
-      tombstone_ttl,
+      retained_ttl: std::cmp::max(ttl, retained_ttl),
       gc_every: 1024,
       ops_since_gc: AtomicUsize::new(0),
       clock,
     }
-  }
-
-  fn retained_ttl(&self) -> C::Duration {
-    self.ttl + self.tombstone_ttl
   }
 
   fn maybe_sweep_expired(&self) {
@@ -119,15 +115,13 @@ impl<C: Clock> Affinity<C> {
       return;
     }
     self.ops_since_gc.store(0, Ordering::Relaxed);
-    let retained_ttl = self.retained_ttl();
     let mut g = self.map.write();
-    g.retain(|_, entry| self.clock.elapsed(entry.stamped_at) < retained_ttl);
+    g.retain(|_, entry| self.clock.elapsed(entry.stamped_at) < self.retained_ttl);
   }
 
   /// Look up `key`. Side-effect: fully stale retained entries are removed.
   pub fn lookup(&self, key: &str) -> Lookup {
     self.maybe_sweep_expired();
-    let retained_ttl = self.retained_ttl();
     {
       let g = self.map.read();
       if let Some(e) = g.get(key) {
@@ -135,7 +129,7 @@ impl<C: Clock> Affinity<C> {
         if age < self.ttl {
           return Lookup::Hit(e.account_id.clone());
         }
-        if age < retained_ttl {
+        if age < self.retained_ttl {
           return Lookup::Expired;
         }
       } else {
@@ -148,7 +142,7 @@ impl<C: Clock> Affinity<C> {
         let age = self.clock.elapsed(e.stamped_at);
         if age < self.ttl {
           Lookup::Hit(e.account_id.clone())
-        } else if age < retained_ttl {
+        } else if age < self.retained_ttl {
           Lookup::Expired
         } else {
           g.remove(key);
@@ -214,8 +208,8 @@ mod tests {
     }
   }
 
-  fn test_affinity(ttl: u64, tombstone_ttl: u64) -> Affinity<FakeClock> {
-    let mut affinity = Affinity::<FakeClock>::with_clock(ttl, tombstone_ttl, FakeClock::new());
+  fn test_affinity(ttl: u64, retained_ttl: u64) -> Affinity<FakeClock> {
+    let mut affinity = Affinity::<FakeClock>::with_clock(ttl, retained_ttl, FakeClock::new());
     affinity.gc_every = 4;
     affinity
   }

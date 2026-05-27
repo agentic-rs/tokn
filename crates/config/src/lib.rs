@@ -118,11 +118,10 @@ pub struct PoolConfig {
   /// Sliding window: refreshed on every successful use.
   #[serde(default = "default_session_ttl")]
   pub session_ttl_secs: u64,
-  /// After the affinity TTL elapses, retain the session entry for this long
+  /// Configure how long to retain a session entry from its last successful use
   /// for debug/observability before eventually forgetting it.
-  /// Total retention from the last successful use is
-  /// `session_ttl_secs + session_tombstone_secs`.
-  /// Set to `0` to forget stale sessions immediately once affinity expires.
+  /// The effective retained TTL is clamped to at least `session_ttl_secs`.
+  /// Set to `0` to retain entries exactly for the affinity TTL.
   #[serde(default = "default_session_tombstone")]
   pub session_tombstone_secs: u64,
 }
