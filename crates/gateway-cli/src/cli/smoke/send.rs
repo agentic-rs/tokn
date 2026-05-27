@@ -1028,7 +1028,10 @@ mod tests {
   #[test]
   fn extract_body_section_accepts_uppercase_capture_format() {
     let raw = "HEADERS:\n{\"accept\":\"*/*\"}\n\nBODY:\n{\"model\":\"glm-5.1\"}\n";
-    assert_eq!(extract_body_section(raw), Some("{\"model\":\"glm-5.1\"}\n".trim_start()));
+    assert_eq!(
+      extract_body_section(raw),
+      Some("{\"model\":\"glm-5.1\"}\n".trim_start())
+    );
   }
 
   #[test]
