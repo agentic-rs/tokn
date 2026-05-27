@@ -193,19 +193,13 @@ impl Provider for CodexProvider {
     Some(self)
   }
 
-  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::patch_openai_headers(headers, self.credential.expose(), ctx)?;
-    self.normalize_headers(headers, ctx)?;
+  fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    common::inject_codex_credentials(headers, self.credential.expose(), self.provider_account_id.as_deref());
     Ok(())
   }
 
   fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::normalize_codex_headers(
-      headers,
-      self.credential.expose(),
-      self.provider_account_id.as_deref(),
-      ctx,
-    );
+    common::normalize_codex_headers(headers, self.provider_account_id.as_deref(), ctx);
     Ok(())
   }
 

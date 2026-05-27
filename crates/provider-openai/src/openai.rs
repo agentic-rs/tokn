@@ -110,13 +110,13 @@ impl Provider for OpenAiProvider {
     &self.info
   }
 
-  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::patch_openai_headers(headers, self.credential.expose(), ctx)?;
-    self.normalize_headers(headers, ctx)
+  fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    common::inject_openai_credentials(headers, self.credential.expose());
+    Ok(())
   }
 
   fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::normalize_openai_platform_headers(headers, self.credential.expose(), ctx);
+    common::normalize_openai_platform_headers(headers, ctx);
     Ok(())
   }
 

@@ -183,11 +183,15 @@ impl Provider for CopilotProvider {
     crate::DESCRIPTOR.model_endpoint_rules
   }
 
-  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+  fn inject_credentials(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     let token = ctx.bearer_token.ok_or_else(|| error::Error::Profiles {
       message: "missing copilot bearer token for header patch".to_string(),
     })?;
     headers.insert(&AUTHORIZATION, HeaderValue::from_string(format!("Bearer {token}")));
+    Ok(())
+  }
+
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     headers.insert(
       &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -204,7 +208,7 @@ impl Provider for CopilotProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    self.normalize_headers(headers, ctx)
+    Ok(())
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {

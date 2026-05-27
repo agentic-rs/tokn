@@ -149,11 +149,15 @@ impl Provider for ZaiProvider {
     self.info.default_models.iter().find(|m| m.id == model)
   }
 
-  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+  fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     headers.insert(
       &AUTHORIZATION,
       HeaderValue::from_string(format!("Bearer {}", self.api_key.expose())),
     );
+    Ok(())
+  }
+
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     headers.insert(
       &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -166,7 +170,7 @@ impl Provider for ZaiProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    self.normalize_headers(headers, ctx)
+    Ok(())
   }
 
   #[instrument(
