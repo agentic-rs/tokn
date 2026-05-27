@@ -22,9 +22,9 @@
 //! rate is the same. No contention concern at expected throughput. Fully stale
 //! retained entries are swept opportunistically during normal traffic.
 
-use std::ops::Add;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::ops::Add;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
