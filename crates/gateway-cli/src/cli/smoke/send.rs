@@ -945,11 +945,21 @@ fn load_body_file(path: &std::path::Path) -> Result<Value> {
   } else {
     std::fs::read_to_string(path).map_err(|e| anyhow!("read {}: {e}", path.display()))?
   };
-  let body_str = match raw.split_once("\nBody:\n") {
-    Some((_, after)) => after.trim_start(),
-    None => raw.trim_start(),
-  };
+  let body_str = extract_body_section(&raw).unwrap_or_else(|| raw.trim_start());
   serde_json::from_str(body_str).map_err(|e| anyhow!("parse body file as JSON: {e}"))
+}
+
+fn extract_body_section(raw: &str) -> Option<&str> {
+  let body_idx = raw
+    .lines()
+    .scan(0usize, |offset, line| {
+      let start = *offset;
+      *offset += line.len() + 1;
+      Some((start, line))
+    })
+    .find_map(|(start, line)| line.trim().eq_ignore_ascii_case("body:").then_some(start + line.len()))?;
+
+  Some(raw[body_idx..].trim_start_matches(['\r', '\n']).trim_start())
 }
 
 fn pick_default_model(state: &AppState, provider_filter: Option<&str>) -> Result<String> {
@@ -982,6 +992,7 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use serde_json::json;
   use tokn_headers::HeaderMap;
 
   #[test]
@@ -1012,5 +1023,22 @@ mod tests {
         "x-test": ["first"],
       })
     );
+  }
+
+  #[test]
+  fn extract_body_section_accepts_uppercase_capture_format() {
+    let raw = "HEADERS:\n{\"accept\":\"*/*\"}\n\nBODY:\n{\"model\":\"glm-5.1\"}\n";
+    assert_eq!(
+      extract_body_section(raw),
+      Some("{\"model\":\"glm-5.1\"}\n".trim_start())
+    );
+  }
+
+  #[test]
+  fn extract_body_section_returns_none_for_plain_json() {
+    let raw = "{\"model\":\"glm-5.1\"}";
+    assert_eq!(extract_body_section(raw), None);
+    let parsed: Value = serde_json::from_str(extract_body_section(raw).unwrap_or(raw)).unwrap();
+    assert_eq!(parsed, json!({"model": "glm-5.1"}));
   }
 }
