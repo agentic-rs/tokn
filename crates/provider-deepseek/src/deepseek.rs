@@ -133,7 +133,7 @@ impl Provider for DeepSeekProvider {
     Ok(())
   }
 
-  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
     headers.insert(
       &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -146,7 +146,7 @@ impl Provider for DeepSeekProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    Ok(())
+    Ok(None)
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {

@@ -403,7 +403,10 @@ pub trait Provider: Send + Sync {
 
   fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     self.inject_credentials(headers, ctx)?;
-    self.normalize_headers(headers, ctx)
+    if let Some(new_headers) = self.normalize_headers(headers, ctx)? {
+      *headers = new_headers;
+    }
+    Ok(())
   }
 
   /// Final provider-owned header shape enforcement.
@@ -411,8 +414,12 @@ pub trait Provider: Send + Sync {
   /// Implementations use this after credential injection to canonicalize
   /// provider-specific order and casing, remove forbidden inbound residue, and
   /// fill required defaults.
-  fn normalize_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    Ok(())
+  ///
+  /// Return `Ok(None)` when the existing map is already correct (the caller
+  /// keeps it). Return `Ok(Some(new_map))` when the provider rebuilt the map
+  /// and the caller should replace it.
+  fn normalize_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
+    Ok(None)
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value>;

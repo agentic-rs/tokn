@@ -115,9 +115,8 @@ impl Provider for OpenAiProvider {
     Ok(())
   }
 
-  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::normalize_openai_platform_headers(headers, ctx);
-    Ok(())
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
+    Ok(Some(common::normalize_openai_platform_headers(headers, ctx)))
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {

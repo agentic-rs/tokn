@@ -2,7 +2,7 @@ use crate::util::secret::Secret;
 use crate::HeaderPatchCtx;
 use tokn_headers::keys::{
   ACCEPT, AUTHORIZATION, CHATGPT_ACCOUNT_ID, CONTENT_ENCODING, CONTENT_TYPE, OPENAI_BETA, ORIGINATOR, SESSION_ID_LOWER,
-  USER_AGENT, VERSION, X_API_KEY, X_CODEX_TURN_METADATA, X_GOOG_API_KEY,
+  USER_AGENT, VERSION, X_CODEX_TURN_METADATA,
 };
 use tokn_headers::{HeaderMap, HeaderValue};
 
@@ -38,10 +38,8 @@ pub fn inject_codex_credentials(headers: &mut HeaderMap, token: &str, provider_a
   }
 }
 
-pub fn normalize_openai_platform_headers(headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) {
+pub fn normalize_openai_platform_headers(headers: &HeaderMap, ctx: &HeaderPatchCtx<'_>) -> HeaderMap {
   let authorization = headers.get(&AUTHORIZATION).map(|value| value.as_str().to_string());
-  remove_auth_residue(headers);
-  remove_codex_only_headers(headers);
   let mut out = HeaderMap::new();
   if let Some(authorization) = authorization {
     out.insert(&AUTHORIZATION, HeaderValue::from_string(authorization));
@@ -52,10 +50,10 @@ pub fn normalize_openai_platform_headers(headers: &mut HeaderMap, ctx: &HeaderPa
     out.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
   }
   preserve_allowed(headers, &mut out, &[&USER_AGENT]);
-  *headers = out;
+  out
 }
 
-pub fn normalize_codex_headers(headers: &mut HeaderMap, provider_account_id: Option<&str>, ctx: &HeaderPatchCtx<'_>) {
+pub fn normalize_codex_headers(headers: &HeaderMap, ctx: &HeaderPatchCtx<'_>) -> HeaderMap {
   let originator = first_non_empty(headers, &[ORIGINATOR.as_str()])
     .unwrap_or("codex_cli_rs")
     .to_string();
@@ -65,7 +63,7 @@ pub fn normalize_codex_headers(headers: &mut HeaderMap, provider_account_id: Opt
   let session_id = first_non_empty(headers, &[SESSION_ID_LOWER.as_str()]).map(str::to_string);
   let turn_metadata = first_non_empty(headers, &[X_CODEX_TURN_METADATA.as_str()]).map(str::to_string);
   let authorization = first_non_empty(headers, &[AUTHORIZATION.as_str()]).map(str::to_string);
-  remove_auth_residue(headers);
+  let chatgpt_account_id = first_non_empty(headers, &[CHATGPT_ACCOUNT_ID.as_str()]).map(str::to_string);
 
   let mut out = HeaderMap::new();
   if let Some(authorization) = authorization {
@@ -77,8 +75,8 @@ pub fn normalize_codex_headers(headers: &mut HeaderMap, provider_account_id: Opt
   out.insert(&ORIGINATOR, HeaderValue::from_string(originator));
   out.insert(&VERSION, HeaderValue::from_static(CODEX_CLI_VERSION));
   out.insert(&USER_AGENT, HeaderValue::from_string(user_agent));
-  if let Some(account_id) = provider_account_id.filter(|s| !s.trim().is_empty()) {
-    out.insert(&CHATGPT_ACCOUNT_ID, HeaderValue::from_string(account_id.to_string()));
+  if let Some(chatgpt_account_id) = chatgpt_account_id {
+    out.insert(&CHATGPT_ACCOUNT_ID, HeaderValue::from_string(chatgpt_account_id));
   }
   if let Some(session_id) = session_id {
     out.insert(&SESSION_ID_LOWER, HeaderValue::from_string(session_id));
@@ -89,7 +87,7 @@ pub fn normalize_codex_headers(headers: &mut HeaderMap, provider_account_id: Opt
   if let Some(encoding) = ctx.content_encoding {
     out.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
   }
-  *headers = out;
+  out
 }
 
 fn accept_value(stream: bool) -> &'static str {
@@ -97,27 +95,6 @@ fn accept_value(stream: bool) -> &'static str {
     "text/event-stream"
   } else {
     "application/json"
-  }
-}
-
-fn remove_auth_residue(headers: &mut HeaderMap) {
-  headers.remove(&AUTHORIZATION);
-  headers.remove(&X_API_KEY);
-  headers.remove(&X_GOOG_API_KEY);
-}
-
-fn remove_codex_only_headers(headers: &mut HeaderMap) {
-  for key in [
-    OPENAI_BETA.as_str(),
-    ORIGINATOR.as_str(),
-    SESSION_ID_LOWER.as_str(),
-    "conversation_id",
-    "x-codex-turn-state",
-    X_CODEX_TURN_METADATA.as_str(),
-    CHATGPT_ACCOUNT_ID.as_str(),
-    VERSION.as_str(),
-  ] {
-    headers.remove(key);
   }
 }
 

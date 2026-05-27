@@ -198,9 +198,8 @@ impl Provider for CodexProvider {
     Ok(())
   }
 
-  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    common::normalize_codex_headers(headers, self.provider_account_id.as_deref(), ctx);
-    Ok(())
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
+    Ok(Some(common::normalize_codex_headers(headers, ctx)))
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {
