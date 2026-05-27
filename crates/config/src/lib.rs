@@ -118,10 +118,10 @@ pub struct PoolConfig {
   /// Sliding window: refreshed on every successful use.
   #[serde(default = "default_session_ttl")]
   pub session_ttl_secs: u64,
-  /// After eviction, remember the session id as a tombstone for this long
-  /// so subsequent requests get an explicit `session expired` error
-  /// instead of being silently re-bound to a different account.
-  /// Set to `0` to disable tombstones.
+  /// Configure how long to retain a session entry from its last successful use
+  /// for debug/observability before eventually forgetting it.
+  /// The effective retained TTL is clamped to at least `session_ttl_secs`.
+  /// Set to `0` to retain entries exactly for the affinity TTL.
   #[serde(default = "default_session_tombstone")]
   pub session_tombstone_secs: u64,
 }
