@@ -91,13 +91,17 @@ impl Provider for LlamaCppProvider {
     self.info.default_models.is_empty() || self.info.default_models.iter().any(|m| m.id == model)
   }
 
-  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+  fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     if let Some(key) = &self.api_key {
       headers.insert(
         &AUTHORIZATION,
         HeaderValue::from_string(format!("Bearer {}", key.expose())),
       );
     }
+    Ok(())
+  }
+
+  fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
     headers.insert(
       &ACCEPT,
       HeaderValue::from_static(if ctx.stream {
@@ -110,7 +114,7 @@ impl Provider for LlamaCppProvider {
     if let Some(encoding) = ctx.content_encoding {
       headers.insert(&CONTENT_ENCODING, HeaderValue::from_string(encoding.to_string()));
     }
-    Ok(())
+    Ok(None)
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value> {

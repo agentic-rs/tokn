@@ -391,8 +391,35 @@ pub trait Provider: Send + Sync {
     self.has_endpoint(model, endpoint)
   }
 
-  fn patch_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+  /// Provider-owned credential injection.
+  ///
+  /// This phase should only add account-derived credential material such as
+  /// bearer tokens, API keys, or provider account identifiers. These values
+  /// are treated as credentials, not ordinary header fallbacks. Final
+  /// transport/default enforcement belongs in [`Provider::normalize_headers`].
+  fn inject_credentials(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
     Ok(())
+  }
+
+  fn patch_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    self.inject_credentials(headers, ctx)?;
+    if let Some(new_headers) = self.normalize_headers(headers, ctx)? {
+      *headers = new_headers;
+    }
+    Ok(())
+  }
+
+  /// Final provider-owned header shape enforcement.
+  ///
+  /// Implementations use this after credential injection to canonicalize
+  /// provider-specific order and casing, remove forbidden inbound residue, and
+  /// fill required defaults.
+  ///
+  /// Return `Ok(None)` when the existing map is already correct (the caller
+  /// keeps it). Return `Ok(Some(new_map))` when the provider rebuilt the map
+  /// and the caller should replace it.
+  fn normalize_headers(&self, _headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
+    Ok(None)
   }
 
   async fn list_models(&self, http: &reqwest::Client) -> Result<Value>;
