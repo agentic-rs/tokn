@@ -5,23 +5,27 @@
 //!
 //! Lookup semantics are tri-state via [`Lookup`]:
 //! - `Hit(account_id)` — session known and still within TTL.
-//! - `Expired` — session was known but eviction has elapsed; surfaces to the
-//!   client as HTTP 410 so they replay rather than silently switching account.
+//! - `Expired` — session was known, the affinity TTL elapsed, but the entry is
+//!   still retained for debug/observability.
 //! - `Unknown` — first-use; the dispatcher allocates an account and records.
 //!
-//! Tombstones distinguish `Expired` from `Unknown`. They live for
-//! `tombstone_ttl` (≥ `session_ttl`); after that the entry is fully forgotten
-//! and a future request with the same id is treated as a brand new session.
+//! Entries use a single last-touch timestamp. An entry remains retained for
+//! `session_ttl + session_tombstone_ttl` from its last successful record; once
+//! older than that it is forgotten and a future request with the same id is
+//! treated as a brand new session.
 //!
 //! In-memory only — by design. Cross-restart affinity would need durable
 //! state, which we explicitly chose not to keep here.
 //!
 //! Concurrency: a single `RwLock<HashMap<…>>` covers both lookup and write
 //! paths. Write rate is one per request (record on success / on retry); read
-//! rate is the same. No contention concern at expected throughput.
+//! rate is the same. No contention concern at expected throughput. Fully stale
+//! retained entries are swept opportunistically during normal traffic.
 
+use std::ops::Add;
 use parking_lot::RwLock;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -33,17 +37,15 @@ pub enum Lookup {
 
 #[derive(Debug)]
 struct Entry<I> {
-  /// Empty string ⇒ tombstone (the session was evicted).
   account_id: String,
-  /// For live entries: when this binding was last touched.
-  /// For tombstones: when the entry was tombstoned.
+  /// When this binding was last successfully touched.
   stamped_at: I,
 }
 
 #[doc(hidden)]
 pub trait Clock {
   type Instant: Copy;
-  type Duration: Copy + Ord;
+  type Duration: Copy + Ord + Add<Output = Self::Duration>;
 
   fn now(&self) -> Self::Instant;
   fn elapsed(&self, stamped_at: Self::Instant) -> Self::Duration;
@@ -69,6 +71,8 @@ pub struct Affinity<C: Clock = SystemClock> {
   map: RwLock<HashMap<String, Entry<C::Instant>>>,
   ttl: C::Duration,
   tombstone_ttl: C::Duration,
+  gc_every: usize,
+  ops_since_gc: AtomicUsize,
   clock: C,
 }
 
@@ -100,55 +104,55 @@ impl<C: Clock> Affinity<C> {
       map: RwLock::new(HashMap::new()),
       ttl,
       tombstone_ttl,
+      gc_every: 1024,
+      ops_since_gc: AtomicUsize::new(0),
       clock,
     }
   }
 
-  /// Look up `key`. Side-effect: stale live entries are converted to
-  /// tombstones; expired tombstones are removed.
+  fn retained_ttl(&self) -> C::Duration {
+    self.ttl + self.tombstone_ttl
+  }
+
+  fn maybe_sweep_expired(&self) {
+    if self.ops_since_gc.fetch_add(1, Ordering::Relaxed) + 1 < self.gc_every {
+      return;
+    }
+    self.ops_since_gc.store(0, Ordering::Relaxed);
+    let retained_ttl = self.retained_ttl();
+    let mut g = self.map.write();
+    g.retain(|_, entry| self.clock.elapsed(entry.stamped_at) < retained_ttl);
+  }
+
+  /// Look up `key`. Side-effect: fully stale retained entries are removed.
   pub fn lookup(&self, key: &str) -> Lookup {
-    // Fast path: read-only check.
+    self.maybe_sweep_expired();
+    let retained_ttl = self.retained_ttl();
     {
       let g = self.map.read();
       if let Some(e) = g.get(key) {
         let age = self.clock.elapsed(e.stamped_at);
-        if e.account_id.is_empty() {
-          // Tombstone.
-          if age < self.tombstone_ttl {
-            return Lookup::Expired;
-          }
-        } else if age < self.ttl {
+        if age < self.ttl {
           return Lookup::Hit(e.account_id.clone());
+        }
+        if age < retained_ttl {
+          return Lookup::Expired;
         }
       } else {
         return Lookup::Unknown;
       }
     }
-    // Slow path: state transition needed.
     let mut g = self.map.write();
-    let now = self.clock.now();
     match g.get(key) {
-      Some(e) if e.account_id.is_empty() => {
-        if self.clock.elapsed(e.stamped_at) < self.tombstone_ttl {
+      Some(e) => {
+        let age = self.clock.elapsed(e.stamped_at);
+        if age < self.ttl {
+          Lookup::Hit(e.account_id.clone())
+        } else if age < retained_ttl {
           Lookup::Expired
         } else {
           g.remove(key);
           Lookup::Unknown
-        }
-      }
-      Some(e) => {
-        if self.clock.elapsed(e.stamped_at) < self.ttl {
-          Lookup::Hit(e.account_id.clone())
-        } else {
-          // Convert to tombstone.
-          g.insert(
-            key.to_string(),
-            Entry {
-              account_id: String::new(),
-              stamped_at: now,
-            },
-          );
-          Lookup::Expired
         }
       }
       None => Lookup::Unknown,
@@ -156,8 +160,8 @@ impl<C: Clock> Affinity<C> {
   }
 
   /// Bind `key` to `account_id` (sliding-window refresh on repeat calls).
-  /// Clears any tombstone for `key`.
   pub fn record(&self, key: &str, account_id: &str) {
+    self.maybe_sweep_expired();
     let mut g = self.map.write();
     g.insert(
       key.to_string(),
@@ -166,6 +170,11 @@ impl<C: Clock> Affinity<C> {
         stamped_at: self.clock.now(),
       },
     );
+  }
+
+  #[cfg(test)]
+  fn len(&self) -> usize {
+    self.map.read().len()
   }
 }
 
@@ -206,7 +215,9 @@ mod tests {
   }
 
   fn test_affinity(ttl: u64, tombstone_ttl: u64) -> Affinity<FakeClock> {
-    Affinity::<FakeClock>::with_clock(ttl, tombstone_ttl, FakeClock::new())
+    let mut affinity = Affinity::<FakeClock>::with_clock(ttl, tombstone_ttl, FakeClock::new());
+    affinity.gc_every = 4;
+    affinity
   }
 
   #[test]
@@ -220,7 +231,7 @@ mod tests {
   }
 
   #[test]
-  fn record_clears_tombstone() {
+  fn record_refreshes_expired_entry() {
     let a = test_affinity(ms(80), ms(400));
     a.record("k", "old");
     a.clock.advance(ms(120));
@@ -230,12 +241,20 @@ mod tests {
   }
 
   #[test]
-  fn tombstone_eventually_forgotten() {
+  fn retained_entry_eventually_forgotten_from_last_touch() {
     let a = test_affinity(ms(40), ms(120));
     a.record("k", "x");
-    a.clock.advance(ms(70)); // > ttl
-    assert_eq!(a.lookup("k"), Lookup::Expired); // tombstoned
-    a.clock.advance(ms(150)); // > tombstone_ttl
+    a.clock.advance(ms(70));
+    assert_eq!(a.lookup("k"), Lookup::Expired);
+    a.clock.advance(ms(95));
+    assert_eq!(a.lookup("k"), Lookup::Unknown);
+  }
+
+  #[test]
+  fn zero_retention_skips_expired_state() {
+    let a = test_affinity(ms(40), ms(0));
+    a.record("k", "x");
+    a.clock.advance(ms(41));
     assert_eq!(a.lookup("k"), Lookup::Unknown);
   }
 
@@ -252,5 +271,17 @@ mod tests {
     assert_eq!(a.lookup("k"), Lookup::Hit("acct".into()));
     a.clock.advance(ms(2));
     assert_eq!(a.lookup("k"), Lookup::Expired);
+  }
+
+  #[test]
+  fn opportunistic_gc_removes_cold_expired_entries() {
+    let a = test_affinity(ms(40), ms(20));
+    a.record("stale", "acct");
+    assert_eq!(a.len(), 1);
+    a.clock.advance(ms(70));
+    a.record("fresh-1", "acct");
+    a.record("fresh-2", "acct");
+    a.record("fresh-3", "acct");
+    assert!(a.len() <= 3);
   }
 }

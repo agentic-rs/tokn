@@ -162,7 +162,7 @@ impl AccountPool {
             }
           }
         }
-        Lookup::Expired => return SessionAcquire::SessionExpired,
+        Lookup::Expired => {}
         Lookup::Unknown => {}
       }
     }
@@ -196,7 +196,7 @@ impl AccountPool {
             }
           }
         }
-        Lookup::Expired => return EndpointAcquire::SessionExpired,
+        Lookup::Expired => {}
         Lookup::Unknown => {}
       }
     }
@@ -230,7 +230,7 @@ impl AccountPool {
             }
           }
         }
-        Lookup::Expired => return EndpointAcquire::SessionExpired,
+        Lookup::Expired => {}
         Lookup::Unknown => {}
       }
     }
@@ -698,5 +698,27 @@ mod tests {
       panic!("expected session to stay alive after refresh");
     };
     assert_eq!(third.id(), first.id());
+  }
+
+  #[test]
+  fn expired_session_rebinds_instead_of_failing() {
+    let p = pool_with_ttls(Duration::from_millis(60), Duration::from_millis(240));
+    let SessionAcquire::Account(first) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected account");
+    };
+
+    assert!(p.rewind_session_for_test("s1", Duration::from_millis(80)));
+    let SessionAcquire::Account(second) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected expired session to rebind");
+    };
+    assert_ne!(first.id(), second.id());
+
+    let SessionAcquire::Account(third) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
+    else {
+      panic!("expected rebound session affinity");
+    };
+    assert_eq!(third.id(), second.id());
   }
 }
