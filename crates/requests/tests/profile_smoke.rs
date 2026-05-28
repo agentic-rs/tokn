@@ -44,6 +44,8 @@ const CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML: &str =
 const CLINE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.yaml");
 const COPILOT_CLI_OPENAI_SEND_HEADERS_YAML: &str =
   include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.yaml");
+const CODEX_HEADERS_INPUT_YAML: &str = include_str!("fixtures/codex_headers/input.yaml");
+const CODEX_HEADERS_OUTPUT_YAML: &str = include_str!("fixtures/codex_headers/output.yaml");
 
 #[derive(Debug, PartialEq, Eq)]
 struct HeaderFixtureEntry {
@@ -559,12 +561,13 @@ fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
   reqwest::Response::from(resp)
 }
 
-fn test_headers(pairs: &[(&str, &str)]) -> HeaderMap {
+fn headers_from_fixture(yaml: &str) -> HeaderMap {
+  let entries = load_agent_id_header_fixture(yaml);
   let mut headers = HeaderMap::new();
-  for (name, value) in pairs {
+  for HeaderFixtureEntry { name, value } in entries {
     headers.insert(
-      tokn_headers::HeaderName::new(*name),
-      tokn_headers::HeaderValue::from_string((*value).to_string()),
+      tokn_headers::HeaderName::new(name),
+      tokn_headers::HeaderValue::from_string(value),
     );
   }
   headers
@@ -917,14 +920,7 @@ async fn full_pipeline_codex_headers_are_captured_after_build_and_patch() {
   ));
   let runner = PipelineRunner::new(profile, bus);
 
-  let inbound_headers = test_headers(&[
-    ("accept", "application/json"),
-    ("originator", "codex_exec"),
-    ("session_id", "sess-from-inbound"),
-    ("chatgpt-account-id", "acct-from-inbound"),
-    ("user-agent", "codex_exec/9.9.9"),
-    ("x-codex-turn-metadata", r#"{"turn_id":"turn-1"}"#),
-  ]);
+  let inbound_headers = headers_from_fixture(CODEX_HEADERS_INPUT_YAML);
 
   let converted = runner
     .run(raw_responses("gpt-5-codex", inbound_headers, false))
@@ -955,19 +951,13 @@ async fn full_pipeline_codex_headers_are_captured_after_build_and_patch() {
     .last_request()
     .expect("mock server should capture the upstream request");
   assert_eq!(captured.path, "/responses");
-  assert_eq!(captured.header("authorization"), Some("Bearer atk-codex"));
-  assert_eq!(captured.header("accept"), Some("application/json"));
-  assert_eq!(captured.header("content-type"), Some("application/json"));
-  assert_eq!(captured.header("openai-beta"), Some("responses=experimental"));
-  assert_eq!(captured.header("originator"), Some("codex_exec"));
-  assert_eq!(captured.header("version"), Some("0.125.0"));
-  assert_eq!(captured.header("user-agent"), Some("codex_exec/9.9.9"));
-  assert_eq!(captured.header("session_id"), Some("sess-from-inbound"));
-  assert_eq!(captured.header("chatgpt-account-id"), Some("acct-from-provider"));
-  assert_eq!(
-    captured.header("x-codex-turn-metadata"),
-    Some(r#"{"turn_id":"turn-1"}"#)
-  );
+  for HeaderFixtureEntry { name, value } in load_agent_id_header_fixture(CODEX_HEADERS_OUTPUT_YAML) {
+    assert_eq!(
+      captured.header(&name),
+      Some(value.as_str()),
+      "captured Codex output header mismatch for {name}"
+    );
+  }
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------

@@ -1,0 +1,10 @@
+- authorization: Bearer atk-codex
+- accept: application/json
+- content-type: application/json
+- OpenAI-Beta: responses=experimental
+- originator: codex_exec
+- version: 0.125.0
+- user-agent: codex_exec/9.9.9
+- session_id: sess-from-inbound
+- chatgpt-account-id: acct-from-provider
+- x-codex-turn-metadata: '{"turn_id":"turn-1"}'

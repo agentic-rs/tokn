@@ -1,0 +1,6 @@
+- accept: application/json
+- originator: codex_exec
+- session_id: sess-from-inbound
+- chatgpt-account-id: acct-from-inbound
+- user-agent: codex_exec/9.9.9
+- x-codex-turn-metadata: '{"turn_id":"turn-1"}'
