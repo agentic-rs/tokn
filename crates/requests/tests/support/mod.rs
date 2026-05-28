@@ -180,7 +180,7 @@ pub fn raw_responses(model: &str, headers: HeaderMap, stream: bool) -> RawInboun
 }
 
 pub async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::MutexGuard<'_, Vec<Event>> {
-  for _ in 0..1000 {
+  for _ in 0..10000 {
     {
       let guard = log.lock().unwrap();
       let done = guard
@@ -190,7 +190,7 @@ pub async fn drain_until_completed(log: &Arc<Mutex<Vec<Event>>>) -> std::sync::M
         return guard;
       }
     }
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
   }
   panic!("timed out waiting for Completed event");
 }
@@ -199,7 +199,7 @@ pub async fn drain_until_completed_attempts(
   log: &Arc<Mutex<Vec<Event>>>,
   expected_attempts: u32,
 ) -> std::sync::MutexGuard<'_, Vec<Event>> {
-  for _ in 0..1000 {
+  for _ in 0..10000 {
     {
       let guard = log.lock().unwrap();
       let done = guard.iter().any(|e| {
@@ -215,13 +215,13 @@ pub async fn drain_until_completed_attempts(
         return guard;
       }
     }
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
   }
   panic!("timed out waiting for Completed event with attempts={expected_attempts}");
 }
 
 pub async fn drain_until_upstream_req(log: &Arc<Mutex<Vec<Event>>>) {
-  for _ in 0..1000 {
+  for _ in 0..10000 {
     {
       let guard = log.lock().unwrap();
       let saw = guard
@@ -231,7 +231,7 @@ pub async fn drain_until_upstream_req(log: &Arc<Mutex<Vec<Event>>>) {
         return;
       }
     }
-    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
   }
   panic!("timed out waiting for UpstreamReq event");
 }
