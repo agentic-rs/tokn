@@ -24,8 +24,11 @@ use tokn_core::account::AccountConfig;
 use tokn_core::provider::{
   AuthKind, Endpoint, ModelCache, Provider, ProviderInfo, RequestCtx, Result as ProviderResult,
 };
+use tokn_core::util::secret::Secret;
 use tokn_core::AgentId;
 use tokn_headers::HeaderMap;
+use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer};
+use tokn_provider_openai::CodexProvider;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
 use tokn_requests::stages::{
@@ -201,6 +204,24 @@ fn raw_chat(model: &str) -> RawInbound {
     decoded_body: decoded,
     body_json: body,
     request_id: Some(SmolStr::new("req-smoke-1")),
+  }
+}
+
+fn raw_responses(model: &str, headers: HeaderMap, stream: bool) -> RawInbound {
+  let body = serde_json::json!({
+    "model": model,
+    "input": "hello from codex",
+    "stream": stream,
+    "max_output_tokens": 128,
+  });
+  let decoded = Bytes::from(serde_json::to_vec(&body).unwrap());
+  RawInbound {
+    request_endpoint: Endpoint::Responses.into(),
+    headers,
+    raw_body: decoded.clone(),
+    decoded_body: decoded,
+    body_json: body,
+    request_id: Some(SmolStr::new("req-codex-headers")),
   }
 }
 
@@ -491,6 +512,27 @@ impl AccountSelector for CannedSelector {
   }
 }
 
+struct CodexSelector {
+  handle: Arc<AccountHandle>,
+}
+
+#[async_trait]
+impl AccountSelector for CodexSelector {
+  async fn select(
+    &self,
+    _ctx: &tokn_requests::pipeline::ctx::PipelineCtx,
+    _ex: &tokn_requests::stage_traits::Extracted,
+  ) -> Result<SelectorOutcome, PipelineError> {
+    Ok(SelectorOutcome::Selected {
+      account_id: SmolStr::new(self.handle.config.load().id.clone()),
+      provider_id: SmolStr::new("codex"),
+      upstream_endpoint: Some(Endpoint::Responses),
+      upstream_model: SmolStr::new("gpt-5-codex"),
+      account_handle: self.handle.clone(),
+    })
+  }
+}
+
 struct FixedAgentExtract {
   agent_id: AgentId,
 }
@@ -515,6 +557,49 @@ fn ok_response(status: u16, body: &'static str) -> reqwest::Response {
     .body(body)
     .unwrap();
   reqwest::Response::from(resp)
+}
+
+fn test_headers(pairs: &[(&str, &str)]) -> HeaderMap {
+  let mut headers = HeaderMap::new();
+  for (name, value) in pairs {
+    headers.insert(
+      tokn_headers::HeaderName::new(*name),
+      tokn_headers::HeaderValue::from_string((*value).to_string()),
+    );
+  }
+  headers
+}
+
+fn codex_account(base_url: &str) -> Arc<AccountConfig> {
+  Arc::new(AccountConfig {
+    id: "codex-acct".to_string(),
+    provider: "codex".to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: Some(base_url.to_string()),
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: Some(Secret::new("atk-codex".to_string())),
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: Some("acct-from-provider".to_string()),
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  })
+}
+
+fn codex_handle(base_url: &str) -> Arc<AccountHandle> {
+  let config = codex_account(base_url);
+  let provider = CodexProvider::from_account(config.clone()).expect("codex test account should build");
+  Arc::new(AccountHandle::new(config, Arc::new(provider)))
 }
 
 struct RecordingProvider {
@@ -811,6 +896,78 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
       .collect::<Vec<_>>();
     assert_eq!(actual, expected, "{}: agent_id header fixture mismatch", case.name);
   }
+}
+
+#[tokio::test]
+async fn full_pipeline_codex_headers_are_captured_after_build_and_patch() {
+  let server = MockLlmServer::start(MockLlmConfig::default().with_auth(MockAuthConfig::bearer(["atk-codex"]))).await;
+  let (bus, log) = capture_bus();
+  let selector = Arc::new(CodexSelector {
+    handle: codex_handle(server.base_url()),
+  });
+
+  let profile = Arc::new(Profile::full(
+    "smoke-codex-headers",
+    Arc::new(DefaultExtract),
+    Arc::new(PoolResolve::new(selector)),
+    Arc::new(DefaultBuildHeaders::with_provider_defaults()),
+    Arc::new(DefaultConvertRequest),
+    Arc::new(DefaultSend::new(reqwest::Client::new())),
+    Arc::new(DefaultConvertResponse::new()),
+  ));
+  let runner = PipelineRunner::new(profile, bus);
+
+  let inbound_headers = test_headers(&[
+    ("accept", "application/json"),
+    ("originator", "codex_exec"),
+    ("session_id", "sess-from-inbound"),
+    ("chatgpt-account-id", "acct-from-inbound"),
+    ("user-agent", "codex_exec/9.9.9"),
+    ("x-codex-turn-metadata", r#"{"turn_id":"turn-1"}"#),
+  ]);
+
+  let converted = runner
+    .run(raw_responses("gpt-5-codex", inbound_headers, false))
+    .await
+    .expect("codex responses pipeline must succeed");
+
+  assert_eq!(converted.status, 200);
+  let events = drain_until_completed(&log).await;
+  let built_headers = events
+    .iter()
+    .find_map(|event| match &event.payload {
+      EventPayload::Stage(StageEvent::BuildHeaders(headers)) => Some(headers.headers.clone()),
+      _ => None,
+    })
+    .expect("BuildHeaders event should be emitted before Send");
+  assert_eq!(
+    built_headers.get("chatgpt-account-id").map(|value| value.as_str()),
+    Some("acct-from-inbound"),
+    "BuildHeaders should carry the inbound account correlation before provider auth patching"
+  );
+  assert_eq!(
+    built_headers.get("OpenAI-Beta").map(|value| value.as_str()),
+    Some("responses=v1"),
+    "BuildHeaders should include the Codex overlay beta before provider normalization"
+  );
+
+  let captured = server
+    .last_request()
+    .expect("mock server should capture the upstream request");
+  assert_eq!(captured.path, "/responses");
+  assert_eq!(captured.header("authorization"), Some("Bearer atk-codex"));
+  assert_eq!(captured.header("accept"), Some("application/json"));
+  assert_eq!(captured.header("content-type"), Some("application/json"));
+  assert_eq!(captured.header("openai-beta"), Some("responses=experimental"));
+  assert_eq!(captured.header("originator"), Some("codex_exec"));
+  assert_eq!(captured.header("version"), Some("0.125.0"));
+  assert_eq!(captured.header("user-agent"), Some("codex_exec/9.9.9"));
+  assert_eq!(captured.header("session_id"), Some("sess-from-inbound"));
+  assert_eq!(captured.header("chatgpt-account-id"), Some("acct-from-provider"));
+  assert_eq!(
+    captured.header("x-codex-turn-metadata"),
+    Some(r#"{"turn_id":"turn-1"}"#)
+  );
 }
 
 // ---------- PR3c: failure preserves partial outcome ----------

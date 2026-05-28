@@ -32,3 +32,5 @@ zstd = { workspace = true }
 http = { workspace = true }
 serde_yaml = "0.9"
 tokio = { workspace = true }
+tokn-mock-server = { workspace = true }
+tokn-provider-openai = { workspace = true }
