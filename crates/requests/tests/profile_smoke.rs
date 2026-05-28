@@ -28,9 +28,11 @@ use tokn_core::util::secret::Secret;
 use tokn_core::AgentId;
 use tokn_headers::HeaderMap;
 use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer};
+use tokn_provider_copilot::CopilotProvider;
 use tokn_provider_openai::CodexProvider;
 use tokn_requests::event::{EventPayload, RecordEvent, Stage, StageEvent};
 use tokn_requests::pipeline::stages::ConvertedBody;
+use tokn_requests::stage_traits::{BuildHeadersStage, ExtractStage, Resolved};
 use tokn_requests::stages::{
   AccountSelector, DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
   NoopBuildHeaders, NoopConvertRequest, PoolResolve, SelectorOutcome,
@@ -44,8 +46,10 @@ const CLAUDE_CODE_OPENAI_SEND_HEADERS_YAML: &str =
 const CLINE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_headers/cline_openai_send.yaml");
 const COPILOT_CLI_OPENAI_SEND_HEADERS_YAML: &str =
   include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.yaml");
-const CODEX_HEADERS_INPUT_YAML: &str = include_str!("fixtures/codex_headers/input.yaml");
-const CODEX_HEADERS_OUTPUT_YAML: &str = include_str!("fixtures/codex_headers/output.yaml");
+const CODEX_HEADERS_INPUT_YAML: &str = include_str!("fixtures/provider_headers/codex/input.yaml");
+const CODEX_HEADERS_OUTPUT_YAML: &str = include_str!("fixtures/provider_headers/codex/output.yaml");
+const COPILOT_HEADERS_INPUT_YAML: &str = include_str!("fixtures/provider_headers/copilot/input.yaml");
+const COPILOT_HEADERS_OUTPUT_YAML: &str = include_str!("fixtures/provider_headers/copilot/output.yaml");
 
 #[derive(Debug, PartialEq, Eq)]
 struct HeaderFixtureEntry {
@@ -58,6 +62,17 @@ struct AgentHeaderCase {
   agent_id: AgentId,
   provider_id: &'static str,
   fixture_yaml: &'static str,
+}
+
+struct ProviderHeaderCase {
+  name: &'static str,
+  provider_id: &'static str,
+  upstream_endpoint: Endpoint,
+  upstream_model: &'static str,
+  input_yaml: &'static str,
+  output_yaml: &'static str,
+  handle: Arc<AccountHandle>,
+  bearer_token: Option<&'static str>,
 }
 
 /// Minimal `Provider` used only to satisfy the new typed
@@ -605,6 +620,38 @@ fn codex_handle(base_url: &str) -> Arc<AccountHandle> {
   Arc::new(AccountHandle::new(config, Arc::new(provider)))
 }
 
+fn copilot_account() -> Arc<AccountConfig> {
+  Arc::new(AccountConfig {
+    id: "copilot-acct".to_string(),
+    provider: "github-copilot".to_string(),
+    enabled: true,
+    tier: Default::default(),
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: None,
+    username: None,
+    api_key: None,
+    api_key_expires_at: None,
+    access_token: Some(Secret::new("api-copilot".to_string())),
+    access_token_expires_at: Some(4_102_444_800),
+    id_token: None,
+    refresh_token: Some(Secret::new("gh-copilot".to_string())),
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  })
+}
+
+fn copilot_handle() -> Arc<AccountHandle> {
+  let config = copilot_account();
+  let provider = CopilotProvider::from_account(config.clone()).expect("copilot test account should build");
+  Arc::new(AccountHandle::new(config, Arc::new(provider)))
+}
+
 struct RecordingProvider {
   info: ProviderInfo,
   resp: Mutex<Option<reqwest::Response>>,
@@ -701,6 +748,34 @@ fn load_agent_id_header_fixture(yaml: &str) -> Vec<HeaderFixtureEntry> {
     headers.push(HeaderFixtureEntry { name, value });
   }
   headers
+}
+
+fn header_entries(headers: &HeaderMap) -> Vec<HeaderFixtureEntry> {
+  headers
+    .iter()
+    .map(|(name, value)| HeaderFixtureEntry {
+      name: name.original().to_string(),
+      value: value.as_str().to_string(),
+    })
+    .collect()
+}
+
+fn assert_headers_match_fixture(headers: &HeaderMap, fixture_yaml: &str, label: &str) {
+  assert_eq!(
+    header_entries(headers),
+    load_agent_id_header_fixture(fixture_yaml),
+    "{label}: header fixture mismatch"
+  );
+}
+
+fn assert_headers_include_fixture(headers: &HeaderMap, fixture_yaml: &str, label: &str) {
+  for HeaderFixtureEntry { name, value } in load_agent_id_header_fixture(fixture_yaml) {
+    assert_eq!(
+      headers.get(&name).map(|value| value.as_str()),
+      Some(value.as_str()),
+      "{label}: header mismatch for {name}"
+    );
+  }
 }
 
 #[tokio::test]
@@ -889,15 +964,82 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
       .unwrap()
       .clone()
       .unwrap_or_else(|| panic!("{}: provider should observe client headers", case.name));
-    let expected = load_agent_id_header_fixture(case.fixture_yaml);
-    let actual = seen
-      .iter()
-      .map(|(name, value)| HeaderFixtureEntry {
-        name: name.original().to_string(),
-        value: value.as_str().to_string(),
-      })
-      .collect::<Vec<_>>();
-    assert_eq!(actual, expected, "{}: agent_id header fixture mismatch", case.name);
+    assert_headers_match_fixture(&seen, case.fixture_yaml, case.name);
+  }
+}
+
+#[tokio::test]
+async fn provider_headers_patch_from_fixtures() {
+  let cases = vec![
+    ProviderHeaderCase {
+      name: "codex",
+      provider_id: "codex",
+      upstream_endpoint: Endpoint::Responses,
+      upstream_model: "gpt-5-codex",
+      input_yaml: CODEX_HEADERS_INPUT_YAML,
+      output_yaml: CODEX_HEADERS_OUTPUT_YAML,
+      handle: codex_handle("http://127.0.0.1"),
+      bearer_token: None,
+    },
+    ProviderHeaderCase {
+      name: "copilot",
+      provider_id: "github-copilot",
+      upstream_endpoint: Endpoint::Responses,
+      upstream_model: "gpt-5",
+      input_yaml: COPILOT_HEADERS_INPUT_YAML,
+      output_yaml: COPILOT_HEADERS_OUTPUT_YAML,
+      handle: copilot_handle(),
+      bearer_token: Some("api-copilot"),
+    },
+  ];
+
+  for case in cases {
+    let ctx = tokn_requests::PipelineCtx::new(
+      format!("req-{}-headers", case.name),
+      Endpoint::Responses.into(),
+      Arc::new(EventBus::new(64)),
+    );
+    let extracted = DefaultExtract
+      .extract(
+        &ctx,
+        raw_responses(case.upstream_model, headers_from_fixture(case.input_yaml), false),
+      )
+      .await
+      .unwrap_or_else(|err| panic!("{}: extract should succeed: {err}", case.name));
+    let resolved = Resolved {
+      agent_id: None,
+      model: extracted.model.clone(),
+      resolved_endpoint: Some(Endpoint::Responses),
+      upstream_model: SmolStr::new(case.upstream_model),
+      upstream_endpoint: Some(case.upstream_endpoint),
+      account_id: SmolStr::new(case.handle.config.load().id.clone()),
+      provider_id: SmolStr::new(case.provider_id),
+      account_handle: case.handle.clone(),
+    };
+    let built = DefaultBuildHeaders::with_provider_defaults()
+      .build_headers(&ctx, &extracted, &resolved)
+      .await
+      .unwrap_or_else(|err| panic!("{}: build_headers should succeed: {err}", case.name));
+    let mut headers = built.headers.clone();
+    resolved
+      .account_handle
+      .provider
+      .patch_headers(
+        &mut headers,
+        &tokn_core::provider::HeaderPatchCtx {
+          endpoint: case.upstream_endpoint,
+          body: extracted.body_json.as_ref(),
+          bearer_token: case.bearer_token,
+          content_encoding: extracted.content_encoding.map(|encoding| encoding.as_str()),
+          stream: extracted.stream,
+          initiator: extracted.initiator.as_deref().unwrap_or("user"),
+          inbound_headers: &extracted.headers,
+          vars: &built.vars,
+        },
+      )
+      .unwrap_or_else(|err| panic!("{}: patch_headers should succeed: {err}", case.name));
+
+    assert_headers_include_fixture(&headers, case.output_yaml, case.name);
   }
 }
 
