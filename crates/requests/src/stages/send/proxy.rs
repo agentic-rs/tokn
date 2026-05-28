@@ -154,14 +154,20 @@ impl SendStage for ProxySend {
         })?;
     }
 
+    // The proxy build-header stage preserves Host so the request record
+    // reflects the intercepted authority. Do not forward that copy through
+    // reqwest and then append another Host below: duplicate Host is invalid
+    // HTTP/1.1 and strict upstream CDNs may close the connection without
+    // returning a response.
+    outbound_headers.remove(&tokn_headers::keys::HOST);
+
     let mut req = self.http.request(method.clone(), &url);
     for (name, value) in outbound_headers.iter() {
       req = req.header(name.as_str(), value.as_str());
     }
     // Always set HOST to the intercepted host so virtual-hosted upstreams
     // (most LLM APIs are behind a CDN that vhosts by Host) route us to
-    // the right backend. PassthroughBuildHeaders strips the inbound
-    // HOST already.
+    // the right backend.
     req = req.header(reqwest::header::HOST, host);
     req = req.body(body.upstream_wire_body.clone());
 
@@ -346,6 +352,25 @@ mod tests {
     }
   }
 
+  async fn one_shot_raw_http_server() -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<Vec<u8>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 8192];
+      let n = stream.read(&mut buf).await.unwrap();
+      buf.truncate(n);
+      stream
+        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
+        .await
+        .unwrap();
+      stream.flush().await.unwrap();
+      let _ = tx.send(buf);
+    });
+    (addr, rx)
+  }
+
   #[tokio::test]
   async fn missing_host_is_permanent_error() {
     let ctx = ctx_with(RunConfig::default());
@@ -387,21 +412,7 @@ mod tests {
 
   #[tokio::test]
   async fn injects_router_managed_auth_when_enabled() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
-    let server = tokio::spawn(async move {
-      let (mut stream, _) = listener.accept().await.unwrap();
-      let mut buf = vec![0_u8; 8192];
-      let n = stream.read(&mut buf).await.unwrap();
-      buf.truncate(n);
-      stream
-        .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok")
-        .await
-        .unwrap();
-      stream.flush().await.unwrap();
-      let _ = tx.send(buf);
-    });
+    let (addr, rx) = one_shot_raw_http_server().await;
 
     let ctx = ctx_with(
       RunConfig::builder()
@@ -433,9 +444,38 @@ mod tests {
       .unwrap();
     assert_eq!(sent.status, 200);
 
-    server.await.unwrap();
     let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
     assert!(raw_req.contains("authorization: bearer router-token"));
     assert!(!raw_req.contains("authorization: bearer client-token"));
+  }
+
+  #[tokio::test]
+  async fn sends_single_authoritative_host_header() {
+    let (addr, rx) = one_shot_raw_http_server().await;
+    let ctx = ctx_with(
+      RunConfig::builder()
+        .with_str(keys::HOST, addr.to_string())
+        .with_str(send_keys::PATH, "/v1/chat/completions")
+        .with_str(send_keys::METHOD, "POST")
+        .with_str(send_keys::SCHEME, "http")
+        .build(),
+    );
+    let resolved = fake_resolved(&ctx).await;
+    let mut headers = fake_headers();
+    headers
+      .headers
+      .insert(HeaderName::new("host"), HeaderValue::from_static("stale.example.test"));
+
+    let send = ProxySend::new(reqwest::Client::new());
+    let sent = send
+      .send(&ctx, &fake_extracted(), &resolved, &headers, &fake_body())
+      .await
+      .unwrap();
+    assert_eq!(sent.status, 200);
+
+    let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
+    assert_eq!(raw_req.matches("\r\nhost: ").count(), 1);
+    assert!(raw_req.contains(&format!("\r\nhost: {addr}\r\n").to_ascii_lowercase()));
+    assert!(!raw_req.contains("stale.example.test"));
   }
 }
