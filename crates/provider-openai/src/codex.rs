@@ -369,9 +369,12 @@ mod tests {
     assert_eq!(h.get("accept").unwrap().as_str(), "application/json");
     assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
     assert_eq!(h.get("OpenAI-Beta").unwrap().as_str(), "responses=experimental");
-    assert_eq!(h.get("originator").unwrap().as_str(), "Codex Desktop");
+    assert_eq!(h.get("originator").unwrap().as_str(), "opencode");
     assert_eq!(h.get("version").unwrap().as_str(), "0.125.0");
-    assert_eq!(h.get("user-agent").unwrap().as_str(), "codex_cli_rs/0.125.0");
+    assert_eq!(
+      h.get("user-agent").unwrap().as_str(),
+      "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+    );
     assert_eq!(h.get("session_id").unwrap().as_str(), "sess-1");
     assert_eq!(h.get("chatgpt-account-id").unwrap().as_str(), "acc-77");
     assert!(h.get("x-api-key").is_none());
@@ -385,7 +388,11 @@ mod tests {
     ctx.stream = true;
     codex.patch_headers(&mut h, &ctx).unwrap();
     assert_eq!(h.get("accept").unwrap().as_str(), "text/event-stream");
-    assert_eq!(h.get("originator").unwrap().as_str(), "codex_cli_rs");
+    assert_eq!(h.get("originator").unwrap().as_str(), "opencode");
+    assert_eq!(
+      h.get("user-agent").unwrap().as_str(),
+      "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
+    );
     assert_eq!(h.get("OpenAI-Beta").unwrap().as_str(), "responses=experimental");
   }
 

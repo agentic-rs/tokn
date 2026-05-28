@@ -197,10 +197,7 @@ impl CodexCliHeaders {
         .clone()
         .or_else(|| opt_from_inbound(inbound, &keys::SESSION_ID_LOWER)),
       thread_id: opt_from_inbound(inbound, &keys::THREAD_ID),
-      client_request_id: vars
-        .request_id
-        .clone()
-        .or_else(|| opt_from_inbound(inbound, &keys::X_CLIENT_REQUEST_ID)),
+      client_request_id: opt_from_inbound(inbound, &keys::X_CLIENT_REQUEST_ID).or_else(|| vars.request_id.clone()),
       codex_window_id: opt_from_inbound(inbound, &keys::X_CODEX_WINDOW_ID),
       codex_beta_features: opt_from_inbound(inbound, &keys::X_CODEX_BETA_FEATURES),
       codex_turn_metadata: opt_from_inbound(inbound, &keys::X_CODEX_TURN_METADATA),
@@ -289,11 +286,13 @@ mod tests {
     inbound.insert(&keys::AUTHORIZATION, "Bearer abc");
     inbound.insert(&keys::OPENAI_BETA, "responses=v1");
     inbound.insert(&keys::HOST, "chatgpt.com");
+    inbound.insert(&keys::X_CLIENT_REQUEST_ID, "codex-req");
     let h = CodexCliHeaders::build(&TemplateVars::default(), &inbound);
     assert_eq!(h.user_agent.as_str(), "codex_exec/9.9.9");
     assert_eq!(h.authorization.as_str(), "Bearer abc");
     assert_eq!(h.openai_beta.as_deref(), Some("responses=v1"));
     assert_eq!(h.host.as_deref(), None);
+    assert_eq!(h.client_request_id.as_deref(), Some("codex-req"));
   }
 
   #[test]
