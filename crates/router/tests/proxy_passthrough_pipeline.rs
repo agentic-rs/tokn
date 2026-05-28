@@ -315,9 +315,14 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
       auth.contains("Bearer client-bearer-should-reach-upstream"),
       "wire-truth authorization header preserved, got {auth:?}"
     );
-    // Host header rewritten to the resolved authority.
-    let host_hdr = headers.get("host").map(|v| v.as_str().to_string()).unwrap_or_default();
-    assert_eq!(host_hdr, expected_authority, "wire-truth Host header");
+    // Host is transport-owned in ProxySend: the copied inbound value is
+    // stripped from the event header map before reqwest derives/sends the
+    // authoritative Host from the URL. The raw TCP capture above asserts
+    // the actual wire Host header.
+    assert!(
+      headers.get("host").is_none(),
+      "upstream request event headers should not include copied Host"
+    );
     // Router-owned headers stripped before send.
     assert!(
       headers.get("x-tokn-router-local-addr").is_none(),
