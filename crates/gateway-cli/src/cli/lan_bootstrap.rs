@@ -214,12 +214,29 @@ fn render_sh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
   let api_url = format!("{}/v1", urls.api_base);
   format!(
-    r#"# Verify this CA fingerprint before trusting it: {fingerprint}
+    r#"# Expected tokn-router CA fingerprint: {fingerprint}
 TOKN_ROUTER_CA_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan"
 TOKN_ROUTER_CA_CERT="$TOKN_ROUTER_CA_DIR/ca.crt"
 TOKN_ROUTER_CA_BUNDLE="$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
 mkdir -p "$TOKN_ROUTER_CA_DIR"
 curl -fsSL {ca_url} -o "$TOKN_ROUTER_CA_CERT"
+TOKN_ROUTER_CA_SHA256=""
+if command -v sha256sum >/dev/null 2>&1; then
+  TOKN_ROUTER_CA_SHA256="$(sha256sum "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')"
+elif command -v shasum >/dev/null 2>&1; then
+  TOKN_ROUTER_CA_SHA256="$(shasum -a 256 "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')"
+elif command -v openssl >/dev/null 2>&1; then
+  TOKN_ROUTER_CA_SHA256="$(openssl dgst -sha256 -r "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')"
+else
+  echo "tokn-router: cannot verify CA fingerprint; install sha256sum, shasum, or openssl" >&2
+  return 1 2>/dev/null || exit 1
+fi
+if [ "$TOKN_ROUTER_CA_SHA256" != {fingerprint_value} ]; then
+  echo "tokn-router: CA fingerprint mismatch for $TOKN_ROUTER_CA_CERT" >&2
+  echo "expected: {fingerprint}" >&2
+  echo "actual:   $TOKN_ROUTER_CA_SHA256" >&2
+  return 1 2>/dev/null || exit 1
+fi
 TOKN_ROUTER_SYSTEM_CA=""
 for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem /etc/ssl/cert.pem; do
   if [ -f "$candidate" ]; then
@@ -243,6 +260,7 @@ export CURL_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
 export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
+    fingerprint_value = sh_quote(fingerprint),
     api_url = sh_quote(&api_url),
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
@@ -253,13 +271,30 @@ fn render_fish_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
   let api_url = format!("{}/v1", urls.api_base);
   format!(
-    r#"# Verify this CA fingerprint before trusting it: {fingerprint}
+    r#"# Expected tokn-router CA fingerprint: {fingerprint}
 set -q XDG_CONFIG_HOME; or set XDG_CONFIG_HOME "$HOME/.config"
 set -gx TOKN_ROUTER_CA_DIR "$XDG_CONFIG_HOME/tokn-router/lan"
 set -gx TOKN_ROUTER_CA_CERT "$TOKN_ROUTER_CA_DIR/ca.crt"
 set -gx TOKN_ROUTER_CA_BUNDLE "$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
 mkdir -p "$TOKN_ROUTER_CA_DIR"
 curl -fsSL {ca_url} -o "$TOKN_ROUTER_CA_CERT"
+set -l ca_sha256
+if command -q sha256sum
+  set ca_sha256 (sha256sum "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')
+else if command -q shasum
+  set ca_sha256 (shasum -a 256 "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')
+else if command -q openssl
+  set ca_sha256 (openssl dgst -sha256 -r "$TOKN_ROUTER_CA_CERT" | awk '{{print $1}}')
+else
+  echo "tokn-router: cannot verify CA fingerprint; install sha256sum, shasum, or openssl" >&2
+  return 1
+end
+if test "$ca_sha256" != {fingerprint_value}
+  echo "tokn-router: CA fingerprint mismatch for $TOKN_ROUTER_CA_CERT" >&2
+  echo "expected: {fingerprint}" >&2
+  echo "actual:   $ca_sha256" >&2
+  return 1
+end
 set -l system_ca
 for candidate in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem /etc/pki/tls/cacert.pem /etc/ssl/cert.pem
   if test -f "$candidate"
@@ -283,6 +318,7 @@ set -gx CURL_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
+    fingerprint_value = sh_quote(fingerprint),
     api_url = sh_quote(&api_url),
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
@@ -293,13 +329,18 @@ fn render_pwsh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
   let api_url = format!("{}/v1", urls.api_base);
   format!(
-    r#"# Verify this CA fingerprint before trusting it: {fingerprint}
+    r#"# Expected tokn-router CA fingerprint: {fingerprint}
 $configHome = if ($Env:XDG_CONFIG_HOME) {{ $Env:XDG_CONFIG_HOME }} else {{ Join-Path $HOME ".config" }}
 $caDir = Join-Path $configHome "tokn-router/lan"
 $caCert = Join-Path $caDir "ca.crt"
 $caBundle = Join-Path $caDir "ca-bundle.crt"
 New-Item -ItemType Directory -Force -Path $caDir | Out-Null
 Invoke-WebRequest -UseBasicParsing -Uri {ca_url} -OutFile $caCert
+$caSha256 = (Get-FileHash -Algorithm SHA256 -Path $caCert).Hash.ToLowerInvariant()
+if ($caSha256 -ne {fingerprint_value}) {{
+  Write-Error "tokn-router: CA fingerprint mismatch for $caCert`nexpected: {fingerprint}`nactual:   $caSha256"
+  exit 1
+}}
 $systemCa = @("/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt", "/etc/ssl/ca-bundle.pem", "/etc/pki/tls/cacert.pem", "/etc/ssl/cert.pem") | Where-Object {{ Test-Path $_ }} | Select-Object -First 1
 if ($systemCa) {{
   Get-Content $systemCa, $caCert | Set-Content $caBundle
@@ -317,6 +358,7 @@ $Env:CURL_CA_BUNDLE = $caBundle
 $Env:GIT_SSL_CAINFO = $caBundle
 "#,
     ca_url = pwsh_quote(&urls.ca_cert_url),
+    fingerprint_value = pwsh_quote(fingerprint),
     api_url = pwsh_quote(&api_url),
     proxy_url = pwsh_quote(&urls.proxy_base),
     no_proxy = pwsh_quote(&no_proxy),
@@ -414,7 +456,13 @@ mod tests {
   fn env_includes_server_host_in_no_proxy() {
     let urls = urls_from_host("lan-router.local:4141", 4141, 4142).unwrap();
     let script = render_env_script(Shell::Sh, &urls, "abc123");
+    assert!(script.contains("TOKN_ROUTER_CA_SHA256"));
+    assert!(script.contains("CA fingerprint mismatch"));
     assert!(script.contains("NO_PROXY='localhost,127.0.0.1,::1,lan-router.local'"));
+    assert!(
+      script.find("CA fingerprint mismatch").unwrap() < script.find("export NODE_EXTRA_CA_CERTS").unwrap(),
+      "fingerprint verification must happen before trust exports"
+    );
   }
 
   #[test]
@@ -426,12 +474,24 @@ mod tests {
       host_for_no_proxy: "lan-router.local".into(),
     };
     let fish = render_env_script(Shell::Fish, &urls, "abc123");
+    assert!(fish.contains("set -l ca_sha256"));
+    assert!(fish.contains("CA fingerprint mismatch"));
     assert!(fish.contains("set -gx OPENAI_BASE_URL 'http://lan-router.local:4141/v1'"));
     assert!(fish.contains("set -gx HTTPS_PROXY 'http://lan-router.local:4142'"));
+    assert!(
+      fish.find("CA fingerprint mismatch").unwrap() < fish.find("set -gx NODE_EXTRA_CA_CERTS").unwrap(),
+      "fingerprint verification must happen before fish trust exports"
+    );
 
     let pwsh = render_env_script(Shell::Pwsh, &urls, "abc123");
+    assert!(pwsh.contains("Get-FileHash -Algorithm SHA256"));
+    assert!(pwsh.contains("CA fingerprint mismatch"));
     assert!(pwsh.contains("$Env:OPENAI_BASE_URL = 'http://lan-router.local:4141/v1'"));
     assert!(pwsh.contains("$Env:HTTPS_PROXY = 'http://lan-router.local:4142'"));
+    assert!(
+      pwsh.find("CA fingerprint mismatch").unwrap() < pwsh.find("$Env:NODE_EXTRA_CA_CERTS").unwrap(),
+      "fingerprint verification must happen before PowerShell trust exports"
+    );
   }
 
   #[test]
