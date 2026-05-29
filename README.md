@@ -106,8 +106,8 @@ tokn-router login [--provider PROVIDER] [--no-proxy]
 tokn-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
 tokn-router account list|remove ID|show ID
 tokn-router headers [--account ID]   # inspect resolved Copilot identity headers
-tokn-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--allow-remote]
-tokn-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--allow-remote]
+tokn-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--insecure-allow-remote]
+tokn-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--insecure-allow-remote]
 tokn-router proxy env [--shell sh|fish|pwsh]
 tokn-router proxy shell [--shell /path/to/shell]
 tokn-router proxy ca path|show|regenerate
@@ -190,6 +190,23 @@ applies mode precedence in this order: request override, provider-specific
 MITM proxy together in one process. They share the same account pool and event
 pipeline, but each listener can keep its own default route mode via
 `[server].route_mode` and `[proxy_mode].route_mode` (or `--proxy-route-mode`).
+
+For a trusted LAN central server, bind the API server and proxy to reachable
+interfaces explicitly:
+
+```sh
+tokn-router serve --host 0.0.0.0 --with-proxy --insecure-allow-remote
+```
+
+This also exposes LAN bootstrap helpers on the API listener:
+
+- `/-/lan/bootstrap.json` prints API/proxy URLs, CA fingerprint, and helper links.
+- `/-/lan/ca.crt` serves only the public proxy CA certificate.
+- `/-/lan/env?shell=sh|bash|zsh|fish|pwsh` prints client env setup that downloads
+  the CA and exports `OPENAI_BASE_URL`, proxy vars, and CA bundle vars.
+
+The server prints the CA SHA-256 fingerprint at startup. Verify that fingerprint
+before trusting a CA fetched over the LAN. The private CA key is never served.
 
 ## Providers
 

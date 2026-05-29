@@ -9,6 +9,7 @@ mod config_cmd;
 mod error;
 mod headers;
 mod import;
+mod lan_bootstrap;
 mod login;
 mod migration;
 mod onboarding;
