@@ -9,6 +9,7 @@ use tokn_headers::{HeaderMap, HeaderValue};
 pub const CODEX_CLI_USER_AGENT: &str = "codex_cli_rs/0.125.0";
 pub const CODEX_CLI_VERSION: &str = "0.125.0";
 pub const CODEX_RESPONSES_BETA: &str = "responses=experimental";
+pub const OPENCODE_USER_AGENT: &str = "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13";
 
 pub enum Credential {
   ApiKey(Secret<String>),
@@ -54,14 +55,26 @@ pub fn normalize_openai_platform_headers(headers: &HeaderMap, ctx: &HeaderPatchC
 }
 
 pub fn normalize_codex_headers(headers: &HeaderMap, ctx: &HeaderPatchCtx<'_>) -> HeaderMap {
-  let originator = first_non_empty(headers, &[ORIGINATOR.as_str()])
-    .unwrap_or("codex_cli_rs")
-    .to_string();
-  let user_agent = first_non_empty(headers, &[USER_AGENT.as_str()])
-    .unwrap_or(CODEX_CLI_USER_AGENT)
-    .to_string();
-  let session_id = first_non_empty(headers, &[SESSION_ID_LOWER.as_str()]).map(str::to_string);
+  let inbound_user_agent = first_non_empty(headers, &[USER_AGENT.as_str()]);
   let turn_metadata = first_non_empty(headers, &[X_CODEX_TURN_METADATA.as_str()]).map(str::to_string);
+  let originator = if turn_metadata.is_some() {
+    first_non_empty(headers, &[ORIGINATOR.as_str()])
+      .unwrap_or("codex_cli_rs")
+      .to_string()
+  } else {
+    "opencode".to_string()
+  };
+  let user_agent = if turn_metadata.is_some() {
+    inbound_user_agent
+      .filter(|value| is_codex_user_agent(value))
+      .unwrap_or(CODEX_CLI_USER_AGENT)
+  } else {
+    OPENCODE_USER_AGENT
+  }
+  .to_string();
+  let session_id = first_non_empty(headers, &[SESSION_ID_LOWER.as_str()])
+    .map(str::to_string)
+    .or_else(|| ctx.vars.session_id.as_ref().map(ToString::to_string));
   let authorization = first_non_empty(headers, &[AUTHORIZATION.as_str()]).map(str::to_string);
   let chatgpt_account_id = first_non_empty(headers, &[CHATGPT_ACCOUNT_ID.as_str()]).map(str::to_string);
 
@@ -111,4 +124,8 @@ fn first_non_empty<'a>(headers: &'a HeaderMap, keys: &[&str]) -> Option<&'a str>
     .iter()
     .filter_map(|key| headers.get(*key).map(|value| value.as_str().trim()))
     .find(|value| !value.is_empty())
+}
+
+fn is_codex_user_agent(value: &str) -> bool {
+  value.contains("codex_cli_rs") || value.contains("codex_exec") || value.contains("codex-tui")
 }

@@ -23,9 +23,12 @@ const CLINE_OPENAI_SEND_HEADERS_YAML: &str = include_str!("fixtures/agent_id_hea
 const COPILOT_CLI_OPENAI_SEND_HEADERS_YAML: &str =
   include_str!("fixtures/agent_id_headers/copilot-cli_openai_send.yaml");
 
+const HEADERS_INPUT_CODEX_CLI_YAML: &str = include_str!("fixtures/headers/input/codex-cli.yaml");
 const HEADERS_INPUT_OPENCODE_YAML: &str = include_str!("fixtures/headers/input/opencode.yaml");
 const HEADERS_OUTPUT_CODEX_RESPONSES_CODEX_CLI_YAML: &str =
   include_str!("fixtures/headers/output/codex_responses_codex-cli.yaml");
+const HEADERS_OUTPUT_CODEX_RESPONSES_OPENCODE_YAML: &str =
+  include_str!("fixtures/headers/output/codex_responses_opencode.yaml");
 const HEADERS_OUTPUT_COPILOT_RESPONSES_CODEX_CLI_YAML: &str =
   include_str!("fixtures/headers/output/copilot_responses_codex-cli.yaml");
 
@@ -153,12 +156,21 @@ async fn full_pipeline_agent_id_shapes_headers_seen_by_send() {
 async fn provider_headers_patch_from_fixtures() {
   let scenarios = [
     HeaderScenario {
+      name: "codex_responses_opencode",
+      provider_id: "codex",
+      agent_id: AgentId::Opencode,
+      endpoint: Endpoint::Responses,
+      model: "gpt-5-codex",
+      input_yaml: HEADERS_INPUT_OPENCODE_YAML,
+      output_yaml: HEADERS_OUTPUT_CODEX_RESPONSES_OPENCODE_YAML,
+    },
+    HeaderScenario {
       name: "codex_responses_codex-cli",
       provider_id: "codex",
       agent_id: AgentId::CodexCli,
       endpoint: Endpoint::Responses,
       model: "gpt-5-codex",
-      input_yaml: HEADERS_INPUT_OPENCODE_YAML,
+      input_yaml: HEADERS_INPUT_CODEX_CLI_YAML,
       output_yaml: HEADERS_OUTPUT_CODEX_RESPONSES_CODEX_CLI_YAML,
     },
     HeaderScenario {
@@ -251,7 +263,7 @@ async fn full_pipeline_codex_headers_are_captured_after_build_and_patch() {
   let converted = runner
     .run(raw_responses(
       "gpt-5-codex",
-      headers_from_fixture(HEADERS_INPUT_OPENCODE_YAML),
+      headers_from_fixture(HEADERS_INPUT_CODEX_CLI_YAML),
       false,
     ))
     .await
@@ -268,7 +280,7 @@ async fn full_pipeline_codex_headers_are_captured_after_build_and_patch() {
     .expect("BuildHeaders event should be emitted before Send");
   assert_eq!(
     built_headers.get("session_id").map(|value| value.as_str()),
-    Some("sess-opencode-1"),
+    Some("019e271b-4023-7081-be3e-7a69d97138a2"),
     "BuildHeaders should carry session correlation before provider auth patching"
   );
   assert_eq!(
