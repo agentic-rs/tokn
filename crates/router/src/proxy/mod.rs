@@ -54,13 +54,31 @@ pub(crate) const INTERCEPT_HOSTS: &[&str] = &[
 /// Hosts the proxy intercepts even though no provider claims them.
 const EXTRA_INTERCEPT_HOSTS: &[&str] = &["openrouter.ai", "api.anthropic.com", "opencode.ai"];
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ProxyOptions {
   pub addr: SocketAddr,
   pub ca_dir: PathBuf,
   pub intercept_hosts: Vec<String>,
   pub passthrough_hosts: Vec<String>,
   pub outbound_proxy: HttpClientOptions,
+  pub plain_http_handler: Option<ProxyPlainHttpHandler>,
+}
+
+pub type ProxyPlainHttpHandler =
+  Arc<dyn Fn(ProxyPlainHttpRequest) -> Option<ProxyPlainHttpResponse> + Send + Sync + 'static>;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyPlainHttpRequest {
+  pub method: String,
+  pub target: String,
+  pub host: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProxyPlainHttpResponse {
+  pub status: &'static str,
+  pub content_type: &'static str,
+  pub body: String,
 }
 
 pub async fn serve<F>(state: AppState, options: ProxyOptions, shutdown: F) -> Result<()>
@@ -76,6 +94,7 @@ where
   let router = proxy_router((*state).clone());
   let host_policy = HostPolicy::new(&options);
   let outbound_proxy = Arc::new(connect_proxy::ConnectProxy::from_options(&options.outbound_proxy));
+  let plain_http_handler = options.plain_http_handler.clone();
 
   tracing::info!(addr = %options.addr, ca_dir = %options.ca_dir.display(), "tokn-router proxy listening");
 
@@ -92,8 +111,9 @@ where
         let host_policy = host_policy.clone();
         let outbound_proxy = outbound_proxy.clone();
         let route_resolver = route_resolver.clone();
+        let plain_http_handler = plain_http_handler.clone();
         tokio::spawn(async move {
-          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver).await {
+          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver, plain_http_handler).await {
             if is_benign_disconnect(&err) {
               tracing::debug!(%peer, error = %err, "proxy connection closed by peer");
             } else {

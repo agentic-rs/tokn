@@ -62,10 +62,19 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
     let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
     let ca_fingerprint = ca.fingerprint_sha256();
-    if args.insecure_allow_remote {
-      let bootstrap = lan_bootstrap::BootstrapState::new(&ca, port, proxy_port)?;
+    let bootstrap = if args.insecure_allow_remote {
+      Some(lan_bootstrap::BootstrapState::new(&ca, port, proxy_port)?)
+    } else {
+      None
+    };
+    let plain_http_handler = bootstrap.clone().map(lan_bootstrap::proxy_plain_http_handler);
+    if let Some(bootstrap) = bootstrap {
       app = app.merge(lan_bootstrap::router(bootstrap));
       println!("LAN bootstrap: {}", lan_bootstrap::display_bootstrap_url(&host, port));
+      println!(
+        "LAN proxy bootstrap: {}",
+        lan_bootstrap::display_bootstrap_url(&proxy_host, proxy_port)
+      );
       println!("LAN bootstrap CA sha256: {ca_fingerprint}");
     }
     println!("tokn-router proxy listening on http://{proxy_addr}");
@@ -79,6 +88,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
       intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
       passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
       outbound_proxy: cfg.proxy.to_http_options(),
+      plain_http_handler,
     };
     let shutdown = shutdown_channel();
     tokio::try_join!(

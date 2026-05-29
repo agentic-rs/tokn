@@ -1,7 +1,10 @@
 use super::ca::DynamicResolver;
 use super::connect_proxy::{connect_upstream, ConnectProxy};
 
-use super::{extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa};
+use super::{
+  extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa, ProxyPlainHttpHandler,
+  ProxyPlainHttpRequest, ProxyPlainHttpResponse,
+};
 use crate::api::{error::ApiError, AppState};
 use crate::pipeline::request_header_extract;
 use anyhow::{Context, Result};
@@ -30,6 +33,7 @@ const CONNECT_OK: &[u8] = b"HTTP/1.1 200 Connection Established\r\n\r\n";
 const BAD_CONNECT: &[u8] = b"HTTP/1.1 405 Method Not Allowed\r\ncontent-length: 0\r\n\r\n";
 const UPGRADE_REQUIRED_WEBSOCKET: &[u8] =
   b"HTTP/1.1 426 Upgrade Required\r\nconnection: Upgrade\r\nupgrade: websocket\r\ncontent-length: 0\r\n\r\n";
+const PROXY_GET_HELP: &str = "tokn-router proxy is running. Configure HTTP_PROXY/HTTPS_PROXY to this address.\n";
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_client(
@@ -41,6 +45,7 @@ pub(super) async fn handle_client(
   host_policy: HostPolicy,
   outbound_proxy: Arc<ConnectProxy>,
   route_resolver: Arc<RouteResolver>,
+  plain_http_handler: Option<ProxyPlainHttpHandler>,
 ) -> Result<()> {
   let mut reader = BufReader::new(stream);
   let mut request_line = String::new();
@@ -54,6 +59,7 @@ pub(super) async fn handle_client(
   let _version = parts.next().unwrap_or_default();
 
   let mut proxy_route_mode: Option<String> = None;
+  let mut host_header: Option<String> = None;
   let mut websocket_upgrade = false;
   loop {
     let mut header_line = String::new();
@@ -70,6 +76,12 @@ pub(super) async fn handle_client(
       if let Some(mode) = extract_proxy_auth_mode(value.trim().trim_end_matches(['\r', '\n'])) {
         proxy_route_mode = Some(mode);
       }
+    }
+    if let Some(value) = header_line
+      .strip_prefix("Host:")
+      .or_else(|| header_line.strip_prefix("host:"))
+    {
+      host_header = Some(value.trim().trim_end_matches(['\r', '\n']).to_string());
     }
     if let Some(value) = header_line
       .strip_prefix("Upgrade:")
@@ -89,6 +101,12 @@ pub(super) async fn handle_client(
   if websocket_upgrade {
     tracing::debug!("rejecting websocket upgrade request from {}", peer);
     stream.write_all(UPGRADE_REQUIRED_WEBSOCKET).await?;
+    return Ok(());
+  }
+  if method == Method::GET.as_str() {
+    let response = response_for_plain_get(authority, host_header, plain_http_handler);
+    stream.write_all(&response).await?;
+    tracing::debug!(%peer, target = authority, "served proxy listener get");
     return Ok(());
   }
   if method != Method::CONNECT.as_str() {
@@ -120,6 +138,37 @@ pub(super) async fn handle_client(
   } else {
     tunnel(stream, &host, port, outbound_proxy.as_ref()).await
   }
+}
+
+fn response_for_plain_get(target: &str, host: Option<String>, handler: Option<ProxyPlainHttpHandler>) -> Vec<u8> {
+  if let Some(handler) = handler {
+    let request = ProxyPlainHttpRequest {
+      method: Method::GET.as_str().to_string(),
+      target: target.to_string(),
+      host,
+    };
+    if let Some(response) = handler(request) {
+      return serialize_plain_http_response(response);
+    }
+  }
+  serialize_plain_http_response(ProxyPlainHttpResponse {
+    status: "200 OK",
+    content_type: "text/plain; charset=utf-8",
+    body: PROXY_GET_HELP.to_string(),
+  })
+}
+
+fn serialize_plain_http_response(response: ProxyPlainHttpResponse) -> Vec<u8> {
+  let body = response.body.into_bytes();
+  let mut head = format!(
+    "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+    response.status,
+    response.content_type,
+    body.len()
+  )
+  .into_bytes();
+  head.extend(body);
+  head
 }
 
 async fn tunnel(mut client: TcpStream, host: &str, port: u16, outbound_proxy: &ConnectProxy) -> Result<()> {
@@ -507,6 +556,36 @@ mod tests {
     close_intercepted_connection_on_error(&mut resp);
 
     assert!(resp.headers().get(CONNECTION).is_none());
+  }
+
+  #[test]
+  fn plain_get_without_handler_returns_proxy_help() {
+    let response = response_for_plain_get("/", Some("127.0.0.1:4142".into()), None);
+    let response = String::from_utf8(response).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.contains("content-type: text/plain; charset=utf-8\r\n"));
+    assert!(response.contains(PROXY_GET_HELP));
+  }
+
+  #[test]
+  fn plain_get_handler_can_serve_custom_response() {
+    let handler: ProxyPlainHttpHandler = Arc::new(|request| {
+      assert_eq!(request.target, "/-/lan/bootstrap.json");
+      assert_eq!(request.host.as_deref(), Some("lan.local:4142"));
+      Some(ProxyPlainHttpResponse {
+        status: "200 OK",
+        content_type: "application/json; charset=utf-8",
+        body: "{\"ok\":true}".into(),
+      })
+    });
+
+    let response = response_for_plain_get("/-/lan/bootstrap.json", Some("lan.local:4142".into()), Some(handler));
+    let response = String::from_utf8(response).unwrap();
+
+    assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
+    assert!(response.contains("content-type: application/json; charset=utf-8\r\n"));
+    assert!(response.ends_with("{\"ok\":true}"));
   }
 
   #[test]

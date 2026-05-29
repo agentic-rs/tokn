@@ -6,8 +6,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
-use tokn_router::proxy::ProxyCa;
+use std::sync::Arc;
+use tokn_router::proxy::{ProxyCa, ProxyPlainHttpHandler, ProxyPlainHttpRequest, ProxyPlainHttpResponse};
 
+const LAN_ROOT_PATH: &str = "/-/lan";
 const BOOTSTRAP_JSON_PATH: &str = "/-/lan/bootstrap.json";
 const CA_CERT_PATH: &str = "/-/lan/ca.crt";
 const ENV_PATH: &str = "/-/lan/env";
@@ -16,12 +18,20 @@ const ENV_PATH: &str = "/-/lan/env";
 pub struct BootstrapState {
   ca_cert_pem: String,
   ca_fingerprint: String,
-  api_port: u16,
+  api_port: Option<u16>,
   proxy_port: u16,
 }
 
 impl BootstrapState {
   pub fn new(ca: &ProxyCa, api_port: u16, proxy_port: u16) -> Result<Self> {
+    Self::from_ca(ca, Some(api_port), proxy_port)
+  }
+
+  pub fn proxy_only(ca: &ProxyCa, proxy_port: u16) -> Result<Self> {
+    Self::from_ca(ca, None, proxy_port)
+  }
+
+  fn from_ca(ca: &ProxyCa, api_port: Option<u16>, proxy_port: u16) -> Result<Self> {
     let ca_cert_path = ca.cert_path();
     let ca_cert_pem =
       std::fs::read_to_string(&ca_cert_path).with_context(|| format!("read {}", ca_cert_path.display()))?;
@@ -42,6 +52,10 @@ pub fn router(state: BootstrapState) -> Router {
     .with_state(state)
 }
 
+pub fn proxy_plain_http_handler(state: BootstrapState) -> ProxyPlainHttpHandler {
+  Arc::new(move |request| proxy_plain_http_response(request, &state))
+}
+
 pub fn display_bootstrap_url(bind_host: &str, api_port: u16) -> String {
   let host = bind_host.trim();
   if matches!(host, "0.0.0.0" | "::" | "[::]") {
@@ -52,7 +66,8 @@ pub fn display_bootstrap_url(bind_host: &str, api_port: u16) -> String {
 
 #[derive(Serialize)]
 struct BootstrapMetadata {
-  api_url: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  api_url: Option<String>,
   proxy_url: String,
   ca_cert_url: String,
   env_url: String,
@@ -63,14 +78,9 @@ async fn bootstrap_json(
   State(state): State<BootstrapState>,
   headers: HeaderMap,
 ) -> std::result::Result<Json<BootstrapMetadata>, BootstrapError> {
-  let urls = urls_from_headers(&headers, state.api_port, state.proxy_port)?;
-  Ok(Json(BootstrapMetadata {
-    api_url: format!("{}/v1", urls.api_base),
-    proxy_url: urls.proxy_base,
-    ca_cert_url: format!("{}{}", urls.api_base, CA_CERT_PATH),
-    env_url: format!("{}{}?shell=sh", urls.api_base, ENV_PATH),
-    ca_sha256: state.ca_fingerprint,
-  }))
+  let api_port = state.api_port.ok_or_else(|| anyhow!("missing API port"))?;
+  let urls = urls_from_headers(&headers, state.api_port, state.proxy_port, api_port)?;
+  Ok(Json(bootstrap_metadata(urls, &state.ca_fingerprint)))
 }
 
 async fn ca_cert(State(state): State<BootstrapState>) -> Response {
@@ -88,9 +98,83 @@ async fn env_script(
   Query(query): Query<EnvQuery>,
 ) -> std::result::Result<Response, BootstrapError> {
   let shell = Shell::parse(query.shell.as_deref())?;
-  let urls = urls_from_headers(&headers, state.api_port, state.proxy_port)?;
+  let api_port = state.api_port.ok_or_else(|| anyhow!("missing API port"))?;
+  let urls = urls_from_headers(&headers, state.api_port, state.proxy_port, api_port)?;
   let script = render_env_script(shell, &urls, &state.ca_fingerprint);
   Ok(([(CONTENT_TYPE, shell.content_type())], script).into_response())
+}
+
+fn proxy_plain_http_response(request: ProxyPlainHttpRequest, state: &BootstrapState) -> Option<ProxyPlainHttpResponse> {
+  if request.method != "GET" {
+    return None;
+  }
+  let (path, query) = proxy_target_path_and_query(&request.target)?;
+  let response = match path.as_str() {
+    LAN_ROOT_PATH | BOOTSTRAP_JSON_PATH => {
+      let urls = urls_from_proxy_host(
+        request.host.as_deref(),
+        state.api_port,
+        state.proxy_port,
+        state.proxy_port,
+      );
+      match urls.map(|urls| serde_json::to_string_pretty(&bootstrap_metadata(urls, &state.ca_fingerprint))) {
+        Ok(Ok(body)) => ProxyPlainHttpResponse {
+          status: "200 OK",
+          content_type: "application/json; charset=utf-8",
+          body,
+        },
+        Ok(Err(err)) => bootstrap_bad_request(err.into()),
+        Err(err) => bootstrap_bad_request(err),
+      }
+    }
+    CA_CERT_PATH => ProxyPlainHttpResponse {
+      status: "200 OK",
+      content_type: "application/x-pem-file",
+      body: state.ca_cert_pem.clone(),
+    },
+    ENV_PATH => {
+      let shell = shell_from_query(query.as_deref());
+      match shell.and_then(|shell| {
+        Ok((
+          shell,
+          urls_from_proxy_host(
+            request.host.as_deref(),
+            state.api_port,
+            state.proxy_port,
+            state.proxy_port,
+          )?,
+        ))
+      }) {
+        Ok((shell, urls)) => ProxyPlainHttpResponse {
+          status: "200 OK",
+          content_type: shell.content_type(),
+          body: render_env_script(shell, &urls, &state.ca_fingerprint),
+        },
+        Err(err) => bootstrap_bad_request(err),
+      }
+    }
+    _ => return None,
+  };
+  Some(response)
+}
+
+fn bootstrap_metadata(urls: BootstrapUrls, fingerprint: &str) -> BootstrapMetadata {
+  let api_url = urls.api_base.map(|base| format!("{base}/v1"));
+  BootstrapMetadata {
+    api_url,
+    proxy_url: urls.proxy_base,
+    ca_cert_url: urls.ca_cert_url,
+    env_url: format!("{}{}?shell=sh", urls.bootstrap_base, ENV_PATH),
+    ca_sha256: fingerprint.to_string(),
+  }
+}
+
+fn bootstrap_bad_request(err: anyhow::Error) -> ProxyPlainHttpResponse {
+  ProxyPlainHttpResponse {
+    status: "400 Bad Request",
+    content_type: "text/plain; charset=utf-8",
+    body: format!("{err}\n"),
+  }
 }
 
 #[derive(Debug)]
@@ -139,22 +223,38 @@ impl Shell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BootstrapUrls {
-  api_base: String,
+  api_base: Option<String>,
+  bootstrap_base: String,
   proxy_base: String,
   ca_cert_url: String,
   host_for_no_proxy: String,
 }
 
-fn urls_from_headers(headers: &HeaderMap, api_port: u16, proxy_port: u16) -> Result<BootstrapUrls> {
+fn urls_from_headers(
+  headers: &HeaderMap,
+  api_port: Option<u16>,
+  proxy_port: u16,
+  bootstrap_port: u16,
+) -> Result<BootstrapUrls> {
   let raw = headers
     .get(HOST)
     .ok_or_else(|| anyhow!("missing Host header"))?
     .to_str()
     .context("Host header must be valid ASCII")?;
-  urls_from_host(raw, api_port, proxy_port)
+  urls_from_host(raw, api_port, proxy_port, bootstrap_port)
 }
 
-fn urls_from_host(raw: &str, api_port: u16, proxy_port: u16) -> Result<BootstrapUrls> {
+fn urls_from_proxy_host(
+  raw: Option<&str>,
+  api_port: Option<u16>,
+  proxy_port: u16,
+  bootstrap_port: u16,
+) -> Result<BootstrapUrls> {
+  let raw = raw.ok_or_else(|| anyhow!("missing Host header"))?;
+  urls_from_host(raw, api_port, proxy_port, bootstrap_port)
+}
+
+fn urls_from_host(raw: &str, api_port: Option<u16>, proxy_port: u16, bootstrap_port: u16) -> Result<BootstrapUrls> {
   let raw = raw.trim();
   if raw.is_empty() || raw.contains('@') {
     return Err(anyhow!("invalid Host header"));
@@ -163,13 +263,45 @@ fn urls_from_host(raw: &str, api_port: u16, proxy_port: u16) -> Result<Bootstrap
   let host = authority.host();
   validate_host(host)?;
   let url_host = url_host(host);
-  let api_base = format!("http://{url_host}:{api_port}");
+  let bootstrap_base = format!("http://{url_host}:{bootstrap_port}");
+  let api_base = api_port.map(|api_port| format!("http://{url_host}:{api_port}"));
   Ok(BootstrapUrls {
-    ca_cert_url: format!("{api_base}{CA_CERT_PATH}"),
+    ca_cert_url: format!("{bootstrap_base}{CA_CERT_PATH}"),
     api_base,
+    bootstrap_base,
     proxy_base: format!("http://{url_host}:{proxy_port}"),
     host_for_no_proxy: no_proxy_host(host),
   })
+}
+
+fn proxy_target_path_and_query(target: &str) -> Option<(String, Option<String>)> {
+  let value = target.trim();
+  if value.is_empty() {
+    return None;
+  }
+  let path_and_query = if value.starts_with("http://") || value.starts_with("https://") {
+    let uri: http::Uri = value.parse().ok()?;
+    uri.path_and_query()?.as_str().to_string()
+  } else {
+    value.to_string()
+  };
+  let (path, query) = path_and_query
+    .split_once('?')
+    .map(|(path, query)| (path.to_string(), query.to_string()))
+    .unwrap_or((path_and_query, String::new()));
+  Some((path, (!query.is_empty()).then_some(query)))
+}
+
+fn shell_from_query(query: Option<&str>) -> Result<Shell> {
+  for pair in query.unwrap_or_default().split('&') {
+    let Some((key, value)) = pair.split_once('=') else {
+      continue;
+    };
+    if key == "shell" {
+      return Shell::parse(Some(value));
+    }
+  }
+  Shell::parse(None)
 }
 
 fn validate_host(host: &str) -> Result<()> {
@@ -212,7 +344,11 @@ fn no_proxy_value(host: &str) -> String {
 
 fn render_sh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
-  let api_url = format!("{}/v1", urls.api_base);
+  let api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("export OPENAI_BASE_URL={}\n", sh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 TOKN_ROUTER_CA_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan"
@@ -249,7 +385,7 @@ if [ -n "$TOKN_ROUTER_SYSTEM_CA" ]; then
 else
   cp "$TOKN_ROUTER_CA_CERT" "$TOKN_ROUTER_CA_BUNDLE"
 fi
-export OPENAI_BASE_URL={api_url}
+{api_export}
 export HTTP_PROXY={proxy_url}
 export HTTPS_PROXY={proxy_url}
 export NO_PROXY={no_proxy}
@@ -261,7 +397,7 @@ export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
-    api_url = sh_quote(&api_url),
+    api_export = api_export,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -269,7 +405,11 @@ export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
 
 fn render_fish_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
-  let api_url = format!("{}/v1", urls.api_base);
+  let api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("set -gx OPENAI_BASE_URL {}\n", sh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 set -q XDG_CONFIG_HOME; or set XDG_CONFIG_HOME "$HOME/.config"
@@ -307,7 +447,7 @@ if test -n "$system_ca"
 else
   cp "$TOKN_ROUTER_CA_CERT" "$TOKN_ROUTER_CA_BUNDLE"
 end
-set -gx OPENAI_BASE_URL {api_url}
+{api_export}
 set -gx HTTP_PROXY {proxy_url}
 set -gx HTTPS_PROXY {proxy_url}
 set -gx NO_PROXY {no_proxy}
@@ -319,7 +459,7 @@ set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
-    api_url = sh_quote(&api_url),
+    api_export = api_export,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -327,7 +467,11 @@ set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
 
 fn render_pwsh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
   let no_proxy = no_proxy_value(&urls.host_for_no_proxy);
-  let api_url = format!("{}/v1", urls.api_base);
+  let api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("$Env:OPENAI_BASE_URL = {}\n", pwsh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 $configHome = if ($Env:XDG_CONFIG_HOME) {{ $Env:XDG_CONFIG_HOME }} else {{ Join-Path $HOME ".config" }}
@@ -347,7 +491,7 @@ if ($systemCa) {{
 }} else {{
   Copy-Item $caCert $caBundle
 }}
-$Env:OPENAI_BASE_URL = {api_url}
+{api_export}
 $Env:HTTP_PROXY = {proxy_url}
 $Env:HTTPS_PROXY = {proxy_url}
 $Env:NO_PROXY = {no_proxy}
@@ -359,7 +503,7 @@ $Env:GIT_SSL_CAINFO = $caBundle
 "#,
     ca_url = pwsh_quote(&urls.ca_cert_url),
     fingerprint_value = pwsh_quote(fingerprint),
-    api_url = pwsh_quote(&api_url),
+    api_export = api_export,
     proxy_url = pwsh_quote(&urls.proxy_base),
     no_proxy = pwsh_quote(&no_proxy),
   )
@@ -384,15 +528,16 @@ mod tests {
     BootstrapState {
       ca_cert_pem: "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n".into(),
       ca_fingerprint: "abc123".into(),
-      api_port: 4141,
+      api_port: Some(4141),
       proxy_port: 4142,
     }
   }
 
   #[test]
   fn concrete_host_produces_api_and_proxy_urls() {
-    let urls = urls_from_host("192.168.1.10:4141", 4141, 4142).unwrap();
-    assert_eq!(urls.api_base, "http://192.168.1.10:4141");
+    let urls = urls_from_host("192.168.1.10:4141", Some(4141), 4142, 4141).unwrap();
+    assert_eq!(urls.api_base.as_deref(), Some("http://192.168.1.10:4141"));
+    assert_eq!(urls.bootstrap_base, "http://192.168.1.10:4141");
     assert_eq!(urls.proxy_base, "http://192.168.1.10:4142");
     assert_eq!(urls.ca_cert_url, "http://192.168.1.10:4141/-/lan/ca.crt");
   }
@@ -415,29 +560,30 @@ mod tests {
 
   #[test]
   fn request_host_drives_urls_even_for_wildcard_bind() {
-    let urls = urls_from_host("lan-router.local:4141", 4141, 4142).unwrap();
-    assert_eq!(urls.api_base, "http://lan-router.local:4141");
+    let urls = urls_from_host("lan-router.local:4141", Some(4141), 4142, 4141).unwrap();
+    assert_eq!(urls.api_base.as_deref(), Some("http://lan-router.local:4141"));
     assert_eq!(urls.proxy_base, "http://lan-router.local:4142");
   }
 
   #[test]
   fn ipv6_host_formats_urls_and_no_proxy_host() {
-    let urls = urls_from_host("[fd00::10]:4141", 4141, 4142).unwrap();
-    assert_eq!(urls.api_base, "http://[fd00::10]:4141");
+    let urls = urls_from_host("[fd00::10]:4141", Some(4141), 4142, 4141).unwrap();
+    assert_eq!(urls.api_base.as_deref(), Some("http://[fd00::10]:4141"));
     assert_eq!(urls.proxy_base, "http://[fd00::10]:4142");
     assert_eq!(urls.host_for_no_proxy, "fd00::10");
   }
 
   #[test]
   fn rejects_shell_injection_host() {
-    let err = urls_from_host("lan.local;touch /tmp/nope:4141", 4141, 4142).expect_err("host should be rejected");
+    let err =
+      urls_from_host("lan.local;touch /tmp/nope:4141", Some(4141), 4142, 4141).expect_err("host should be rejected");
     assert!(err.to_string().contains("invalid Host header"));
   }
 
   #[test]
   fn rejects_empty_and_userinfo_hosts() {
-    assert!(urls_from_host("", 4141, 4142).is_err());
-    assert!(urls_from_host("user@lan.local:4141", 4141, 4142).is_err());
+    assert!(urls_from_host("", Some(4141), 4142, 4141).is_err());
+    assert!(urls_from_host("user@lan.local:4141", Some(4141), 4142, 4141).is_err());
   }
 
   #[test]
@@ -454,7 +600,7 @@ mod tests {
 
   #[test]
   fn env_includes_server_host_in_no_proxy() {
-    let urls = urls_from_host("lan-router.local:4141", 4141, 4142).unwrap();
+    let urls = urls_from_host("lan-router.local:4141", Some(4141), 4142, 4141).unwrap();
     let script = render_env_script(Shell::Sh, &urls, "abc123");
     assert!(script.contains("TOKN_ROUTER_CA_SHA256"));
     assert!(script.contains("CA fingerprint mismatch"));
@@ -468,7 +614,8 @@ mod tests {
   #[test]
   fn env_renderers_quote_shell_values() {
     let urls = BootstrapUrls {
-      api_base: "http://lan-router.local:4141".into(),
+      api_base: Some("http://lan-router.local:4141".into()),
+      bootstrap_base: "http://lan-router.local:4141".into(),
       proxy_base: "http://lan-router.local:4142".into(),
       ca_cert_url: "http://lan-router.local:4141/-/lan/ca.crt".into(),
       host_for_no_proxy: "lan-router.local".into(),
@@ -498,6 +645,65 @@ mod tests {
   fn quote_helpers_escape_single_quotes() {
     assert_eq!(sh_quote("a'b"), "'a'\\''b'");
     assert_eq!(pwsh_quote("a'b"), "'a''b'");
+  }
+
+  #[test]
+  fn proxy_handler_serves_bootstrap_json_from_proxy_host() {
+    let handler = proxy_plain_http_handler(test_state());
+    let response = handler(ProxyPlainHttpRequest {
+      method: "GET".into(),
+      target: BOOTSTRAP_JSON_PATH.into(),
+      host: Some("lan-router.local:4142".into()),
+    })
+    .unwrap();
+
+    assert_eq!(response.status, "200 OK");
+    assert_eq!(response.content_type, "application/json; charset=utf-8");
+    let json: serde_json::Value = serde_json::from_str(&response.body).unwrap();
+    assert_eq!(json["api_url"], "http://lan-router.local:4141/v1");
+    assert_eq!(json["proxy_url"], "http://lan-router.local:4142");
+    assert_eq!(json["ca_cert_url"], "http://lan-router.local:4142/-/lan/ca.crt");
+    assert_eq!(json["env_url"], "http://lan-router.local:4142/-/lan/env?shell=sh");
+    assert_eq!(json["ca_sha256"], "abc123");
+  }
+
+  #[test]
+  fn proxy_only_handler_omits_api_url_and_openai_base_url() {
+    let mut state = test_state();
+    state.api_port = None;
+    let handler = proxy_plain_http_handler(state);
+    let metadata = handler(ProxyPlainHttpRequest {
+      method: "GET".into(),
+      target: LAN_ROOT_PATH.into(),
+      host: Some("lan-router.local:4142".into()),
+    })
+    .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&metadata.body).unwrap();
+    assert!(json.get("api_url").is_none());
+    assert_eq!(json["proxy_url"], "http://lan-router.local:4142");
+
+    let env = handler(ProxyPlainHttpRequest {
+      method: "GET".into(),
+      target: "/-/lan/env?shell=sh".into(),
+      host: Some("lan-router.local:4142".into()),
+    })
+    .unwrap();
+    assert!(env.body.contains("export HTTPS_PROXY='http://lan-router.local:4142'"));
+    assert!(!env.body.contains("OPENAI_BASE_URL"));
+  }
+
+  #[test]
+  fn proxy_handler_rejects_malformed_host_without_shell_injection() {
+    let handler = proxy_plain_http_handler(test_state());
+    let response = handler(ProxyPlainHttpRequest {
+      method: "GET".into(),
+      target: "/-/lan/env?shell=sh".into(),
+      host: Some("lan.local;touch /tmp/nope:4142".into()),
+    })
+    .unwrap();
+
+    assert_eq!(response.status, "400 Bad Request");
+    assert!(response.body.contains("invalid Host header"));
   }
 
   #[test]

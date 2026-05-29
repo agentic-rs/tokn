@@ -1,4 +1,5 @@
 use crate::cli::config_cmd::RouteModeArg;
+use crate::cli::lan_bootstrap;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -130,9 +131,21 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
 
   let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
   let ca_fingerprint = ca.fingerprint_sha256();
+  let plain_http_handler = if args.insecure_allow_remote {
+    let bootstrap = lan_bootstrap::BootstrapState::proxy_only(&ca, port)?;
+    Some(lan_bootstrap::proxy_plain_http_handler(bootstrap))
+  } else {
+    None
+  };
   println!("tokn-router proxy listening on http://{addr}");
   println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
   println!("Trust this CA, then run: eval \"$(tokn-gateway proxy env)\"");
+  if args.insecure_allow_remote {
+    println!(
+      "LAN proxy bootstrap: {}",
+      lan_bootstrap::display_bootstrap_url(&host, port)
+    );
+  }
   println!("Route mode: {}", route_mode_name(route_mode));
   if let Some(url) = &cfg.proxy.url {
     println!("Outbound proxy: {url}");
@@ -150,6 +163,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
     passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
     outbound_proxy: cfg.proxy.to_http_options(),
+    plain_http_handler,
   };
 
   let result = tokn_router::proxy::serve(state, options, async {
