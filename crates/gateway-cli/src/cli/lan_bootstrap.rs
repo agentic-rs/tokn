@@ -338,6 +338,15 @@ mod tests {
   use axum::http::Request;
   use tower::ServiceExt;
 
+  fn test_state() -> BootstrapState {
+    BootstrapState {
+      ca_cert_pem: "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n".into(),
+      ca_fingerprint: "abc123".into(),
+      api_port: 4141,
+      proxy_port: 4142,
+    }
+  }
+
   #[test]
   fn concrete_host_produces_api_and_proxy_urls() {
     let urls = urls_from_host("192.168.1.10:4141", 4141, 4142).unwrap();
@@ -352,6 +361,14 @@ mod tests {
       display_bootstrap_url("0.0.0.0", 4141),
       "http://<server-lan-ip>:4141/-/lan/bootstrap.json"
     );
+    assert_eq!(
+      display_bootstrap_url("[::]", 4141),
+      "http://<server-lan-ip>:4141/-/lan/bootstrap.json"
+    );
+    assert_eq!(
+      display_bootstrap_url("lan-router.local", 4141),
+      "http://lan-router.local:4141/-/lan/bootstrap.json"
+    );
   }
 
   #[test]
@@ -362,9 +379,35 @@ mod tests {
   }
 
   #[test]
+  fn ipv6_host_formats_urls_and_no_proxy_host() {
+    let urls = urls_from_host("[fd00::10]:4141", 4141, 4142).unwrap();
+    assert_eq!(urls.api_base, "http://[fd00::10]:4141");
+    assert_eq!(urls.proxy_base, "http://[fd00::10]:4142");
+    assert_eq!(urls.host_for_no_proxy, "fd00::10");
+  }
+
+  #[test]
   fn rejects_shell_injection_host() {
     let err = urls_from_host("lan.local;touch /tmp/nope:4141", 4141, 4142).expect_err("host should be rejected");
     assert!(err.to_string().contains("invalid Host header"));
+  }
+
+  #[test]
+  fn rejects_empty_and_userinfo_hosts() {
+    assert!(urls_from_host("", 4141, 4142).is_err());
+    assert!(urls_from_host("user@lan.local:4141", 4141, 4142).is_err());
+  }
+
+  #[test]
+  fn shell_parsing_and_content_types_are_explicit() {
+    assert_eq!(Shell::parse(None).unwrap(), Shell::Sh);
+    assert_eq!(Shell::parse(Some("bash")).unwrap(), Shell::Bash);
+    assert_eq!(Shell::parse(Some("zsh")).unwrap(), Shell::Zsh);
+    assert_eq!(Shell::parse(Some("fish")).unwrap(), Shell::Fish);
+    assert_eq!(Shell::parse(Some("pwsh")).unwrap(), Shell::Pwsh);
+    assert!(Shell::parse(Some("cmd")).is_err());
+    assert_eq!(Shell::Sh.content_type(), "text/x-shellscript; charset=utf-8");
+    assert_eq!(Shell::Pwsh.content_type(), "text/plain; charset=utf-8");
   }
 
   #[test]
@@ -374,15 +417,112 @@ mod tests {
     assert!(script.contains("NO_PROXY='localhost,127.0.0.1,::1,lan-router.local'"));
   }
 
+  #[test]
+  fn env_renderers_quote_shell_values() {
+    let urls = BootstrapUrls {
+      api_base: "http://lan-router.local:4141".into(),
+      proxy_base: "http://lan-router.local:4142".into(),
+      ca_cert_url: "http://lan-router.local:4141/-/lan/ca.crt".into(),
+      host_for_no_proxy: "lan-router.local".into(),
+    };
+    let fish = render_env_script(Shell::Fish, &urls, "abc123");
+    assert!(fish.contains("set -gx OPENAI_BASE_URL 'http://lan-router.local:4141/v1'"));
+    assert!(fish.contains("set -gx HTTPS_PROXY 'http://lan-router.local:4142'"));
+
+    let pwsh = render_env_script(Shell::Pwsh, &urls, "abc123");
+    assert!(pwsh.contains("$Env:OPENAI_BASE_URL = 'http://lan-router.local:4141/v1'"));
+    assert!(pwsh.contains("$Env:HTTPS_PROXY = 'http://lan-router.local:4142'"));
+  }
+
+  #[test]
+  fn quote_helpers_escape_single_quotes() {
+    assert_eq!(sh_quote("a'b"), "'a'\\''b'");
+    assert_eq!(pwsh_quote("a'b"), "'a''b'");
+  }
+
+  #[test]
+  fn bootstrap_state_loads_public_ca_from_generated_ca() {
+    let dir = tempfile::tempdir().unwrap();
+    let ca = tokn_router::proxy::load_or_generate_ca(dir.path(), false).unwrap();
+    let state = BootstrapState::new(&ca, 4141, 4142).unwrap();
+    assert!(state.ca_cert_pem.contains("BEGIN CERTIFICATE"));
+    assert_eq!(state.ca_fingerprint, ca.fingerprint_sha256());
+  }
+
+  #[tokio::test]
+  async fn bootstrap_json_endpoint_uses_request_host() {
+    let response = router(test_state())
+      .oneshot(
+        Request::builder()
+          .uri(BOOTSTRAP_JSON_PATH)
+          .header(HOST, "lan-router.local:4141")
+          .body(axum::body::Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["api_url"], "http://lan-router.local:4141/v1");
+    assert_eq!(json["proxy_url"], "http://lan-router.local:4142");
+    assert_eq!(json["ca_cert_url"], "http://lan-router.local:4141/-/lan/ca.crt");
+    assert_eq!(json["env_url"], "http://lan-router.local:4141/-/lan/env?shell=sh");
+    assert_eq!(json["ca_sha256"], "abc123");
+  }
+
+  #[tokio::test]
+  async fn env_endpoint_renders_requested_shell() {
+    let response = router(test_state())
+      .oneshot(
+        Request::builder()
+          .uri("/-/lan/env?shell=pwsh")
+          .header(HOST, "lan-router.local:4141")
+          .body(axum::body::Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+      response.headers().get(CONTENT_TYPE).unwrap(),
+      "text/plain; charset=utf-8"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = std::str::from_utf8(&body).unwrap();
+    assert!(body.contains("$Env:OPENAI_BASE_URL = 'http://lan-router.local:4141/v1'"));
+    assert!(body.contains("Invoke-WebRequest"));
+  }
+
+  #[tokio::test]
+  async fn bootstrap_endpoints_reject_bad_host_or_shell() {
+    let missing_host = router(test_state())
+      .oneshot(
+        Request::builder()
+          .uri(BOOTSTRAP_JSON_PATH)
+          .body(axum::body::Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(missing_host.status(), StatusCode::BAD_REQUEST);
+
+    let bad_shell = router(test_state())
+      .oneshot(
+        Request::builder()
+          .uri("/-/lan/env?shell=cmd")
+          .header(HOST, "lan-router.local:4141")
+          .body(axum::body::Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(bad_shell.status(), StatusCode::BAD_REQUEST);
+  }
+
   #[tokio::test]
   async fn ca_endpoint_serves_only_public_certificate() {
-    let state = BootstrapState {
-      ca_cert_pem: "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n".into(),
-      ca_fingerprint: "abc123".into(),
-      api_port: 4141,
-      proxy_port: 4142,
-    };
-    let response = router(state)
+    let response = router(test_state())
       .oneshot(
         Request::builder()
           .uri(CA_CERT_PATH)
