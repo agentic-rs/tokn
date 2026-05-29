@@ -5,8 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock, RwLock};
-use tokn_headers::HeaderMap;
 pub use tokn_headers::TemplateVars;
+use tokn_headers::{AgentId, HeaderMap};
 
 pub mod error;
 
@@ -275,6 +275,7 @@ pub struct RequestCtx<'a> {
   pub client_headers: Option<HeaderMap>,
   pub outbound: Option<OutboundCapture>,
   pub vars: TemplateVars,
+  pub agent_id: AgentId,
 }
 
 impl RequestCtx<'_> {
@@ -315,6 +316,7 @@ pub struct HeaderPatchCtx<'a> {
   pub initiator: &'a str,
   pub inbound_headers: &'a HeaderMap,
   pub vars: &'a TemplateVars,
+  pub agent_id: &'a AgentId,
 }
 
 #[async_trait]

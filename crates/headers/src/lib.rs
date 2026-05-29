@@ -12,6 +12,8 @@
 //!   headers, shared between header rendering and provider header construction.
 //! * [`HeaderSchema`] — a trait implemented by typed (provider, client) header
 //!   structs to round-trip between their typed form and a [`HeaderMap`].
+//! * [`HeaderNormalizer`] — a trait for rebuilding client-derived headers into
+//!   a provider-owned wire shape.
 //! * [`schemas`] — concrete client/overlay structs implementing [`HeaderSchema`].
 //! * [`agent`] — agent-specific outbound header builders.
 //! * [`registry`] — runtime lookup of (`AgentKind`, `OverlayKind`) for a given
@@ -23,11 +25,13 @@
 //! schema registry.
 
 pub mod agent;
+pub mod agent_id;
 pub mod error;
 pub mod inbound;
 pub mod keys;
 pub mod map;
 pub mod name;
+pub mod normalizer;
 pub mod registry;
 pub mod reqwest_compat;
 pub mod schema;
@@ -35,9 +39,11 @@ pub mod schemas;
 pub mod value;
 pub mod vars;
 
+pub use agent_id::AgentId;
 pub use error::Error;
 pub use map::HeaderMap;
 pub use name::HeaderName;
+pub use normalizer::{HeaderNormalizeCtx, HeaderNormalizer};
 pub use schema::HeaderSchema;
 pub use value::HeaderValue;
 pub use vars::TemplateVars;

@@ -98,7 +98,11 @@ impl BuildHeadersStage for DefaultBuildHeaders {
       None => build_agent_headers(agent_id.as_str(), &vars, inbound),
     };
 
-    Ok(BuiltHeaders { headers, vars })
+    Ok(BuiltHeaders {
+      headers,
+      vars,
+      agent_id,
+    })
   }
 }
 

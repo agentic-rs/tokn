@@ -142,6 +142,7 @@ impl SendStage for ProxySend {
             initiator: extracted.initiator.as_deref().unwrap_or("user"),
             inbound_headers: &HeaderMap::new(),
             vars: &headers.vars,
+            agent_id: &headers.agent_id,
           },
         )
         .map_err(|err| {
@@ -349,6 +350,7 @@ mod tests {
     BuiltHeaders {
       headers: h,
       vars: Default::default(),
+      agent_id: Default::default(),
     }
   }
 

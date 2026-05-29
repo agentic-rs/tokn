@@ -49,6 +49,7 @@ impl From<&BuiltHeaders> for BuiltHeadersSummary {
     Self {
       headers: h.headers.clone(),
       vars: h.vars.clone(),
+      agent_id: h.agent_id.clone(),
     }
   }
 }
