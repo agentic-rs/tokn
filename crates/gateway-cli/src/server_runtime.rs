@@ -109,8 +109,8 @@ pub fn state_with_route_mode(
   state
 }
 
-pub fn resolve_bind_addr(host: &str, port: u16, allow_remote: bool) -> Result<SocketAddr> {
-  ensure_bind_host(host, allow_remote)?;
+pub fn resolve_bind_addr(host: &str, port: u16, insecure_allow_remote: bool) -> Result<SocketAddr> {
+  ensure_bind_host(host, insecure_allow_remote)?;
   Ok(format!("{host}:{port}").parse()?)
 }
 
@@ -132,9 +132,35 @@ pub fn is_loopback(host: &str) -> bool {
       .unwrap_or(false)
 }
 
-pub fn ensure_bind_host(host: &str, allow_remote: bool) -> Result<()> {
-  if !allow_remote && !is_loopback(host) {
-    anyhow::bail!("refusing to bind to non-loopback host '{host}' without --allow-remote (no client auth in v1)");
+pub fn ensure_bind_host(host: &str, insecure_allow_remote: bool) -> Result<()> {
+  if !insecure_allow_remote && !is_loopback(host) {
+    anyhow::bail!(
+      "refusing to bind to non-loopback host '{host}' without --insecure-allow-remote (no client auth in v1)"
+    );
   }
   Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn rejects_non_loopback_without_insecure_allow_remote() {
+    let err = ensure_bind_host("0.0.0.0", false).expect_err("remote bind should be rejected");
+    assert!(
+      err.to_string().contains("--insecure-allow-remote"),
+      "unexpected error: {err}"
+    );
+  }
+
+  #[test]
+  fn accepts_non_loopback_with_insecure_allow_remote() {
+    ensure_bind_host("0.0.0.0", true).expect("remote bind should be allowed");
+  }
+
+  #[test]
+  fn accepts_loopback_without_insecure_allow_remote() {
+    ensure_bind_host("127.0.0.1", false).expect("loopback bind should be allowed");
+  }
 }

@@ -1,10 +1,11 @@
 use crate::cli::config_cmd::RouteModeArg;
+use crate::cli::lan_bootstrap;
 use crate::config::Config;
 use anyhow::{Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 use tokio::sync::watch;
-use tokn_config::RouteMode;
+use tokn_config::{RouteMode, DEFAULT_HOST};
 
 #[derive(Args, Debug)]
 pub struct ServeArgs {
@@ -20,7 +21,7 @@ pub struct ServeArgs {
   pub proxy_route_mode: Option<RouteModeArg>,
   /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
   #[arg(long)]
-  pub allow_remote: bool,
+  pub insecure_allow_remote: bool,
   /// Skip outbound proxy for this run.
   #[arg(long)]
   pub no_proxy: bool,
@@ -35,7 +36,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
 
   let host = args.host.unwrap_or_else(|| cfg.server.host.clone());
   let port = args.port.unwrap_or(cfg.server.port);
-  let addr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
+  let addr = crate::server_runtime::resolve_bind_addr(&host, port, args.insecure_allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
@@ -49,18 +50,33 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let shared_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), shared_mode)?;
   let n = shared_state.pool.len();
   let app_state = crate::server_runtime::state_with_route_mode(&shared_state, server_mode, &cfg);
-  let app = tokn_router::api::router(app_state);
+  let mut app = tokn_router::api::router(app_state);
 
   tracing::info!(%addr, accounts = n, route_mode = route_mode_name(server_mode), "tokn-router listening");
 
   let result = if args.with_proxy {
-    let proxy_host = cfg.proxy_mode.host.clone();
+    let proxy_host = proxy_host_for_with_proxy(&host, &cfg.proxy_mode.host, args.insecure_allow_remote);
     let proxy_port = cfg.proxy_mode.port;
-    let proxy_addr = crate::server_runtime::resolve_bind_addr(&proxy_host, proxy_port, args.allow_remote)
+    let proxy_addr = crate::server_runtime::resolve_bind_addr(&proxy_host, proxy_port, args.insecure_allow_remote)
       .with_context(|| format!("parse bind addr {proxy_host}:{proxy_port}"))?;
     let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
     let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
     let ca_fingerprint = ca.fingerprint_sha256();
+    let bootstrap = if args.insecure_allow_remote {
+      Some(lan_bootstrap::BootstrapState::new(&ca, port, proxy_port)?)
+    } else {
+      None
+    };
+    let plain_http_handler = bootstrap.clone().map(lan_bootstrap::proxy_plain_http_handler);
+    if let Some(bootstrap) = bootstrap {
+      app = app.merge(lan_bootstrap::router(bootstrap));
+      println!("LAN bootstrap: {}", lan_bootstrap::display_bootstrap_url(&host, port));
+      println!(
+        "LAN proxy bootstrap: {}",
+        lan_bootstrap::display_bootstrap_url(&proxy_host, proxy_port)
+      );
+      println!("LAN bootstrap CA sha256: {ca_fingerprint}");
+    }
     println!("tokn-router proxy listening on http://{proxy_addr}");
     println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
     println!("Proxy route mode: {}", route_mode_name(proxy_mode));
@@ -72,6 +88,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
       intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
       passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
       outbound_proxy: cfg.proxy.to_http_options(),
+      plain_http_handler,
     };
     let shutdown = shutdown_channel();
     tokio::try_join!(
@@ -98,6 +115,14 @@ fn shared_route_mode(server_mode: RouteMode, proxy_mode: RouteMode, with_proxy: 
     server_mode
   } else {
     proxy_mode
+  }
+}
+
+fn proxy_host_for_with_proxy(server_host: &str, configured_proxy_host: &str, insecure_allow_remote: bool) -> String {
+  if insecure_allow_remote && configured_proxy_host == DEFAULT_HOST {
+    server_host.to_string()
+  } else {
+    configured_proxy_host.to_string()
   }
 }
 
@@ -145,5 +170,23 @@ mod tests {
       shared_route_mode(RouteMode::Passthrough, RouteMode::Passthrough, true),
       RouteMode::Passthrough
     );
+  }
+
+  #[test]
+  fn lan_mode_proxy_host_follows_server_host_when_proxy_host_is_default() {
+    assert_eq!(proxy_host_for_with_proxy("0.0.0.0", DEFAULT_HOST, true), "0.0.0.0");
+  }
+
+  #[test]
+  fn lan_mode_proxy_host_preserves_explicit_proxy_host() {
+    assert_eq!(
+      proxy_host_for_with_proxy("0.0.0.0", "192.168.1.22", true),
+      "192.168.1.22"
+    );
+  }
+
+  #[test]
+  fn local_mode_proxy_host_keeps_default_loopback() {
+    assert_eq!(proxy_host_for_with_proxy("0.0.0.0", DEFAULT_HOST, false), DEFAULT_HOST);
   }
 }

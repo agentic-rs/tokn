@@ -1,7 +1,9 @@
 use crate::cli::config_cmd::RouteModeArg;
+use crate::cli::lan_bootstrap;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -9,6 +11,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tokn_config::RouteMode;
+
+const DEFAULT_CLIENT_NO_PROXY: &[&str] = &["localhost", "127.0.0.1", "::1"];
 
 #[derive(Args, Debug)]
 pub struct ProxyArgs {
@@ -44,7 +48,7 @@ pub struct StartArgs {
   pub ca_dir: Option<PathBuf>,
   /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
   #[arg(long)]
-  pub allow_remote: bool,
+  pub insecure_allow_remote: bool,
   /// Skip outbound proxy for this run.
   #[arg(long)]
   pub no_proxy: bool,
@@ -125,14 +129,26 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
   let state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
   let n = state.pool.len();
-  let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.allow_remote)
+  let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.insecure_allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
 
   let ca = tokn_router::proxy::load_or_generate_ca(&ca_dir, false)?;
   let ca_fingerprint = ca.fingerprint_sha256();
+  let plain_http_handler = if args.insecure_allow_remote {
+    let bootstrap = lan_bootstrap::BootstrapState::proxy_only(&ca, port)?;
+    Some(lan_bootstrap::proxy_plain_http_handler(bootstrap))
+  } else {
+    None
+  };
   println!("tokn-router proxy listening on http://{addr}");
   println!("CA: {} (sha256:{ca_fingerprint})", ca.cert_path().display());
   println!("Trust this CA, then run: eval \"$(tokn-gateway proxy env)\"");
+  if args.insecure_allow_remote {
+    println!(
+      "LAN proxy bootstrap: {}",
+      lan_bootstrap::display_bootstrap_url(&host, port)
+    );
+  }
   println!("Route mode: {}", route_mode_name(route_mode));
   if let Some(url) = &cfg.proxy.url {
     println!("Outbound proxy: {url}");
@@ -150,6 +166,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
     intercept_hosts: cfg.proxy_mode.intercept_hosts.clone(),
     passthrough_hosts: cfg.proxy_mode.passthrough_hosts.clone(),
     outbound_proxy: cfg.proxy.to_http_options(),
+    plain_http_handler,
   };
 
   let result = tokn_router::proxy::serve(state, options, async {
@@ -241,11 +258,12 @@ fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
   let proxy_url = format!("http://{}:{}", cfg.proxy_mode.host, cfg.proxy_mode.port);
   let cert = ca.cert_path().display().to_string();
   let bundle = ca.ensure_bundle()?.display().to_string();
+  let no_proxy = client_no_proxy_value(&cfg.proxy.no_proxy);
   Ok(ProxyEnv {
     vars: vec![
       ("HTTPS_PROXY".into(), proxy_url.clone()),
       ("HTTP_PROXY".into(), proxy_url),
-      ("NO_PROXY".into(), "localhost,127.0.0.1,::1".into()),
+      ("NO_PROXY".into(), no_proxy),
       ("SSL_CERT_FILE".into(), bundle.clone()),
       ("NODE_EXTRA_CA_CERTS".into(), cert),
       ("CODEX_CA_CERTIFICATE".into(), bundle.clone()),
@@ -254,6 +272,19 @@ fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
       ("GIT_SSL_CAINFO".into(), bundle),
     ],
   })
+}
+
+fn client_no_proxy_value(configured: &[String]) -> String {
+  let mut seen = HashSet::new();
+  DEFAULT_CLIENT_NO_PROXY
+    .iter()
+    .copied()
+    .map(str::to_string)
+    .chain(configured.iter().map(|entry| entry.trim().to_string()))
+    .filter(|entry| !entry.is_empty())
+    .filter(|entry| seen.insert(entry.clone()))
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 #[derive(Debug)]
@@ -328,5 +359,36 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn client_no_proxy_includes_configured_entries() {
+    let configured = vec!["internal.local".into(), "10.0.0.0/8".into()];
+
+    assert_eq!(
+      client_no_proxy_value(&configured),
+      "localhost,127.0.0.1,::1,internal.local,10.0.0.0/8"
+    );
+  }
+
+  #[test]
+  fn client_no_proxy_deduplicates_defaults_and_skips_empty_entries() {
+    let configured = vec![
+      "localhost".into(),
+      " ".into(),
+      "::1".into(),
+      "internal.local".into(),
+      "internal.local".into(),
+    ];
+
+    assert_eq!(
+      client_no_proxy_value(&configured),
+      "localhost,127.0.0.1,::1,internal.local"
+    );
   }
 }
