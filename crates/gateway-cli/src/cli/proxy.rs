@@ -3,6 +3,7 @@ use crate::cli::lan_bootstrap;
 use crate::config::{Config, ProxyConfig};
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -10,6 +11,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tokn_config::RouteMode;
+
+const DEFAULT_CLIENT_NO_PROXY: &[&str] = &["localhost", "127.0.0.1", "::1"];
 
 #[derive(Args, Debug)]
 pub struct ProxyArgs {
@@ -255,11 +258,12 @@ fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
   let proxy_url = format!("http://{}:{}", cfg.proxy_mode.host, cfg.proxy_mode.port);
   let cert = ca.cert_path().display().to_string();
   let bundle = ca.ensure_bundle()?.display().to_string();
+  let no_proxy = client_no_proxy_value(&cfg.proxy.no_proxy);
   Ok(ProxyEnv {
     vars: vec![
       ("HTTPS_PROXY".into(), proxy_url.clone()),
       ("HTTP_PROXY".into(), proxy_url),
-      ("NO_PROXY".into(), "localhost,127.0.0.1,::1".into()),
+      ("NO_PROXY".into(), no_proxy),
       ("SSL_CERT_FILE".into(), bundle.clone()),
       ("NODE_EXTRA_CA_CERTS".into(), cert),
       ("CODEX_CA_CERTIFICATE".into(), bundle.clone()),
@@ -268,6 +272,19 @@ fn resolved_proxy_env(cfg_path: Option<&Path>) -> Result<ProxyEnv> {
       ("GIT_SSL_CAINFO".into(), bundle),
     ],
   })
+}
+
+fn client_no_proxy_value(configured: &[String]) -> String {
+  let mut seen = HashSet::new();
+  DEFAULT_CLIENT_NO_PROXY
+    .iter()
+    .copied()
+    .map(str::to_string)
+    .chain(configured.iter().map(|entry| entry.trim().to_string()))
+    .filter(|entry| !entry.is_empty())
+    .filter(|entry| seen.insert(entry.clone()))
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
 #[derive(Debug)]
@@ -342,5 +359,36 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
     RouteMode::Exact => "exact",
     RouteMode::Route => "route",
     RouteMode::Fuzzy => "fuzzy",
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn client_no_proxy_includes_configured_entries() {
+    let configured = vec!["internal.local".into(), "10.0.0.0/8".into()];
+
+    assert_eq!(
+      client_no_proxy_value(&configured),
+      "localhost,127.0.0.1,::1,internal.local,10.0.0.0/8"
+    );
+  }
+
+  #[test]
+  fn client_no_proxy_deduplicates_defaults_and_skips_empty_entries() {
+    let configured = vec![
+      "localhost".into(),
+      " ".into(),
+      "::1".into(),
+      "internal.local".into(),
+      "internal.local".into(),
+    ];
+
+    assert_eq!(
+      client_no_proxy_value(&configured),
+      "localhost,127.0.0.1,::1,internal.local"
+    );
   }
 }
