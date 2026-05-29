@@ -23,6 +23,7 @@ use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::stages::{BuildHeadersStage, BuiltHeaders, Extracted, Resolved};
 use async_trait::async_trait;
+use tokn_core::AgentId;
 use tokn_headers::inbound::build_template_vars;
 use tokn_headers::HeaderMap;
 
@@ -91,7 +92,7 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
     &self,
     _ctx: &PipelineCtx,
     extracted: &Extracted,
-    _resolved: &Resolved,
+    resolved: &Resolved,
   ) -> Result<BuiltHeaders, PipelineError> {
     let mut out = HeaderMap::new();
     for (name, value) in extracted.headers.iter() {
@@ -110,6 +111,12 @@ impl BuildHeadersStage for PassthroughBuildHeaders {
     Ok(BuiltHeaders {
       headers: out,
       vars: build_template_vars(&extracted.headers),
+      agent_id: resolved
+        .agent_id
+        .clone()
+        .or_else(|| extracted.agent_id.clone())
+        .or_else(|| AgentId::provider_default(resolved.provider_id.as_str()))
+        .unwrap_or_default(),
     })
   }
 }

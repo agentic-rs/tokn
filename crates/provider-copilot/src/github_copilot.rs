@@ -307,6 +307,7 @@ impl CopilotProvider {
         initiator: &initiator,
         inbound_headers: ctx.inbound_headers,
         vars: &ctx.vars,
+        agent_id: &ctx.agent_id,
       },
     )?;
     let url = format!("{COPILOT_API}{path}");
@@ -402,6 +403,7 @@ mod tests {
       initiator,
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
       vars: Box::leak(Box::new(TemplateVars::default())),
+      agent_id: Box::leak(Box::new(tokn_core::AgentId::CopilotCli)),
     }
   }
 
@@ -476,6 +478,7 @@ mod tests {
       initiator: "user",
       inbound_headers: &HeaderMap::new(),
       vars: &TemplateVars::default(),
+      agent_id: &tokn_core::AgentId::CopilotCli,
     };
     let err = p.patch_headers(&mut h, &ctx).unwrap_err();
     assert!(err.to_string().contains("copilot bearer token"), "{err}");

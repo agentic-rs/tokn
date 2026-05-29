@@ -152,6 +152,7 @@ pub struct ResolvedSummary {
 pub struct BuiltHeadersSummary {
   pub headers: HeaderMap,
   pub vars: TemplateVars,
+  pub agent_id: AgentId,
 }
 
 /// Cloneable summary of `tokn_requests::pipeline::stages::ConvertedRequest`.

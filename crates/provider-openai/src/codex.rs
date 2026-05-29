@@ -71,6 +71,7 @@ impl CodexProvider {
         initiator: ctx.initiator,
         inbound_headers: ctx.inbound_headers,
         vars: &ctx.vars,
+        agent_id: &ctx.agent_id,
       },
     )?;
     let body_bytes = ctx.request_body_bytes();
@@ -250,6 +251,7 @@ impl CodexProvider {
         initiator: "user",
         inbound_headers: &HeaderMap::new(),
         vars: &TemplateVars::default(),
+        agent_id: &tokn_core::AgentId::CodexCli,
       },
     )?;
     Ok(headers)
@@ -338,6 +340,7 @@ mod tests {
       initiator: "user",
       inbound_headers: Box::leak(Box::new(HeaderMap::new())),
       vars: Box::leak(Box::new(TemplateVars::default())),
+      agent_id: Box::leak(Box::new(tokn_core::AgentId::Opencode)),
     }
   }
 
@@ -370,12 +373,13 @@ mod tests {
     assert_eq!(h.get("content-type").unwrap().as_str(), "application/json");
     assert_eq!(h.get("OpenAI-Beta").unwrap().as_str(), "responses=experimental");
     assert_eq!(h.get("originator").unwrap().as_str(), "opencode");
-    assert_eq!(h.get("version").unwrap().as_str(), "0.125.0");
+    assert!(h.get("version").is_none());
     assert_eq!(
       h.get("user-agent").unwrap().as_str(),
       "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13"
     );
     assert_eq!(h.get("session_id").unwrap().as_str(), "sess-1");
+    assert_eq!(h.get("x-session-affinity").unwrap().as_str(), "sess-1");
     assert_eq!(h.get("chatgpt-account-id").unwrap().as_str(), "acc-77");
     assert!(h.get("x-api-key").is_none());
   }

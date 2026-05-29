@@ -9,9 +9,10 @@ use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(from = "SmolStr", into = "SmolStr")]
 pub enum AgentId {
+  #[default]
   Opencode,
   CodexCli,
   ClaudeCode,

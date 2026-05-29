@@ -266,6 +266,7 @@ impl std::fmt::Debug for Resolved {
 pub struct BuiltHeaders {
   pub headers: HeaderMap,
   pub vars: TemplateVars,
+  pub agent_id: AgentId,
 }
 
 /// Output of [`ConvertRequestStage`]: the upstream-shaped JSON body, the

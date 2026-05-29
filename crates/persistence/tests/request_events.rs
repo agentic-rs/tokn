@@ -89,6 +89,7 @@ fn built_headers() -> StageEvent {
   StageEvent::BuildHeaders(BuiltHeadersSummary {
     headers: h,
     vars: TemplateVars::default(),
+    agent_id: Default::default(),
   })
 }
 
