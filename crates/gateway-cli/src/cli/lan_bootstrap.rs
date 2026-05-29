@@ -349,6 +349,14 @@ fn render_sh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
     .as_ref()
     .map(|api_base| format!("export OPENAI_BASE_URL={}\n", sh_quote(&format!("{api_base}/v1"))))
     .unwrap_or_default();
+  let api_echo = urls
+    .api_base
+    .as_ref()
+    .map(|_| {
+      r#"echo "tokn-router API endpoint: $OPENAI_BASE_URL"
+"#
+    })
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 TOKN_ROUTER_CA_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan"
@@ -394,10 +402,13 @@ export SSL_CERT_FILE="$TOKN_ROUTER_CA_BUNDLE"
 export REQUESTS_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
 export CURL_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
 export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
+echo "tokn-router CA sha256: $TOKN_ROUTER_CA_SHA256"
+{api_echo}echo "tokn-router proxy endpoint: $HTTPS_PROXY"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
     api_export = api_export,
+    api_echo = api_echo,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -409,6 +420,14 @@ fn render_fish_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
     .api_base
     .as_ref()
     .map(|api_base| format!("set -gx OPENAI_BASE_URL {}\n", sh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
+  let api_echo = urls
+    .api_base
+    .as_ref()
+    .map(|_| {
+      r#"echo "tokn-router API endpoint: $OPENAI_BASE_URL"
+"#
+    })
     .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
@@ -456,10 +475,13 @@ set -gx SSL_CERT_FILE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx REQUESTS_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx CURL_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
+echo "tokn-router CA sha256: $ca_sha256"
+{api_echo}echo "tokn-router proxy endpoint: $HTTPS_PROXY"
 "#,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
     api_export = api_export,
+    api_echo = api_echo,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -471,6 +493,14 @@ fn render_pwsh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
     .api_base
     .as_ref()
     .map(|api_base| format!("$Env:OPENAI_BASE_URL = {}\n", pwsh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
+  let api_echo = urls
+    .api_base
+    .as_ref()
+    .map(|_| {
+      r#"Write-Host "tokn-router API endpoint: $Env:OPENAI_BASE_URL"
+"#
+    })
     .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
@@ -500,10 +530,13 @@ $Env:SSL_CERT_FILE = $caBundle
 $Env:REQUESTS_CA_BUNDLE = $caBundle
 $Env:CURL_CA_BUNDLE = $caBundle
 $Env:GIT_SSL_CAINFO = $caBundle
+Write-Host "tokn-router CA sha256: $caSha256"
+{api_echo}Write-Host "tokn-router proxy endpoint: $Env:HTTPS_PROXY"
 "#,
     ca_url = pwsh_quote(&urls.ca_cert_url),
     fingerprint_value = pwsh_quote(fingerprint),
     api_export = api_export,
+    api_echo = api_echo,
     proxy_url = pwsh_quote(&urls.proxy_base),
     no_proxy = pwsh_quote(&no_proxy),
   )
@@ -605,9 +638,16 @@ mod tests {
     assert!(script.contains("TOKN_ROUTER_CA_SHA256"));
     assert!(script.contains("CA fingerprint mismatch"));
     assert!(script.contains("NO_PROXY='localhost,127.0.0.1,::1,lan-router.local'"));
+    assert!(script.contains("tokn-router CA sha256: $TOKN_ROUTER_CA_SHA256"));
+    assert!(script.contains("tokn-router API endpoint: $OPENAI_BASE_URL"));
+    assert!(script.contains("tokn-router proxy endpoint: $HTTPS_PROXY"));
     assert!(
       script.find("CA fingerprint mismatch").unwrap() < script.find("export NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before trust exports"
+    );
+    assert!(
+      script.find("export GIT_SSL_CAINFO").unwrap() < script.find("tokn-router CA sha256").unwrap(),
+      "success output must happen after trust exports"
     );
   }
 
@@ -625,9 +665,16 @@ mod tests {
     assert!(fish.contains("CA fingerprint mismatch"));
     assert!(fish.contains("set -gx OPENAI_BASE_URL 'http://lan-router.local:4141/v1'"));
     assert!(fish.contains("set -gx HTTPS_PROXY 'http://lan-router.local:4142'"));
+    assert!(fish.contains("tokn-router CA sha256: $ca_sha256"));
+    assert!(fish.contains("tokn-router API endpoint: $OPENAI_BASE_URL"));
+    assert!(fish.contains("tokn-router proxy endpoint: $HTTPS_PROXY"));
     assert!(
       fish.find("CA fingerprint mismatch").unwrap() < fish.find("set -gx NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before fish trust exports"
+    );
+    assert!(
+      fish.find("set -gx GIT_SSL_CAINFO").unwrap() < fish.find("tokn-router CA sha256").unwrap(),
+      "fish success output must happen after trust exports"
     );
 
     let pwsh = render_env_script(Shell::Pwsh, &urls, "abc123");
@@ -635,9 +682,16 @@ mod tests {
     assert!(pwsh.contains("CA fingerprint mismatch"));
     assert!(pwsh.contains("$Env:OPENAI_BASE_URL = 'http://lan-router.local:4141/v1'"));
     assert!(pwsh.contains("$Env:HTTPS_PROXY = 'http://lan-router.local:4142'"));
+    assert!(pwsh.contains("tokn-router CA sha256: $caSha256"));
+    assert!(pwsh.contains("tokn-router API endpoint: $Env:OPENAI_BASE_URL"));
+    assert!(pwsh.contains("tokn-router proxy endpoint: $Env:HTTPS_PROXY"));
     assert!(
       pwsh.find("CA fingerprint mismatch").unwrap() < pwsh.find("$Env:NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before PowerShell trust exports"
+    );
+    assert!(
+      pwsh.find("$Env:GIT_SSL_CAINFO").unwrap() < pwsh.find("tokn-router CA sha256").unwrap(),
+      "PowerShell success output must happen after trust exports"
     );
   }
 
@@ -689,6 +743,8 @@ mod tests {
     })
     .unwrap();
     assert!(env.body.contains("export HTTPS_PROXY='http://lan-router.local:4142'"));
+    assert!(env.body.contains("tokn-router CA sha256: $TOKN_ROUTER_CA_SHA256"));
+    assert!(env.body.contains("tokn-router proxy endpoint: $HTTPS_PROXY"));
     assert!(!env.body.contains("OPENAI_BASE_URL"));
   }
 
