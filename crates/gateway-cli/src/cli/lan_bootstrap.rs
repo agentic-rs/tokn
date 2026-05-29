@@ -228,6 +228,7 @@ struct BootstrapUrls {
   proxy_base: String,
   ca_cert_url: String,
   host_for_no_proxy: String,
+  host_dir_name: String,
 }
 
 fn urls_from_headers(
@@ -271,6 +272,7 @@ fn urls_from_host(raw: &str, api_port: Option<u16>, proxy_port: u16, bootstrap_p
     bootstrap_base,
     proxy_base: format!("http://{url_host}:{proxy_port}"),
     host_for_no_proxy: no_proxy_host(host),
+    host_dir_name: host_dir_name(host),
   })
 }
 
@@ -330,6 +332,20 @@ fn no_proxy_host(host: &str) -> String {
   host.trim_matches(['[', ']']).to_string()
 }
 
+fn host_dir_name(host: &str) -> String {
+  let host = no_proxy_host(host);
+  host
+    .chars()
+    .map(|c| {
+      if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+        c
+      } else {
+        '_'
+      }
+    })
+    .collect()
+}
+
 fn render_env_script(shell: Shell, urls: &BootstrapUrls, fingerprint: &str) -> String {
   match shell {
     Shell::Sh | Shell::Bash | Shell::Zsh => render_sh_env(urls, fingerprint),
@@ -357,11 +373,18 @@ fn render_sh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
 "#
     })
     .unwrap_or_default();
+  let bootstrap_api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("export OPENAI_BASE_URL={}\n", sh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
-TOKN_ROUTER_CA_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan"
+TOKN_ROUTER_LAN_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan/{host_dir}"
+TOKN_ROUTER_CA_DIR="$TOKN_ROUTER_LAN_DIR/ca"
 TOKN_ROUTER_CA_CERT="$TOKN_ROUTER_CA_DIR/ca.crt"
 TOKN_ROUTER_CA_BUNDLE="$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
+TOKN_ROUTER_ENV="$TOKN_ROUTER_LAN_DIR/env.sh"
 mkdir -p "$TOKN_ROUTER_CA_DIR"
 curl -fsSL {ca_url} -o "$TOKN_ROUTER_CA_CERT"
 TOKN_ROUTER_CA_SHA256=""
@@ -402,13 +425,31 @@ export SSL_CERT_FILE="$TOKN_ROUTER_CA_BUNDLE"
 export REQUESTS_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
 export CURL_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
 export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
+cat > "$TOKN_ROUTER_ENV" <<'TOKN_ROUTER_ENV_EOF'
+TOKN_ROUTER_LAN_DIR="${{XDG_CONFIG_HOME:-$HOME/.config}}/tokn-router/lan/{host_dir}"
+TOKN_ROUTER_CA_DIR="$TOKN_ROUTER_LAN_DIR/ca"
+TOKN_ROUTER_CA_CERT="$TOKN_ROUTER_CA_DIR/ca.crt"
+TOKN_ROUTER_CA_BUNDLE="$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
+{bootstrap_api_export}export HTTP_PROXY={proxy_url}
+export HTTPS_PROXY={proxy_url}
+export NO_PROXY={no_proxy}
+export NODE_EXTRA_CA_CERTS="$TOKN_ROUTER_CA_CERT"
+export SSL_CERT_FILE="$TOKN_ROUTER_CA_BUNDLE"
+export REQUESTS_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
+export CURL_CA_BUNDLE="$TOKN_ROUTER_CA_BUNDLE"
+export GIT_SSL_CAINFO="$TOKN_ROUTER_CA_BUNDLE"
+TOKN_ROUTER_ENV_EOF
 echo "tokn-router CA sha256: $TOKN_ROUTER_CA_SHA256"
 {api_echo}echo "tokn-router proxy endpoint: $HTTPS_PROXY"
+echo "tokn-router env file: $TOKN_ROUTER_ENV"
+echo "tokn-router next shell: . $TOKN_ROUTER_ENV"
 "#,
+    host_dir = urls.host_dir_name,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
     api_export = api_export,
     api_echo = api_echo,
+    bootstrap_api_export = bootstrap_api_export,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -429,12 +470,19 @@ fn render_fish_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
 "#
     })
     .unwrap_or_default();
+  let bootstrap_api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("set -gx OPENAI_BASE_URL {}\n", sh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 set -q XDG_CONFIG_HOME; or set XDG_CONFIG_HOME "$HOME/.config"
-set -gx TOKN_ROUTER_CA_DIR "$XDG_CONFIG_HOME/tokn-router/lan"
+set -gx TOKN_ROUTER_LAN_DIR "$XDG_CONFIG_HOME/tokn-router/lan/{host_dir}"
+set -gx TOKN_ROUTER_CA_DIR "$TOKN_ROUTER_LAN_DIR/ca"
 set -gx TOKN_ROUTER_CA_CERT "$TOKN_ROUTER_CA_DIR/ca.crt"
 set -gx TOKN_ROUTER_CA_BUNDLE "$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
+set -gx TOKN_ROUTER_ENV "$TOKN_ROUTER_LAN_DIR/env.fish"
 mkdir -p "$TOKN_ROUTER_CA_DIR"
 curl -fsSL {ca_url} -o "$TOKN_ROUTER_CA_CERT"
 set -l ca_sha256
@@ -475,13 +523,32 @@ set -gx SSL_CERT_FILE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx REQUESTS_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx CURL_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
 set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
+cat > "$TOKN_ROUTER_ENV" <<'TOKN_ROUTER_ENV_EOF'
+set -q XDG_CONFIG_HOME; or set XDG_CONFIG_HOME "$HOME/.config"
+set -gx TOKN_ROUTER_LAN_DIR "$XDG_CONFIG_HOME/tokn-router/lan/{host_dir}"
+set -gx TOKN_ROUTER_CA_DIR "$TOKN_ROUTER_LAN_DIR/ca"
+set -gx TOKN_ROUTER_CA_CERT "$TOKN_ROUTER_CA_DIR/ca.crt"
+set -gx TOKN_ROUTER_CA_BUNDLE "$TOKN_ROUTER_CA_DIR/ca-bundle.crt"
+{bootstrap_api_export}set -gx HTTP_PROXY {proxy_url}
+set -gx HTTPS_PROXY {proxy_url}
+set -gx NO_PROXY {no_proxy}
+set -gx NODE_EXTRA_CA_CERTS "$TOKN_ROUTER_CA_CERT"
+set -gx SSL_CERT_FILE "$TOKN_ROUTER_CA_BUNDLE"
+set -gx REQUESTS_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
+set -gx CURL_CA_BUNDLE "$TOKN_ROUTER_CA_BUNDLE"
+set -gx GIT_SSL_CAINFO "$TOKN_ROUTER_CA_BUNDLE"
+TOKN_ROUTER_ENV_EOF
 echo "tokn-router CA sha256: $ca_sha256"
 {api_echo}echo "tokn-router proxy endpoint: $HTTPS_PROXY"
+echo "tokn-router env file: $TOKN_ROUTER_ENV"
+echo "tokn-router next shell: source $TOKN_ROUTER_ENV"
 "#,
+    host_dir = urls.host_dir_name,
     ca_url = sh_quote(&urls.ca_cert_url),
     fingerprint_value = sh_quote(fingerprint),
     api_export = api_export,
     api_echo = api_echo,
+    bootstrap_api_export = bootstrap_api_export,
     proxy_url = sh_quote(&urls.proxy_base),
     no_proxy = sh_quote(&no_proxy),
   )
@@ -502,12 +569,19 @@ fn render_pwsh_env(urls: &BootstrapUrls, fingerprint: &str) -> String {
 "#
     })
     .unwrap_or_default();
+  let bootstrap_api_export = urls
+    .api_base
+    .as_ref()
+    .map(|api_base| format!("$Env:OPENAI_BASE_URL = {}\n", pwsh_quote(&format!("{api_base}/v1"))))
+    .unwrap_or_default();
   format!(
     r#"# Expected tokn-router CA fingerprint: {fingerprint}
 $configHome = if ($Env:XDG_CONFIG_HOME) {{ $Env:XDG_CONFIG_HOME }} else {{ Join-Path $HOME ".config" }}
-$caDir = Join-Path $configHome "tokn-router/lan"
+$lanDir = Join-Path $configHome {lan_path}
+$caDir = Join-Path $lanDir "ca"
 $caCert = Join-Path $caDir "ca.crt"
 $caBundle = Join-Path $caDir "ca-bundle.crt"
+$envFile = Join-Path $lanDir "env.ps1"
 New-Item -ItemType Directory -Force -Path $caDir | Out-Null
 Invoke-WebRequest -UseBasicParsing -Uri {ca_url} -OutFile $caCert
 $caSha256 = (Get-FileHash -Algorithm SHA256 -Path $caCert).Hash.ToLowerInvariant()
@@ -530,13 +604,32 @@ $Env:SSL_CERT_FILE = $caBundle
 $Env:REQUESTS_CA_BUNDLE = $caBundle
 $Env:CURL_CA_BUNDLE = $caBundle
 $Env:GIT_SSL_CAINFO = $caBundle
+@'
+$configHome = if ($Env:XDG_CONFIG_HOME) {{ $Env:XDG_CONFIG_HOME }} else {{ Join-Path $HOME ".config" }}
+$lanDir = Join-Path $configHome {lan_path}
+$caDir = Join-Path $lanDir "ca"
+$caCert = Join-Path $caDir "ca.crt"
+$caBundle = Join-Path $caDir "ca-bundle.crt"
+{bootstrap_api_export}$Env:HTTP_PROXY = {proxy_url}
+$Env:HTTPS_PROXY = {proxy_url}
+$Env:NO_PROXY = {no_proxy}
+$Env:NODE_EXTRA_CA_CERTS = $caCert
+$Env:SSL_CERT_FILE = $caBundle
+$Env:REQUESTS_CA_BUNDLE = $caBundle
+$Env:CURL_CA_BUNDLE = $caBundle
+$Env:GIT_SSL_CAINFO = $caBundle
+'@ | Set-Content -Path $envFile
 Write-Host "tokn-router CA sha256: $caSha256"
 {api_echo}Write-Host "tokn-router proxy endpoint: $Env:HTTPS_PROXY"
+Write-Host "tokn-router env file: $envFile"
+Write-Host "tokn-router next shell: . $envFile"
 "#,
+    lan_path = pwsh_quote(&format!("tokn-router/lan/{}", urls.host_dir_name)),
     ca_url = pwsh_quote(&urls.ca_cert_url),
     fingerprint_value = pwsh_quote(fingerprint),
     api_export = api_export,
     api_echo = api_echo,
+    bootstrap_api_export = bootstrap_api_export,
     proxy_url = pwsh_quote(&urls.proxy_base),
     no_proxy = pwsh_quote(&no_proxy),
   )
@@ -604,6 +697,7 @@ mod tests {
     assert_eq!(urls.api_base.as_deref(), Some("http://[fd00::10]:4141"));
     assert_eq!(urls.proxy_base, "http://[fd00::10]:4142");
     assert_eq!(urls.host_for_no_proxy, "fd00::10");
+    assert_eq!(urls.host_dir_name, "fd00__10");
   }
 
   #[test]
@@ -638,9 +732,16 @@ mod tests {
     assert!(script.contains("TOKN_ROUTER_CA_SHA256"));
     assert!(script.contains("CA fingerprint mismatch"));
     assert!(script.contains("NO_PROXY='localhost,127.0.0.1,::1,lan-router.local'"));
+    assert!(
+      script.contains("TOKN_ROUTER_LAN_DIR=\"${XDG_CONFIG_HOME:-$HOME/.config}/tokn-router/lan/lan-router.local\"")
+    );
+    assert!(script.contains("TOKN_ROUTER_CA_DIR=\"$TOKN_ROUTER_LAN_DIR/ca\""));
+    assert!(script.contains("TOKN_ROUTER_ENV=\"$TOKN_ROUTER_LAN_DIR/env.sh\""));
     assert!(script.contains("tokn-router CA sha256: $TOKN_ROUTER_CA_SHA256"));
     assert!(script.contains("tokn-router API endpoint: $OPENAI_BASE_URL"));
     assert!(script.contains("tokn-router proxy endpoint: $HTTPS_PROXY"));
+    assert!(script.contains("tokn-router env file: $TOKN_ROUTER_ENV"));
+    assert!(script.contains("tokn-router next shell: . $TOKN_ROUTER_ENV"));
     assert!(
       script.find("CA fingerprint mismatch").unwrap() < script.find("export NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before trust exports"
@@ -659,15 +760,21 @@ mod tests {
       proxy_base: "http://lan-router.local:4142".into(),
       ca_cert_url: "http://lan-router.local:4141/-/lan/ca.crt".into(),
       host_for_no_proxy: "lan-router.local".into(),
+      host_dir_name: "lan-router.local".into(),
     };
     let fish = render_env_script(Shell::Fish, &urls, "abc123");
     assert!(fish.contains("set -l ca_sha256"));
     assert!(fish.contains("CA fingerprint mismatch"));
     assert!(fish.contains("set -gx OPENAI_BASE_URL 'http://lan-router.local:4141/v1'"));
     assert!(fish.contains("set -gx HTTPS_PROXY 'http://lan-router.local:4142'"));
+    assert!(fish.contains("set -gx TOKN_ROUTER_LAN_DIR \"$XDG_CONFIG_HOME/tokn-router/lan/lan-router.local\""));
+    assert!(fish.contains("set -gx TOKN_ROUTER_CA_DIR \"$TOKN_ROUTER_LAN_DIR/ca\""));
+    assert!(fish.contains("set -gx TOKN_ROUTER_ENV \"$TOKN_ROUTER_LAN_DIR/env.fish\""));
     assert!(fish.contains("tokn-router CA sha256: $ca_sha256"));
     assert!(fish.contains("tokn-router API endpoint: $OPENAI_BASE_URL"));
     assert!(fish.contains("tokn-router proxy endpoint: $HTTPS_PROXY"));
+    assert!(fish.contains("tokn-router env file: $TOKN_ROUTER_ENV"));
+    assert!(fish.contains("tokn-router next shell: source $TOKN_ROUTER_ENV"));
     assert!(
       fish.find("CA fingerprint mismatch").unwrap() < fish.find("set -gx NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before fish trust exports"
@@ -682,9 +789,14 @@ mod tests {
     assert!(pwsh.contains("CA fingerprint mismatch"));
     assert!(pwsh.contains("$Env:OPENAI_BASE_URL = 'http://lan-router.local:4141/v1'"));
     assert!(pwsh.contains("$Env:HTTPS_PROXY = 'http://lan-router.local:4142'"));
+    assert!(pwsh.contains("$lanDir = Join-Path $configHome 'tokn-router/lan/lan-router.local'"));
+    assert!(pwsh.contains("$caDir = Join-Path $lanDir \"ca\""));
+    assert!(pwsh.contains("$envFile = Join-Path $lanDir \"env.ps1\""));
     assert!(pwsh.contains("tokn-router CA sha256: $caSha256"));
     assert!(pwsh.contains("tokn-router API endpoint: $Env:OPENAI_BASE_URL"));
     assert!(pwsh.contains("tokn-router proxy endpoint: $Env:HTTPS_PROXY"));
+    assert!(pwsh.contains("tokn-router env file: $envFile"));
+    assert!(pwsh.contains("tokn-router next shell: . $envFile"));
     assert!(
       pwsh.find("CA fingerprint mismatch").unwrap() < pwsh.find("$Env:NODE_EXTRA_CA_CERTS").unwrap(),
       "fingerprint verification must happen before PowerShell trust exports"
