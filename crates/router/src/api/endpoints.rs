@@ -1,5 +1,5 @@
 use super::error::ApiError;
-use super::AppState;
+use super::{AppState, RequestPolicyRuntime};
 use crate::pipeline::{request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::Arc;
 use tokn_accounts::routing::{route_mode_as_str, ResolveError};
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::request_event::{RecordEvent, RequestEndpoint, RequestEvent, RequestEventPayload};
@@ -17,8 +18,9 @@ const DEFAULT_MESSAGES_MAX_TOKENS: u64 = 32_000;
 
 async fn handle(
   state: AppState,
+  policy: Arc<RequestPolicyRuntime>,
   parser: &dyn RequestParser,
-  inbound: HeaderMap,
+  mut inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let hx = request_header_extract(&inbound);
@@ -36,7 +38,16 @@ async fn handle(
   // lifecycle emission. The pipeline emits its own StageEvent/RecordEvent
   // stream which RequestEventHandler consumes; emitting a second bootstrap
   // event here would duplicate the request row before the pipeline begins.
-  let mode = state.route.resolve_mode(hx.route_mode_hint.as_deref()).ok();
+  inbound.remove("x-route-mode");
+  inbound.remove("x-tokn-router-agent-id");
+  if let Some(agent_id) = &policy.agent_id {
+    inbound.insert(
+      axum::http::HeaderName::from_static("x-tokn-router-agent-id"),
+      axum::http::HeaderValue::from_str(agent_id.as_str()).unwrap(),
+    );
+  }
+
+  let mode = policy.route.resolve_mode(None).ok();
 
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: SmolStr::new(&hx.request_id),
@@ -65,9 +76,9 @@ async fn handle(
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
   let pipeline = if matches!(mode, Some(tokn_config::RouteMode::Passthrough)) {
-    &state.passthrough_pipeline
+    &policy.passthrough_pipeline
   } else {
-    &state.request_pipeline
+    &policy.request_pipeline
   };
   match pipeline.run(raw).await {
     Ok(converted) => Ok(super::response::converted_to_axum(converted)),
@@ -131,16 +142,6 @@ fn apply_endpoint_compat_defaults(
   Ok(())
 }
 
-/// Inject route mode from path prefix into headers, overriding any existing value.
-fn inject_mode(mode: &str, headers: &mut HeaderMap) -> Result<(), ApiError> {
-  super::validate_path_mode(mode)?;
-  headers.insert(
-    axum::http::HeaderName::from_static("x-route-mode"),
-    axum::http::HeaderValue::from_str(mode).unwrap(),
-  );
-  Ok(())
-}
-
 #[instrument(
   name = "chat_completions",
   skip_all,
@@ -156,7 +157,8 @@ pub async fn chat_completions(
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
-  handle(state, &ChatParser, inbound, body).await
+  let policy = state.default_policy.clone();
+  handle(state, policy, &ChatParser, inbound, body).await
 }
 
 #[instrument(
@@ -170,7 +172,8 @@ pub async fn chat_completions(
   ),
 )]
 pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
-  handle(state, &ResponsesParser, inbound, body).await
+  let policy = state.default_policy.clone();
+  handle(state, policy, &ResponsesParser, inbound, body).await
 }
 
 #[instrument(
@@ -184,39 +187,48 @@ pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: 
   ),
 )]
 pub async fn messages(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
-  handle(state, &MessagesParser, inbound, body).await
+  let policy = state.default_policy.clone();
+  handle(state, policy, &MessagesParser, inbound, body).await
 }
 
-// --- Mode-prefixed variants ---
+// --- Profile-prefixed variants ---
 
-pub async fn chat_completions_with_mode(
+pub async fn chat_completions_with_profile(
   State(state): State<AppState>,
-  Path(mode): Path<String>,
-  mut inbound: HeaderMap,
+  Path(profile): Path<String>,
+  inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
-  inject_mode(&mode, &mut inbound)?;
-  handle(state, &ChatParser, inbound, body).await
+  let policy = profile_policy(&state, &profile)?;
+  handle(state, policy, &ChatParser, inbound, body).await
 }
 
-pub async fn responses_with_mode(
+pub async fn responses_with_profile(
   State(state): State<AppState>,
-  Path(mode): Path<String>,
-  mut inbound: HeaderMap,
+  Path(profile): Path<String>,
+  inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
-  inject_mode(&mode, &mut inbound)?;
-  handle(state, &ResponsesParser, inbound, body).await
+  let policy = profile_policy(&state, &profile)?;
+  handle(state, policy, &ResponsesParser, inbound, body).await
 }
 
-pub async fn messages_with_mode(
+pub async fn messages_with_profile(
   State(state): State<AppState>,
-  Path(mode): Path<String>,
-  mut inbound: HeaderMap,
+  Path(profile): Path<String>,
+  inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
-  inject_mode(&mode, &mut inbound)?;
-  handle(state, &MessagesParser, inbound, body).await
+  let policy = profile_policy(&state, &profile)?;
+  handle(state, policy, &MessagesParser, inbound, body).await
+}
+
+fn profile_policy(state: &AppState, profile: &str) -> Result<Arc<RequestPolicyRuntime>, ApiError> {
+  state
+    .profiles
+    .get(profile)
+    .cloned()
+    .ok_or_else(|| ApiError::bad_request(format!("unknown profile '{profile}'")))
 }
 
 #[cfg(test)]

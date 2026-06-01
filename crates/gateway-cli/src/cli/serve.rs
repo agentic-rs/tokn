@@ -41,7 +41,11 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
-  let server_mode = cfg.server.route_mode;
+  let server_mode = if cfg.defaults.mode == RouteMode::Route && cfg.server.route_mode != RouteMode::Route {
+    cfg.server.route_mode
+  } else {
+    cfg.defaults.mode
+  };
   let proxy_mode = args
     .proxy_route_mode
     .map(Into::into)

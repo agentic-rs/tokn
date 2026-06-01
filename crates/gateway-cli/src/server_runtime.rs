@@ -93,6 +93,7 @@ pub fn build_state_for_route_mode(
 ) -> Result<tokn_router::api::AppState> {
   let mut cfg = cfg.clone();
   cfg.server.route_mode = route_mode;
+  cfg.defaults.mode = route_mode;
   build_state(&cfg, accounts, events)
 }
 

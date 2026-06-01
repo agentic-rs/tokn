@@ -1,7 +1,6 @@
 //! Integration test for the passthrough pipeline served by `router(state)`.
 //!
-//! Drives a real `POST /v1/chat/completions` with
-//! `x-route-mode: passthrough` through the axum router →
+//! Drives a real `POST /passthrough/v1/chat/completions` through the axum router →
 //! `endpoints::handle` (which dispatches to `state.passthrough_pipeline`)
 //! → mock upstream TCP server. Asserts:
 //!
@@ -14,11 +13,6 @@
 //! * The downstream response body matches upstream exactly for the
 //!   non-SSE buffered branch.
 //!
-//! NOTE: the `/{mode}/v1/...` path-prefixed routes in `api/mod.rs`
-//! use `{mode}` syntax which is not parsed as a path param by
-//! matchit 0.7 (axum 0.7's router). We therefore drive the mode via
-//! the `x-route-mode` header which goes through the same `handle()`.
-
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
@@ -28,7 +22,7 @@ use tokn_core::account::{AccountConfig, AccountTier, AuthType};
 use tokn_core::event::EventBus;
 use tokn_router::api::build_state;
 use tokn_router::api::router;
-use tokn_router::config::{Account as AccountCfg, Config};
+use tokn_router::config::{Account as AccountCfg, Config, ProfileConfig, RouteMode};
 use tokn_router::util::secret::Secret;
 use tower::ServiceExt;
 
@@ -95,7 +89,14 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
   });
 
   // Build router state with our mock upstream as the account base_url.
-  let cfg = Config::default();
+  let mut cfg = Config::default();
+  cfg.profiles.insert(
+    "passthrough".into(),
+    ProfileConfig {
+      mode: Some(RouteMode::Passthrough),
+      ..Default::default()
+    },
+  );
   let acct_router = test_account(upstream_url.clone());
   // Convert router-local AccountCfg → tokn_core::AccountConfig via TOML
   // round-trip. `build_state` reads `AccountConfig`.
@@ -113,11 +114,10 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
 
   let req = Request::builder()
     .method(Method::POST)
-    .uri("/v1/chat/completions")
+    .uri("/passthrough/v1/chat/completions")
     .header("content-type", "application/json")
     .header("authorization", "Bearer client-side-secret-must-not-leak")
     .header("x-tokn-router-local-addr", "127.0.0.1:9999")
-    .header("x-route-mode", "passthrough")
     .header("x-behave-as", "codex")
     .body(Body::from(inbound_body.clone()))
     .unwrap();
@@ -200,7 +200,14 @@ async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
     stream.flush().await.unwrap();
   });
 
-  let cfg = Config::default();
+  let mut cfg = Config::default();
+  cfg.profiles.insert(
+    "passthrough".into(),
+    ProfileConfig {
+      mode: Some(RouteMode::Passthrough),
+      ..Default::default()
+    },
+  );
   let acct_router = test_account(upstream_url.clone());
   let acct_core: AccountConfig = {
     let s = toml::to_string(&acct_router).unwrap();
@@ -219,10 +226,9 @@ async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
     Bytes::from_static(br#"{"model":"glm-4.6","messages":[{"role":"user","content":"hi"}],"stream":true}"#);
   let req = Request::builder()
     .method(Method::POST)
-    .uri("/v1/chat/completions")
+    .uri("/passthrough/v1/chat/completions")
     .header("content-type", "application/json")
     .header("accept", "text/event-stream")
-    .header("x-route-mode", "passthrough")
     .body(Body::from(inbound_body.clone()))
     .unwrap();
 
