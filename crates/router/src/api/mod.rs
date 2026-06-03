@@ -742,6 +742,135 @@ mod tests {
   }
 
   #[test]
+  fn profile_without_providers_inherits_unrestricted_defaults() {
+    let mut cfg = Config::default();
+    cfg.profiles.insert("work".into(), ProfileConfig::default());
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+
+    let work = state.profiles.get("work").expect("work profile");
+    assert!(state.default_policy.providers.is_none());
+    assert!(work.providers.is_none());
+  }
+
+  #[test]
+  fn profile_providers_replace_default_providers() {
+    let mut cfg = Config::default();
+    cfg.defaults.providers = Some(vec!["openai".into()]);
+    cfg.profiles.insert(
+      "zai-only".into(),
+      ProfileConfig {
+        providers: Some(vec!["zai-coding-plan".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+
+    let providers = state
+      .profiles
+      .get("zai-only")
+      .and_then(|profile| profile.providers.as_deref())
+      .expect("profile should have provider filter");
+    assert!(providers.contains("zai-coding-plan"));
+    assert!(!providers.contains("openai"));
+  }
+
+  #[test]
+  fn profile_model_families_replace_default_families() {
+    let mut cfg = Config::default();
+    cfg.defaults.model_families = vec![ModelFamily {
+      name: "glm-family".into(),
+      members: vec!["glm-4.7".into()],
+    }];
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        mode: Some(RouteMode::Fuzzy),
+        model_families: Some(vec![ModelFamily {
+          name: "glm-family".into(),
+          members: vec!["glm-5.1".into()],
+        }]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let work = state.profiles.get("work").expect("work profile");
+
+    assert_eq!(work.model_families.len(), 1);
+    assert_eq!(work.model_families[0].members, vec!["glm-5.1".to_string()]);
+    let resolved = work.route.resolve("glm-family", None).unwrap();
+    assert_eq!(
+      resolved.selector,
+      tokn_accounts::routing::RouteSelector::Fuzzy {
+        candidates: vec!["glm-5.1".into()]
+      }
+    );
+  }
+
+  #[test]
+  fn build_state_rejects_unknown_policy_provider_filters() {
+    let mut cfg = Config::default();
+    cfg.defaults.providers = Some(vec!["made-up-provider".into()]);
+    let err = match build_state(&cfg, &[], Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("unknown default provider must fail"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("defaults.providers:made-up-provider"));
+
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        providers: Some(vec!["made-up-provider".into()]),
+        ..Default::default()
+      },
+    );
+    let err = match build_state(&cfg, &[], Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("unknown profile provider must fail"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("profiles.work.providers:made-up-provider"));
+  }
+
+  #[tokio::test]
+  async fn unknown_profile_path_returns_bad_request() {
+    let cfg = Config::default();
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("POST")
+      .uri("/missing/v1/responses")
+      .header("content-type", "application/json")
+      .body(Body::from(Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#)))
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+  }
+
+  #[tokio::test]
+  async fn old_mode_path_is_not_magic_without_matching_profile() {
+    let cfg = Config::default();
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("POST")
+      .uri("/fuzzy/v1/responses")
+      .header("content-type", "application/json")
+      .body(Body::from(Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#)))
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+  }
+
+  #[test]
   fn is_router_owned_header_does_not_include_request_session_project_id_headers() {
     use axum::http::HeaderName;
 

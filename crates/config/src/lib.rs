@@ -698,4 +698,32 @@ mod tests {
     assert_eq!(work.providers.as_deref(), Some(&["codex".to_string()][..]));
     assert_eq!(work.model_families.as_ref().unwrap()[0].name, "glm");
   }
+
+  #[test]
+  fn profiles_reject_invalid_names() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [profiles."bad/name"]
+        mode = "route"
+      "#,
+    )
+    .expect("config should deserialize before validation");
+    let err = cfg
+      .validate()
+      .expect_err("profile names containing slash must fail validation");
+    assert!(err.to_string().contains("profile name"));
+  }
+
+  #[test]
+  fn provider_filters_reject_empty_ids() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [defaults]
+        providers = ["openai", " "]
+      "#,
+    )
+    .expect("config should deserialize before validation");
+    let err = cfg.validate().expect_err("empty provider ids must fail validation");
+    assert!(err.to_string().contains("provider ids must be non-empty"));
+  }
 }

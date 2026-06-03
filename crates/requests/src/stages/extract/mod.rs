@@ -189,6 +189,14 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn internal_router_agent_id_is_extracted() {
+    let body = serde_json::json!({"model": "m"});
+    let headers = header_map(&[("x-tokn-router-agent-id", "  codex-cli  ")]);
+    let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
+    assert_eq!(ex.agent_id, Some(AgentId::CodexCli));
+  }
+
+  #[tokio::test]
   async fn stream_from_body_takes_precedence() {
     let body = serde_json::json!({"model": "m", "stream": true});
     let headers = header_map(&[("accept", "application/json")]);
