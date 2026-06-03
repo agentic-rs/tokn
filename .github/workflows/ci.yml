@@ -60,6 +60,8 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      MODELS_DEV_SNAPSHOT: vendor/models.dev.json
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +88,8 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      MODELS_DEV_SNAPSHOT: vendor/models.dev.json
 
     steps:
       - name: Checkout
