@@ -71,6 +71,7 @@ pub struct RequestPolicyRuntime {
   pub route: Arc<RouteResolver>,
   pub model_families: Vec<ModelFamily>,
   pub providers: Option<Arc<BTreeSet<String>>>,
+  pub accounts: Option<Arc<BTreeSet<String>>>,
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
   pub passthrough_pipeline: Arc<tokn_requests::Pipeline>,
 }
@@ -228,6 +229,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let provider_registry = Arc::new(ProviderRegistry::builtin());
   let _ = validate_proxy_provider_modes(cfg, provider_registry.as_ref());
   validate_policy_providers(cfg, provider_registry.as_ref())?;
+  validate_policy_accounts(cfg, accounts)?;
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let default_mode = effective_default_mode(cfg);
   let pool = if accounts.is_empty() && matches!(default_mode, RouteMode::Passthrough) {
@@ -245,6 +247,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     default_mode,
     cfg.defaults.agent_id.clone(),
     cfg.defaults.providers.clone(),
+    cfg.defaults.accounts.clone(),
     default_families,
     PolicyBuildDeps {
       pool: pool.clone(),
@@ -316,11 +319,17 @@ fn build_profile_runtime(
       .as_ref()
       .map(|providers| providers.iter().cloned().collect())
   });
+  let accounts = profile.accounts.clone().or_else(|| {
+    default_policy
+      .accounts
+      .as_ref()
+      .map(|accounts| accounts.iter().cloned().collect())
+  });
   let families = profile
     .model_families
     .clone()
     .unwrap_or_else(|| default_policy.model_families.clone());
-  build_policy_runtime(name, mode, agent_id, providers, families, deps)
+  build_policy_runtime(name, mode, agent_id, providers, accounts, families, deps)
 }
 
 fn build_policy_runtime(
@@ -328,22 +337,26 @@ fn build_policy_runtime(
   mode: RouteMode,
   agent_id: Option<AgentId>,
   providers: Option<Vec<String>>,
+  accounts: Option<Vec<String>>,
   families: Vec<ModelFamily>,
   deps: PolicyBuildDeps,
 ) -> Arc<RequestPolicyRuntime> {
   let route = Arc::new(RouteResolver::new(mode, &families));
   let providers = providers.map(|ids| Arc::new(ids.into_iter().collect::<BTreeSet<_>>()));
+  let accounts = accounts.map(|ids| Arc::new(ids.into_iter().collect::<BTreeSet<_>>()));
   Arc::new(RequestPolicyRuntime {
     mode,
     agent_id,
     route: route.clone(),
     model_families: families,
     providers: providers.clone(),
+    accounts: accounts.clone(),
     request_pipeline: build_request_pipeline_with_providers(
       format!("router-{name}"),
       deps.pool.clone(),
       route.clone(),
       providers.clone(),
+      accounts.clone(),
       deps.http.clone(),
       deps.events.clone(),
     ),
@@ -352,6 +365,7 @@ fn build_policy_runtime(
       deps.pool,
       route,
       providers,
+      accounts,
       deps.http,
       deps.events,
     ),
@@ -410,6 +424,42 @@ fn validate_policy_providers(cfg: &Config, provider_registry: &ProviderRegistry)
   )
 }
 
+fn validate_policy_accounts(cfg: &Config, accounts: &[AccountConfig]) -> Result<()> {
+  let known = accounts
+    .iter()
+    .map(|account| account.id.as_str())
+    .collect::<BTreeSet<_>>();
+  let mut unresolved = Vec::new();
+  for account_id in cfg
+    .defaults
+    .accounts
+    .iter()
+    .flat_map(|accounts| accounts.iter().map(String::as_str))
+  {
+    if !known.contains(account_id) {
+      unresolved.push(format!("defaults.accounts:{account_id}"));
+    }
+  }
+  for (profile_name, profile) in &cfg.profiles {
+    for account_id in profile
+      .accounts
+      .iter()
+      .flat_map(|accounts| accounts.iter().map(String::as_str))
+    {
+      if !known.contains(account_id) {
+        unresolved.push(format!("profiles.{profile_name}.accounts:{account_id}"));
+      }
+    }
+  }
+  if unresolved.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "profile/default account filters contain unknown account ids: {}",
+    unresolved.join(", ")
+  )
+}
+
 /// Construct the default `tokn-requests` pipeline for router-owned JSON
 /// endpoints. The pipeline shares `AppState.events` so persistence
 /// (`RequestEventHandler`) receives `StageEvent::*` and `RecordEvent::*`
@@ -419,6 +469,7 @@ fn build_request_pipeline_with_providers(
   pool: Arc<AccountPool>,
   route: Arc<RouteResolver>,
   providers: Option<Arc<BTreeSet<String>>>,
+  accounts: Option<Arc<BTreeSet<String>>>,
   http: reqwest::Client,
   events: Arc<EventBus>,
 ) -> Arc<tokn_requests::Pipeline> {
@@ -426,7 +477,7 @@ fn build_request_pipeline_with_providers(
     DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
     PoolAccountSelector, PoolResolve,
   };
-  let selector = Arc::new(PoolAccountSelector::new_with_providers(pool, route, providers));
+  let selector = Arc::new(PoolAccountSelector::new_filtered(pool, route, providers, accounts));
   let profile = tokn_requests::Profile::full(
     name,
     Arc::new(DefaultExtract),
@@ -456,6 +507,7 @@ fn build_passthrough_pipeline_with_providers(
   pool: Arc<AccountPool>,
   route: Arc<RouteResolver>,
   providers: Option<Arc<BTreeSet<String>>>,
+  accounts: Option<Arc<BTreeSet<String>>>,
   http: reqwest::Client,
   events: Arc<EventBus>,
 ) -> Arc<tokn_requests::Pipeline> {
@@ -463,7 +515,7 @@ fn build_passthrough_pipeline_with_providers(
     DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
     PoolAccountSelector, PoolResolve,
   };
-  let selector = Arc::new(PoolAccountSelector::new_with_providers(pool, route, providers));
+  let selector = Arc::new(PoolAccountSelector::new_filtered(pool, route, providers, accounts));
   let profile = tokn_requests::Profile::full(
     name,
     Arc::new(PassthroughExtract),
@@ -547,8 +599,12 @@ mod tests {
   use tower::ServiceExt;
 
   fn zai_account() -> AccountCfg {
+    zai_account_with_id("acct")
+  }
+
+  fn zai_account_with_id(id: &str) -> AccountCfg {
     AccountCfg {
-      id: "acct".into(),
+      id: id.into(),
       provider: "zai-coding-plan".into(),
       enabled: true,
       tier: tokn_core::account::AccountTier::Active,
@@ -777,6 +833,29 @@ mod tests {
   }
 
   #[test]
+  fn profile_accounts_replace_default_accounts() {
+    let mut cfg = Config::default();
+    cfg.defaults.accounts = Some(vec!["other".into()]);
+    cfg.profiles.insert(
+      "agent".into(),
+      ProfileConfig {
+        accounts: Some(vec!["acct".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![zai_account(), zai_account_with_id("other")];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+
+    let profile_accounts = state
+      .profiles
+      .get("agent")
+      .and_then(|profile| profile.accounts.as_deref())
+      .expect("profile should have account filter");
+    assert!(profile_accounts.contains("acct"));
+    assert!(!profile_accounts.contains("other"));
+  }
+
+  #[test]
   fn profile_model_families_replace_default_families() {
     let mut cfg = Config::default();
     cfg.defaults.model_families = vec![ModelFamily {
@@ -832,6 +911,32 @@ mod tests {
       Err(err) => err,
     };
     assert!(err.to_string().contains("profiles.work.providers:made-up-provider"));
+  }
+
+  #[test]
+  fn build_state_rejects_unknown_policy_account_filters() {
+    let accounts = vec![zai_account()];
+    let mut cfg = Config::default();
+    cfg.defaults.accounts = Some(vec!["missing".into()]);
+    let err = match build_state(&cfg, &accounts, Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("unknown default account must fail"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("defaults.accounts:missing"));
+
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        accounts: Some(vec!["missing".into()]),
+        ..Default::default()
+      },
+    );
+    let err = match build_state(&cfg, &accounts, Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("unknown profile account must fail"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("profiles.work.accounts:missing"));
   }
 
   #[tokio::test]

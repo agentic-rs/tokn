@@ -67,6 +67,8 @@ mode = "route"
 mode = "fuzzy"
 agent_id = "codex-cli"
 providers = ["github-copilot"]
+# Optional: restrict this profile to specific account ids.
+# accounts = ["personal"]
 
 [[profiles.coding.model_families]]
 name = "glm"
@@ -109,6 +111,8 @@ initiator_mode         = "auto"
 `/v1/...` uses `[defaults]`. `/{profile}/v1/...` uses `[defaults]` plus the
 named profile overrides. Profile `providers` entries must be canonical provider
 ids; if omitted, the profile inherits the default provider set. Profile
+`accounts` entries must be configured account ids; if omitted, the profile
+inherits the default account set. Profile
 `model_families`, when present, replaces default model families for that
 profile.
 
@@ -134,6 +138,8 @@ tokn-router proxy ca path|show|regenerate
 tokn-router usage [--since 24h] [--account ID]
 tokn-router config get|set|unset KEY [--account ID] [--add]
 tokn-router config list | edit | path
+tokn-router agent migrate --agent codex-cli|opencode --profile NAME [--yes]
+tokn-router agent rollback --agent codex-cli|opencode [--backup-id ID]
 ```
 
 ## Proxy Mode

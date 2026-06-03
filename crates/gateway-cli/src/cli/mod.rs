@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::logging::{self, RunMode};
 
 mod account;
+mod agent;
 mod config_cmd;
 mod error;
 mod headers;
@@ -37,6 +38,9 @@ pub enum Cmd {
   /// Manage stored accounts (add / login / import / list / switch / refresh / status / show / remove)
   #[command(subcommand)]
   Account(account::AccountCmd),
+  /// Migrate local agent credentials/config to gateway profiles
+  #[command(subcommand)]
+  Agent(agent::AgentCmd),
   /// Show the Copilot identity headers that will be sent upstream
   Headers(headers::HeadersArgs),
   /// Run the local OpenAI-compatible server
@@ -75,6 +79,7 @@ impl Cli {
 
     let r: anyhow::Result<()> = match self.cmd {
       Cmd::Account(c) => account::run(cfg_path, c).await,
+      Cmd::Agent(c) => agent::run(cfg_path, c).await,
       Cmd::Headers(a) => headers::run(cfg_path, a).await,
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
@@ -96,7 +101,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
+    Cmd::Update(_) | Cmd::Migration(_) | Cmd::Agent(_) => RunMode::MutatingCli,
     Cmd::Account(c) => match c {
       AccountCmd::List(_) | AccountCmd::Show { .. } | AccountCmd::Status { .. } => RunMode::ReadOnlyCli,
       AccountCmd::Add(_)
