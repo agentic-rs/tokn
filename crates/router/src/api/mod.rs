@@ -870,6 +870,25 @@ mod tests {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
   }
 
+  #[tokio::test]
+  async fn invalid_profile_agent_id_returns_bad_request_instead_of_panicking() {
+    let mut cfg = Config::default();
+    cfg.defaults.agent_id = Some(AgentId::from("bad\nagent"));
+    let accounts = vec![zai_account()];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("POST")
+      .uri("/v1/responses")
+      .header("content-type", "application/json")
+      .body(Body::from(Bytes::from_static(br#"{"model":"glm-4.6","input":"hi"}"#)))
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+  }
+
   #[test]
   fn is_router_owned_header_does_not_include_request_session_project_id_headers() {
     use axum::http::HeaderName;

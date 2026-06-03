@@ -41,10 +41,9 @@ async fn handle(
   inbound.remove("x-route-mode");
   inbound.remove("x-tokn-router-agent-id");
   if let Some(agent_id) = &policy.agent_id {
-    inbound.insert(
-      axum::http::HeaderName::from_static("x-tokn-router-agent-id"),
-      axum::http::HeaderValue::from_str(agent_id.as_str()).unwrap(),
-    );
+    let value = axum::http::HeaderValue::from_str(agent_id.as_str())
+      .map_err(|e| ApiError::bad_request(format!("invalid profile agent_id header value: {e}")))?;
+    inbound.insert(axum::http::HeaderName::from_static("x-tokn-router-agent-id"), value);
   }
 
   let mode = policy.route.resolve_mode(None).ok();
