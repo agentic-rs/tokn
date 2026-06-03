@@ -25,7 +25,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
-use tokn_core::AgentId;
 use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
@@ -44,7 +43,7 @@ pub struct PassthroughExtract;
 
 #[async_trait]
 impl ExtractStage for PassthroughExtract {
-  async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
+  async fn extract(&self, ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
       request_endpoint: _,
       headers,
@@ -85,10 +84,7 @@ impl ExtractStage for PassthroughExtract {
 
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
-    let agent_id = header_str(&headers, "x-tokn-router-agent-id")
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(AgentId::from);
+    let agent_id = ctx.config.agent_id().cloned();
 
     Ok(Extracted {
       agent_id,

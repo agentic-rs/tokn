@@ -40,11 +40,6 @@ async fn handle(
   // event here would duplicate the request row before the pipeline begins.
   inbound.remove("x-route-mode");
   inbound.remove("x-tokn-router-agent-id");
-  if let Some(agent_id) = &policy.agent_id {
-    let value = axum::http::HeaderValue::from_str(agent_id.as_str())
-      .map_err(|e| ApiError::bad_request(format!("invalid profile agent_id header value: {e}")))?;
-    inbound.insert(axum::http::HeaderName::from_static("x-tokn-router-agent-id"), value);
-  }
 
   let mode = policy.route.resolve_mode(None).ok();
 
@@ -79,7 +74,10 @@ async fn handle(
   } else {
     &policy.request_pipeline
   };
-  match pipeline.run(raw).await {
+  let run_config = tokn_requests::RunConfig::builder()
+    .with_agent_id_opt(policy.agent_id.clone())
+    .build();
+  match pipeline.run_with(raw, run_config).await {
     Ok(converted) => Ok(super::response::converted_to_axum(converted)),
     Err(err) => Err(pipeline_error_to_api_error(err)),
   }

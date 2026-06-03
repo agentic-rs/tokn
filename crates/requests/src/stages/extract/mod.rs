@@ -22,7 +22,6 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokn_core::util::initiator::{classify_initiator as classify_chat_initiator, classify_initiator_responses};
-use tokn_core::AgentId;
 use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
@@ -30,7 +29,7 @@ pub struct DefaultExtract;
 
 #[async_trait]
 impl ExtractStage for DefaultExtract {
-  async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
+  async fn extract(&self, ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
       request_endpoint: _,
       headers,
@@ -73,10 +72,7 @@ impl ExtractStage for DefaultExtract {
     // uncompressed body; the legacy router behaviour was identical.
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
-    let agent_id = header_str(&headers, "x-tokn-router-agent-id")
-      .map(str::trim)
-      .filter(|s| !s.is_empty())
-      .map(AgentId::from);
+    let agent_id = ctx.config.agent_id().cloned();
 
     Ok(Extracted {
       agent_id,
@@ -134,6 +130,7 @@ mod tests {
   use bytes::Bytes;
   use std::sync::Arc;
   use tokn_core::provider::Endpoint;
+  use tokn_core::AgentId;
   use tokn_headers::inbound::first_present;
 
   fn ctx() -> PipelineCtx {
@@ -189,10 +186,15 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn internal_router_agent_id_is_extracted() {
+  async fn run_config_agent_id_is_extracted() {
     let body = serde_json::json!({"model": "m"});
-    let headers = header_map(&[("x-tokn-router-agent-id", "  codex-cli  ")]);
-    let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
+    let ctx = PipelineCtx::new_with_config(
+      "req-test",
+      Endpoint::ChatCompletions.into(),
+      Arc::new(EventBus::new(64)),
+      Arc::new(crate::RunConfig::builder().with_agent_id(AgentId::CodexCli).build()),
+    );
+    let ex = DefaultExtract.extract(&ctx, raw(HeaderMap::new(), body)).await.unwrap();
     assert_eq!(ex.agent_id, Some(AgentId::CodexCli));
   }
 
