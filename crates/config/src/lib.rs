@@ -4,6 +4,7 @@ pub mod paths;
 use directories::ProjectDirs;
 pub use error::{Error, Result};
 pub use tokn_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
+pub use tokn_core::AgentId;
 
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -30,6 +31,10 @@ pub struct Config {
   pub proxy_mode: ProxyModeConfig,
   #[serde(default)]
   pub logging: LoggingConfig,
+  #[serde(default)]
+  pub defaults: DefaultsConfig,
+  #[serde(default)]
+  pub profiles: BTreeMap<String, ProfileConfig>,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
 }
@@ -66,6 +71,30 @@ pub struct ModelFamily {
   pub name: String,
   #[serde(default)]
   pub members: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DefaultsConfig {
+  #[serde(default)]
+  pub mode: RouteMode,
+  #[serde(default)]
+  pub agent_id: Option<AgentId>,
+  #[serde(default)]
+  pub providers: Option<Vec<String>>,
+  #[serde(default)]
+  pub model_families: Vec<ModelFamily>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProfileConfig {
+  #[serde(default)]
+  pub mode: Option<RouteMode>,
+  #[serde(default)]
+  pub agent_id: Option<AgentId>,
+  #[serde(default)]
+  pub providers: Option<Vec<String>>,
+  #[serde(default)]
+  pub model_families: Option<Vec<ModelFamily>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -394,6 +423,15 @@ impl Config {
     self.proxy.validate()?;
     self.proxy_mode.validate()?;
     validate_model_families(&self.model_families)?;
+    validate_model_families(&self.defaults.model_families)?;
+    validate_providers("defaults.providers", self.defaults.providers.as_deref())?;
+    for (name, profile) in &self.profiles {
+      validate_profile_name(name)?;
+      if let Some(model_families) = profile.model_families.as_deref() {
+        validate_model_families(model_families)?;
+      }
+      validate_providers(&format!("profiles.{name}.providers"), profile.providers.as_deref())?;
+    }
     Ok(())
   }
 
@@ -436,6 +474,10 @@ impl Config {
     })?;
     validate_model_families(&cfg.model_families).map_err(|e| Error::EditValidateSection {
       section: "[[model_families]]",
+      source: Box::new(e),
+    })?;
+    cfg.validate().map_err(|e| Error::EditValidateSection {
+      section: "[defaults]/[profiles]",
       source: Box::new(e),
     })?;
     if let Some(parent) = path.parent() {
@@ -491,6 +533,33 @@ fn validate_model_families(families: &[ModelFamily]) -> Result<()> {
       return error::InvalidAccountSnafu {
         id: family.name.clone(),
         message: String::from("model family members must be non-empty"),
+      }
+      .fail();
+    }
+  }
+  Ok(())
+}
+
+fn validate_profile_name(name: &str) -> Result<()> {
+  if name.trim().is_empty() || name.contains('/') {
+    return error::InvalidAccountSnafu {
+      id: name.to_string(),
+      message: String::from("profile name must be non-empty and must not contain '/'"),
+    }
+    .fail();
+  }
+  Ok(())
+}
+
+fn validate_providers(section: &str, providers: Option<&[String]>) -> Result<()> {
+  let Some(providers) = providers else {
+    return Ok(());
+  };
+  for provider in providers {
+    if provider.trim().is_empty() {
+      return error::InvalidAccountSnafu {
+        id: section.to_string(),
+        message: String::from("provider ids must be non-empty"),
       }
       .fail();
     }
@@ -592,5 +661,69 @@ mod tests {
     .expect_err("invalid provider mode must fail deserialization");
     assert!(err.to_string().contains("unknown variant"));
     assert!(err.to_string().contains("route"));
+  }
+
+  #[test]
+  fn profiles_deserialize_request_policy_overrides() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [defaults]
+        mode = "route"
+        providers = ["github-copilot"]
+
+        [[defaults.model_families]]
+        name = "sonnet"
+        members = ["claude-sonnet-4"]
+
+        [profiles.work]
+        mode = "fuzzy"
+        agent_id = "codex-cli"
+        providers = ["codex"]
+
+        [[profiles.work.model_families]]
+        name = "glm"
+        members = ["glm-4.6"]
+      "#,
+    )
+    .expect("config should deserialize");
+
+    assert_eq!(cfg.defaults.mode, RouteMode::Route);
+    assert_eq!(
+      cfg.defaults.providers.as_deref(),
+      Some(&["github-copilot".to_string()][..])
+    );
+    let work = cfg.profiles.get("work").expect("work profile");
+    assert_eq!(work.mode, Some(RouteMode::Fuzzy));
+    assert_eq!(work.agent_id, Some(AgentId::CodexCli));
+    assert_eq!(work.providers.as_deref(), Some(&["codex".to_string()][..]));
+    assert_eq!(work.model_families.as_ref().unwrap()[0].name, "glm");
+  }
+
+  #[test]
+  fn profiles_reject_invalid_names() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [profiles."bad/name"]
+        mode = "route"
+      "#,
+    )
+    .expect("config should deserialize before validation");
+    let err = cfg
+      .validate()
+      .expect_err("profile names containing slash must fail validation");
+    assert!(err.to_string().contains("profile name"));
+  }
+
+  #[test]
+  fn provider_filters_reject_empty_ids() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [defaults]
+        providers = ["openai", " "]
+      "#,
+    )
+    .expect("config should deserialize before validation");
+    let err = cfg.validate().expect_err("empty provider ids must fail validation");
+    assert!(err.to_string().contains("provider ids must be non-empty"));
   }
 }

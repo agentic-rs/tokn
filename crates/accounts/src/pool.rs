@@ -2,7 +2,7 @@ use super::affinity::{Affinity, Lookup};
 use super::handle::AccountHandle;
 use crate::routing::{RouteResolution, RouteSelector};
 use snafu::{ResultExt, Snafu};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -218,11 +218,21 @@ impl AccountPool {
     route: &RouteResolution,
     requested: Endpoint,
   ) -> EndpointAcquire {
+    self.acquire_for_route_with_providers(session_id, route, requested, None)
+  }
+
+  pub fn acquire_for_route_with_providers(
+    &self,
+    session_id: Option<&str>,
+    route: &RouteResolution,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> EndpointAcquire {
     if let Some(id) = session_id {
       match self.affinity.lookup(id) {
         Lookup::Hit(account_id) => {
           if let Some(acct) = self.account_by_id(&account_id) {
-            if acct.is_healthy() {
+            if acct.is_healthy() && provider_allowed(acct.provider.info().id.as_str(), allowed_providers) {
               if let Some(endpoint) = self.account_matching_route_endpoint(&acct, route, requested) {
                 self.record_session(id, &acct.id());
                 return EndpointAcquire::Account { acct, endpoint };
@@ -235,7 +245,7 @@ impl AccountPool {
       }
     }
 
-    match self.acquire_from_route(route, requested) {
+    match self.acquire_from_route(route, requested, allowed_providers) {
       Some((acct, endpoint)) => {
         if let Some(id) = session_id {
           self.record_session(id, &acct.id());
@@ -371,16 +381,28 @@ impl AccountPool {
     }
   }
 
-  fn acquire_from_route(&self, route: &RouteResolution, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
+  fn acquire_from_route(
+    &self,
+    route: &RouteResolution,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
     match &route.selector {
-      RouteSelector::Any => self.acquire_any_convertible(requested),
+      RouteSelector::Any => self.acquire_any_convertible(requested, allowed_providers),
       RouteSelector::Provider(provider) => {
+        if !provider_allowed(provider, allowed_providers) {
+          return None;
+        }
         self.acquire_provider_convertible(provider, &route.upstream_model, requested)
       }
-      RouteSelector::Model => self.acquire_from_buckets_convertible(Some(&route.upstream_model), requested),
+      RouteSelector::Model => {
+        self.acquire_from_buckets_convertible_filtered(Some(&route.upstream_model), requested, allowed_providers)
+      }
       RouteSelector::Fuzzy { candidates } => {
         for candidate in candidates {
-          if let Some((acct, endpoint)) = self.acquire_from_buckets_convertible(Some(candidate), requested) {
+          if let Some((acct, endpoint)) =
+            self.acquire_from_buckets_convertible_filtered(Some(candidate), requested, allowed_providers)
+          {
             return Some((acct, endpoint));
           }
         }
@@ -389,9 +411,53 @@ impl AccountPool {
     }
   }
 
-  fn acquire_any_convertible(&self, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
+  fn acquire_from_buckets_convertible_filtered(
+    &self,
+    model: Option<&str>,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
     for endpoint in fallback_order(requested) {
-      for bucket in self.buckets.values() {
+      let mut candidates = Vec::new();
+      for (provider_id, bucket) in &self.buckets {
+        if provider_allowed(provider_id, allowed_providers) && bucket.matches(model, endpoint) {
+          candidates.push(bucket);
+        }
+      }
+
+      for bucket in &candidates {
+        if let Some(acct) = bucket.pick_healthy() {
+          return Some((acct, endpoint));
+        }
+      }
+
+      let mut best: Option<Arc<AccountHandle>> = None;
+      let mut best_t: Option<Instant> = None;
+      for bucket in candidates {
+        if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+          if best.is_none() || t < best_t {
+            best = Some(acct);
+            best_t = t;
+          }
+        }
+      }
+      if let Some(acct) = best {
+        return Some((acct, endpoint));
+      }
+    }
+    None
+  }
+
+  fn acquire_any_convertible(
+    &self,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
+    for endpoint in fallback_order(requested) {
+      for (provider_id, bucket) in &self.buckets {
+        if !provider_allowed(provider_id, allowed_providers) {
+          continue;
+        }
         if bucket.provider.supports("", endpoint) {
           if let Some(acct) = bucket.pick_healthy() {
             return Some((acct, endpoint));
@@ -401,7 +467,10 @@ impl AccountPool {
 
       let mut best: Option<Arc<AccountHandle>> = None;
       let mut best_t: Option<Instant> = None;
-      for bucket in self.buckets.values() {
+      for (provider_id, bucket) in &self.buckets {
+        if !provider_allowed(provider_id, allowed_providers) {
+          continue;
+        }
         if bucket.provider.supports("", endpoint) {
           if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
             if best.is_none() || t < best_t {
@@ -438,6 +507,12 @@ impl AccountPool {
     }
     None
   }
+}
+
+fn provider_allowed(provider_id: &str, allowed_providers: Option<&BTreeSet<String>>) -> bool {
+  allowed_providers
+    .map(|providers| providers.contains(provider_id))
+    .unwrap_or(true)
 }
 
 fn fallback_order(requested: Endpoint) -> Vec<Endpoint> {

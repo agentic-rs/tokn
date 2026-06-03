@@ -58,6 +58,20 @@ curl http://127.0.0.1:4141/v1/chat/completions \
 host = "127.0.0.1"
 port = 4141
 
+[defaults]
+mode = "route"
+# Omit providers to allow every globally enabled provider.
+# providers = ["github-copilot", "openai"]
+
+[profiles.coding]
+mode = "fuzzy"
+agent_id = "codex-cli"
+providers = ["github-copilot"]
+
+[[profiles.coding.model_families]]
+name = "glm"
+members = ["glm-4.6", "glm-5.1"]
+
 [pool]
 strategy = "round_robin"
 failure_cooldown_secs = 60
@@ -91,6 +105,12 @@ copilot_integration_id = "vscode-chat"
 openai_intent          = "conversation-panel"
 initiator_mode         = "auto"
 ```
+
+`/v1/...` uses `[defaults]`. `/{profile}/v1/...` uses `[defaults]` plus the
+named profile overrides. Profile `providers` entries must be canonical provider
+ids; if omitted, the profile inherits the default provider set. Profile
+`model_families`, when present, replaces default model families for that
+profile.
 
 The downstream client may also send `X-Initiator: user|agent` per request,
 which overrides the auto-classifier and the config setting.
@@ -188,8 +208,8 @@ applies mode precedence in this order: request override, provider-specific
 
 `tokn-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
 MITM proxy together in one process. They share the same account pool and event
-pipeline, but each listener can keep its own default route mode via
-`[server].route_mode` and `[proxy_mode].route_mode` (or `--proxy-route-mode`).
+pipeline. API requests use `[defaults]` or `/{profile}/v1/...`; the proxy keeps
+its own route mode through `[proxy_mode].route_mode` or `--proxy-route-mode`.
 
 For a trusted LAN central server, bind the API server and proxy to reachable
 interfaces explicitly:

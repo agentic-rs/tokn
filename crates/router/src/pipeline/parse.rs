@@ -10,7 +10,6 @@ use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_H
 #[derive(Clone, Debug)]
 pub(crate) struct HeaderExtract {
   pub request_id: String,
-  pub route_mode_hint: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -25,16 +24,7 @@ pub(crate) fn request_header_extract(headers: &HeaderMap) -> HeaderExtract {
   let request_id = first_header(headers, REQUEST_ID_HEADERS)
     .map(str::to_string)
     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-  let route_mode_hint = headers
-    .get("x-route-mode")
-    .and_then(|v| v.to_str().ok())
-    .map(str::trim)
-    .filter(|v| !v.is_empty())
-    .map(str::to_string);
-  HeaderExtract {
-    request_id,
-    route_mode_hint,
-  }
+  HeaderExtract { request_id }
 }
 
 pub(crate) fn request_body_extract(headers: &HeaderMap, body: &Value) -> BodyExtract {

@@ -4,7 +4,7 @@ use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use common::{body_json, body_text, cfg_for, ctx, int, json_obj, missing_or_null, text, zai_account, RequestsHarness};
 use serde_json::{json, Map, Value};
-use tokn_config::RouteMode;
+use tokn_config::{ProfileConfig, RouteMode};
 use tokn_mock_server::{MockLlmConfig, MockLlmServer, MockRoute};
 use tokn_router::api::{build_state, router};
 use tower::ServiceExt;
@@ -96,7 +96,21 @@ fn assert_router_row(row: &Map<String, Value>, case: RouterCase) {
 async fn router_modes_return_expected_results_and_persist_request_rows() {
   let mock = MockLlmServer::start(MockLlmConfig::default()).await;
   let mut harness = RequestsHarness::new();
-  let cfg = cfg_for(&harness.requests_dir, RouteMode::Route);
+  let mut cfg = cfg_for(&harness.requests_dir, RouteMode::Route);
+  for mode in [
+    RouteMode::Route,
+    RouteMode::Fuzzy,
+    RouteMode::Exact,
+    RouteMode::Passthrough,
+  ] {
+    cfg.profiles.insert(
+      mode_name(mode).into(),
+      ProfileConfig {
+        mode: Some(mode),
+        ..Default::default()
+      },
+    );
+  }
   let state = build_state(&cfg, &[zai_account(mock.base_url())], harness.events.clone()).unwrap();
   let app = router(state);
 
@@ -156,11 +170,10 @@ async fn router_modes_return_expected_results_and_persist_request_rows() {
       .oneshot(
         Request::builder()
           .method(Method::POST)
-          .uri("/v1/chat/completions")
+          .uri(format!("/{}/v1/chat/completions", case.mode))
           .header("content-type", "application/json")
           .header("x-request-id", &request_id)
           .header("x-session-id", "sess-router-1")
-          .header("x-route-mode", case.mode)
           .body(Body::from(raw_body.clone()))
           .unwrap(),
       )
@@ -183,6 +196,16 @@ async fn router_modes_return_expected_results_and_persist_request_rows() {
     assert_router_row(&row, case);
   }
   mock.shutdown().await;
+}
+
+fn mode_name(mode: RouteMode) -> &'static str {
+  match mode {
+    RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
+    RouteMode::Exact => "exact",
+    RouteMode::Route => "route",
+    RouteMode::Fuzzy => "fuzzy",
+  }
 }
 
 #[tokio::test]

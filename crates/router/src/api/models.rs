@@ -1,10 +1,11 @@
 use super::error::ApiError;
-use super::AppState;
+use super::{AppState, RequestPolicyRuntime};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
+use std::sync::Arc;
 use tracing::{debug, instrument};
 
 /// Union `data` arrays from every provider, dedup by `id`. For each entry,
@@ -13,6 +14,11 @@ use tracing::{debug, instrument};
 /// richer consumers (TUIs, dashboards) can pick up capabilities/costs/limits.
 #[instrument(name = "list_models", skip_all, fields(accounts = tracing::field::Empty, models = tracing::field::Empty))]
 pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
+  let policy = s.default_policy.clone();
+  list_models_for_policy(s, policy).await
+}
+
+async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) -> Result<Json<Value>, ApiError> {
   let mut out: Vec<Value> = Vec::new();
   let mut seen: HashSet<String> = HashSet::new();
   let mut last_err: Option<String> = None;
@@ -23,6 +29,14 @@ pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiEr
 
   for acct in accounts {
     let provider = acct.provider.clone();
+    if policy
+      .providers
+      .as_ref()
+      .map(|providers| !providers.contains(provider.info().id.as_str()))
+      .unwrap_or(false)
+    {
+      continue;
+    }
     debug!(account = %acct.id(), provider = %provider.info().id, "list_models: querying account");
     match provider.list_models(&s.http).await {
       Ok(v) => {
@@ -96,14 +110,15 @@ fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider)
   }
 }
 
-/// Mode-prefixed variant: `/{mode}/v1/models`
-/// TODO: filter models based on route mode (e.g. fuzzy only shows family names)
-pub async fn list_models_with_mode(
+/// Profile-prefixed variant: `/{profile}/v1/models`
+pub async fn list_models_with_profile(
   State(s): State<AppState>,
-  Path(mode): Path<String>,
+  Path(profile): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-  super::validate_path_mode(&mode)?;
-  // For now, delegate to the standard list_models.
-  // Future: filter based on mode (e.g. exact mode shows provider/model, fuzzy shows families)
-  list_models(State(s)).await
+  let policy = s
+    .profiles
+    .get(&profile)
+    .cloned()
+    .ok_or_else(|| ApiError::bad_request(format!("unknown profile '{profile}'")))?;
+  list_models_for_policy(s, policy).await
 }

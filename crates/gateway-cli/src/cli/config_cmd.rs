@@ -344,7 +344,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
 
 fn apply_runtime_overrides(cfg: &mut Config, args: &InitArgs) {
   if let Some(mode) = args.route_mode {
-    cfg.server.route_mode = mode.into();
+    cfg.defaults.mode = mode.into();
   }
   if let Some(host) = &args.host {
     cfg.server.host = host.clone();
@@ -365,7 +365,7 @@ fn apply_runtime_overrides(cfg: &mut Config, args: &InitArgs) {
 
 fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
   let route_options = vec!["route", "passthrough", "switch", "exact", "fuzzy"];
-  let default_idx = match cfg.server.route_mode {
+  let default_idx = match cfg.defaults.mode {
     RouteMode::Route => 0,
     RouteMode::Passthrough => 1,
     RouteMode::Switch => 2,
@@ -376,7 +376,7 @@ fn interactive_runtime_prompts(cfg: &mut Config) -> Result<()> {
     .with_starting_cursor(default_idx)
     .prompt()
     .context("route mode selection cancelled")?;
-  cfg.server.route_mode = match selected {
+  cfg.defaults.mode = match selected {
     "route" => RouteMode::Route,
     "passthrough" => RouteMode::Passthrough,
     "switch" => RouteMode::Switch,

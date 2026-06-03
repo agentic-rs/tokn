@@ -43,7 +43,7 @@ pub struct PassthroughExtract;
 
 #[async_trait]
 impl ExtractStage for PassthroughExtract {
-  async fn extract(&self, _ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
+  async fn extract(&self, ctx: &PipelineCtx, raw: RawInbound) -> Result<Extracted, PipelineError> {
     let RawInbound {
       request_endpoint: _,
       headers,
@@ -84,8 +84,10 @@ impl ExtractStage for PassthroughExtract {
 
     let content_encoding = request_content_encoding(&headers).ok().flatten();
 
+    let agent_id = ctx.config.agent_id().cloned();
+
     Ok(Extracted {
-      agent_id: None,
+      agent_id,
       model,
       stream,
       session_id,
