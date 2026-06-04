@@ -76,11 +76,12 @@ mod tests {
 
   #[test]
   fn alias_dispatch_picks_right_catalogue() {
-    assert!(catalogue_for(ID_ZAI_CODING_PLAN).len() >= 3);
-    assert_eq!(
-      catalogue_for(ID_ZHIPUAI_CODING_PLAN).len(),
-      catalogue_for(ID_ZAI_CODING_PLAN).len()
-    );
+    for alias in [ID_ZAI_CODING_PLAN, ID_ZHIPUAI_CODING_PLAN] {
+      let models = catalogue_for(alias);
+      assert!(models.len() >= 3, "{alias} should expose coding-plan models");
+      assert!(models.iter().any(|m| m.id == "glm-5.1"), "{alias} missing glm-5.1");
+      assert!(models.iter().any(|m| m.id == "glm-4.7"), "{alias} missing glm-4.7");
+    }
     assert!(catalogue_for(ID_ZAI).len() >= 12);
     assert!(catalogue_for(ID_ZHIPUAI).len() >= 11);
   }

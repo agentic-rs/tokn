@@ -429,14 +429,14 @@ impl Config {
     validate_model_families(&self.model_families)?;
     validate_model_families(&self.defaults.model_families)?;
     validate_providers("defaults.providers", self.defaults.providers.as_deref())?;
-    validate_ids("defaults.accounts", self.defaults.accounts.as_deref())?;
+    validate_account_ids("defaults.accounts", self.defaults.accounts.as_deref())?;
     for (name, profile) in &self.profiles {
       validate_profile_name(name)?;
       if let Some(model_families) = profile.model_families.as_deref() {
         validate_model_families(model_families)?;
       }
       validate_providers(&format!("profiles.{name}.providers"), profile.providers.as_deref())?;
-      validate_ids(&format!("profiles.{name}.accounts"), profile.accounts.as_deref())?;
+      validate_account_ids(&format!("profiles.{name}.accounts"), profile.accounts.as_deref())?;
     }
     Ok(())
   }
@@ -558,10 +558,14 @@ fn validate_profile_name(name: &str) -> Result<()> {
 }
 
 fn validate_providers(section: &str, providers: Option<&[String]>) -> Result<()> {
-  validate_ids(section, providers)
+  validate_ids(section, providers, "provider ids must be non-empty")
 }
 
-fn validate_ids(section: &str, ids: Option<&[String]>) -> Result<()> {
+fn validate_account_ids(section: &str, ids: Option<&[String]>) -> Result<()> {
+  validate_ids(section, ids, "account ids must be non-empty")
+}
+
+fn validate_ids(section: &str, ids: Option<&[String]>, message: &str) -> Result<()> {
   let Some(ids) = ids else {
     return Ok(());
   };
@@ -569,7 +573,7 @@ fn validate_ids(section: &str, ids: Option<&[String]>) -> Result<()> {
     if id.trim().is_empty() {
       return error::InvalidAccountSnafu {
         id: section.to_string(),
-        message: String::from("ids must be non-empty"),
+        message: message.to_string(),
       }
       .fail();
     }
