@@ -5,10 +5,9 @@
 //!   ([`DeviceFlowOutcome`], [`RefreshOutcome`], [`QuotaSnapshot`],
 //!   [`AuthError`]). Provider crates implement this trait; everything
 //!   above the provider layer programs against it.
-//! * The [`AuthStore`] backing `auth.yaml` — the post-refactor home for
-//!   account records, replacing the legacy `[[accounts]]` block in
-//!   `config.toml`. During the transition the loader reads both, prefers
-//!   `auth.yaml`, and emits a deprecation warning when it falls back.
+//! * The [`AuthStore`] backing `auth.yaml` — the latest home for account
+//!   records. Legacy schema conversion from `config.toml` lives in
+//!   `tokn-router-legacy-config`.
 //!
 //! Note: the provider-id → [`ProviderAuth`] *registry* deliberately does
 //! **not** live here. `tokn-auth` is the bottom of the auth stack and must

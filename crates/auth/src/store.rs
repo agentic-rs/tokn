@@ -1,5 +1,4 @@
-//! `auth.yaml` storage + back-compat shim for `config.toml`'s legacy
-//! `[[accounts]]` block.
+//! `auth.yaml` storage.
 //!
 //! Format (`auth.yaml`):
 //!
@@ -17,16 +16,8 @@
 //!     settings: {}
 //! ```
 //!
-//! Resolution order on load:
-//!  1. `auth.yaml` if present → parsed and returned.
-//!  2. else if `config.toml` contains `[[accounts]]` → migrated in
-//!     memory, written to `auth.yaml` immediately, deprecation warning
-//!     logged.
-//!  3. else → empty store.
-//!
-//! Saves *always* go to `auth.yaml`. The legacy block in `config.toml`
-//! is left untouched so the operator can remove it manually after they
-//! verify the new file. The next loader pass will ignore it (yaml wins).
+//! Legacy schema conversion is owned by `tokn-router-legacy-config` and
+//! should run before latest auth loading.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -61,43 +52,15 @@ pub struct AuthStore {
 }
 
 impl AuthStore {
-  /// Load `auth.yaml` from the given path, falling back to the legacy
-  /// `accounts = [...]` table in `config.toml` if `auth.yaml` is missing.
-  ///
-  /// `auth_path` overrides the default `~/.config/tokn-router/auth.yaml`.
-  /// `config_path` is consulted only for the migration fallback; pass the
-  /// effective config.toml path. When the legacy fallback fires, this
-  /// function writes the migrated `auth.yaml` to disk and emits a
-  /// `tracing::warn!`.
-  pub fn load(auth_path: Option<&Path>, config_path: Option<&Path>) -> Result<Self> {
+  /// Load `auth.yaml` from the given path. `auth_path` overrides the default
+  /// router auth path. `config_path` is accepted for source compatibility but
+  /// is no longer consulted; callers should run `tokn-router-legacy-config`
+  /// before latest auth loading.
+  pub fn load(auth_path: Option<&Path>, _config_path: Option<&Path>) -> Result<Self> {
     let resolved = auth_path.map(PathBuf::from).unwrap_or_else(default_auth_path);
 
     if resolved.exists() {
       return load_from_yaml(&resolved);
-    }
-
-    // Yaml missing — try the legacy block in config.toml.
-    if let Some(cfg_path) = config_path {
-      if let Some(legacy) = load_legacy_accounts(cfg_path)? {
-        let store = AuthStore {
-          path: resolved.clone(),
-          accounts: legacy,
-        };
-        // Materialise immediately so subsequent runs go straight to the
-        // fast path. Failures here are non-fatal; we still return the
-        // in-memory store and let the user retry on the next mutation.
-        if let Err(e) = store.save() {
-          tracing::warn!(error = %e, "failed to write migrated auth.yaml");
-        } else {
-          tracing::warn!(
-            count = store.accounts.len(),
-            from = %cfg_path.display(),
-            to = %resolved.display(),
-            "migrated accounts from config.toml to auth.yaml; remove the [[accounts]] table from config.toml"
-          );
-        }
-        return Ok(store);
-      }
     }
 
     // Nothing to load — empty store rooted at the resolved path so a
@@ -171,31 +134,6 @@ fn load_from_yaml(path: &Path) -> Result<AuthStore> {
     path: path.to_path_buf(),
     accounts: parsed.accounts,
   })
-}
-
-/// Read just the `accounts = [...]` array from `config.toml` without
-/// re-implementing the full schema. Returns `None` if the file is absent
-/// or has no accounts; `Some(vec![])` is also `None` for our purposes.
-fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>> {
-  if !config_path.exists() {
-    return Ok(None);
-  }
-  let raw = std::fs::read_to_string(config_path).with_context(|| format!("reading {}", config_path.display()))?;
-  // Minimal local schema: accounts have moved to auth.yaml, so we can no
-  // longer go through `tokn_config::Config`. We only care about the legacy
-  // `[[accounts]]` table here; everything else in config.toml is ignored.
-  #[derive(serde::Deserialize)]
-  struct LegacyAccounts {
-    #[serde(default)]
-    accounts: Vec<AccountConfig>,
-  }
-  let parsed: LegacyAccounts =
-    toml::from_str(&raw).with_context(|| format!("parsing legacy {}", config_path.display()))?;
-  if parsed.accounts.is_empty() {
-    Ok(None)
-  } else {
-    Ok(Some(parsed.accounts))
-  }
 }
 
 /// Default path: the gateway config directory's `auth.yaml`.
@@ -302,11 +240,10 @@ mod tests {
   }
 
   #[test]
-  fn missing_yaml_with_legacy_config_migrates() {
+  fn missing_yaml_ignores_legacy_config_after_schema_migration_split() {
     let dir = tempfile::tempdir().unwrap();
     let yaml_path = dir.path().join("auth.yaml");
     let cfg_path = dir.path().join("config.toml");
-    // Minimal config.toml with one legacy account.
     std::fs::write(
       &cfg_path,
       r#"
@@ -319,13 +256,8 @@ enabled = true
     .unwrap();
 
     let store = AuthStore::load(Some(&yaml_path), Some(&cfg_path)).unwrap();
-    assert_eq!(store.accounts.len(), 1);
-    assert_eq!(store.accounts[0].id, "legacy");
-    // Migration also wrote the yaml file.
-    assert!(yaml_path.exists());
-    // Subsequent load goes through the fast path.
-    let store2 = AuthStore::load(Some(&yaml_path), Some(&cfg_path)).unwrap();
-    assert_eq!(store2.accounts.len(), 1);
+    assert!(store.accounts.is_empty());
+    assert!(!yaml_path.exists());
   }
 
   #[test]

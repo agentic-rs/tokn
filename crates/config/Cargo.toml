@@ -1,5 +1,5 @@
 [package]
-name = "tokn-config"
+name = "tokn-router-config"
 version.workspace = true
 edition.workspace = true
 description = "Configuration loading and path resolution for tokn"
@@ -7,6 +7,9 @@ documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
 license.workspace = true
+
+[lib]
+name = "tokn_config"
 
 [dependencies]
 tokn-core = { workspace = true }

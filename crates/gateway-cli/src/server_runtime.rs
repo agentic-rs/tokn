@@ -67,11 +67,11 @@ pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
   Ok((Arc::new(bus), receiver, handlers, archive_runtime))
 }
 
-/// Load accounts from `auth.yaml`, falling back to the legacy
-/// `[[accounts]]` block in `config.toml` (with a deprecation warning).
+/// Load accounts from latest `auth.yaml`.
 ///
-/// `config_path` is the effective path of `config.toml` so the legacy
-/// migration can find it; pass `None` to disable the fallback.
+/// `config_path` is accepted for compatibility with call sites that already
+/// have the effective config path; legacy schema migration runs before latest
+/// config/auth loading.
 pub fn load_accounts(config_path: Option<&Path>) -> Result<Vec<AccountConfig>> {
   let store = AuthStore::load(None, config_path)?;
   Ok(store.accounts)
