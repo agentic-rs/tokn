@@ -123,7 +123,7 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: AgentCmd) -> Result<()> {
 async fn migrate(cfg_path: Option<PathBuf>, args: MigrateArgs) -> Result<()> {
   validate_profile_name(&args.profile)?;
   let (cfg, gateway_config_path) = Config::load(cfg_path.as_deref())?;
-  let gateway_auth_path = default_gateway_auth_path();
+  let gateway_auth_path = default_gateway_auth_path()?;
   let timestamp = timestamp()?;
   let target_base_url = gateway_profile_base_url(&cfg, &args.profile);
   let mut plan = match args.agent {
@@ -611,7 +611,7 @@ fn home_dir() -> Result<PathBuf> {
     .ok_or_else(|| anyhow!("cannot resolve home directory"))
 }
 
-fn default_gateway_auth_path() -> PathBuf {
+fn default_gateway_auth_path() -> Result<PathBuf> {
   default_auth_path()
 }
 
@@ -710,7 +710,7 @@ mod tests {
 
   #[test]
   fn default_gateway_auth_path_uses_auth_store_default() {
-    assert_eq!(default_gateway_auth_path(), default_auth_path());
+    assert_eq!(default_gateway_auth_path().unwrap(), default_auth_path().unwrap());
   }
 
   #[test]

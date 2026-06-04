@@ -57,7 +57,10 @@ impl AuthStore {
   /// is no longer consulted; callers should run `tokn-router-legacy-config`
   /// before latest auth loading.
   pub fn load(auth_path: Option<&Path>, _config_path: Option<&Path>) -> Result<Self> {
-    let resolved = auth_path.map(PathBuf::from).unwrap_or_else(default_auth_path);
+    let resolved = match auth_path {
+      Some(path) => path.to_path_buf(),
+      None => default_auth_path()?,
+    };
 
     if resolved.exists() {
       return load_from_yaml(&resolved);
@@ -137,10 +140,8 @@ fn load_from_yaml(path: &Path) -> Result<AuthStore> {
 }
 
 /// Default path: the gateway config directory's `auth.yaml`.
-pub fn default_auth_path() -> PathBuf {
-  tokn_config::paths::config_dir()
-    .map(|dir| dir.join(AUTH_FILE_NAME))
-    .unwrap_or_else(|_| PathBuf::from(AUTH_FILE_NAME))
+pub fn default_auth_path() -> Result<PathBuf> {
+  Ok(tokn_config::paths::config_dir()?.join(AUTH_FILE_NAME))
 }
 
 #[cfg(unix)]
@@ -211,7 +212,7 @@ mod tests {
   #[test]
   fn default_auth_path_uses_gateway_config_dir() {
     let expected = tokn_config::paths::config_dir().unwrap().join(AUTH_FILE_NAME);
-    assert_eq!(default_auth_path(), expected);
+    assert_eq!(default_auth_path().unwrap(), expected);
   }
 
   #[test]
