@@ -37,6 +37,14 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
     {
       continue;
     }
+    if policy
+      .accounts
+      .as_ref()
+      .map(|accounts| !accounts.contains(acct.id().as_str()))
+      .unwrap_or(false)
+    {
+      continue;
+    }
     debug!(account = %acct.id(), provider = %provider.info().id, "list_models: querying account");
     match provider.list_models(&s.http).await {
       Ok(v) => {
