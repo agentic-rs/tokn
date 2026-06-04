@@ -1,21 +1,20 @@
 use std::path::PathBuf;
 
-pub const APP_QUALIFIER: &str = "dev";
-pub const APP_ORGANIZATION: &str = "tokn-router";
-pub const APP_NAME: &str = "tokn-router";
+pub const TOKN_DIR: &str = ".tokn";
+pub const ROUTER_DIR: &str = "router";
 
-pub fn project_dirs() -> Option<directories::ProjectDirs> {
-  directories::ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)
+pub fn router_home() -> Option<PathBuf> {
+  directories::BaseDirs::new().map(|dirs| dirs.home_dir().join(TOKN_DIR).join(ROUTER_DIR))
 }
 
 pub fn config_dir() -> Option<PathBuf> {
-  project_dirs().map(|dirs| dirs.config_dir().to_path_buf())
+  router_home()
 }
 
 pub fn data_dir() -> Option<PathBuf> {
-  project_dirs().map(|dirs| dirs.data_dir().to_path_buf())
+  router_home()
 }
 
 pub fn cache_dir() -> Option<PathBuf> {
-  project_dirs().map(|dirs| dirs.cache_dir().to_path_buf())
+  router_home().map(|dir| dir.join("cache"))
 }

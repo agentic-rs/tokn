@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
-use tokn_auth::AuthStore;
+use tokn_auth::{default_auth_path, AuthStore};
 use tokn_core::account::AccountTier;
-use tokn_core::provider::ID_CODEX;
+use tokn_core::provider::{ID_CODEX, ID_OPENAI};
 
 #[derive(Subcommand, Debug)]
 pub enum AgentCmd {
@@ -59,6 +59,13 @@ impl AgentKind {
     match self {
       Self::CodexCli => "codex-cli",
       Self::Opencode => "opencode",
+    }
+  }
+
+  fn default_provider_id(self) -> &'static str {
+    match self {
+      Self::CodexCli => ID_CODEX,
+      Self::Opencode => ID_OPENAI,
     }
   }
 }
@@ -125,6 +132,7 @@ async fn migrate(cfg_path: Option<PathBuf>, args: MigrateArgs) -> Result<()> {
   };
   plan.gateway_config_path = gateway_config_path;
   plan.gateway_auth_path = gateway_auth_path;
+  validate_migration_plan(&plan)?;
 
   print_plan(&plan);
   if !args.yes && !confirm("Apply this migration?")? {
@@ -133,6 +141,16 @@ async fn migrate(cfg_path: Option<PathBuf>, args: MigrateArgs) -> Result<()> {
   }
 
   apply_migration(plan)
+}
+
+fn validate_migration_plan(plan: &MigrationPlan) -> Result<()> {
+  if plan.imported_accounts.is_empty() {
+    bail!(
+      "no credentials were discovered for {}; refusing to rewrite agent config without an account to route",
+      plan.agent.slug()
+    );
+  }
+  Ok(())
 }
 
 fn plan_codex_cli(timestamp: &str, profile: &str, target_base_url: &str) -> Result<MigrationPlan> {
@@ -234,7 +252,7 @@ fn apply_migration(plan: MigrationPlan) -> Result<()> {
   upsert_profile(
     &plan.gateway_config_path,
     &plan.profile,
-    plan.agent.agent_id(),
+    plan.agent,
     &plan.imported_accounts,
   )?;
   mark_created(&mut files, &plan.gateway_auth_path, gateway_auth_existed);
@@ -357,24 +375,23 @@ fn write_edit(edit: &PlannedEdit) -> Result<()> {
   Ok(())
 }
 
-fn upsert_profile(path: &Path, profile: &str, agent_id: &str, accounts: &[Account]) -> Result<()> {
+fn upsert_profile(path: &Path, profile: &str, agent: AgentKind, accounts: &[Account]) -> Result<()> {
   Ok(Config::edit_in_place(path, |doc| {
     let account_ids = accounts.iter().map(|account| account.id.clone()).collect::<Vec<_>>();
     let mut providers = accounts
       .iter()
       .map(|account| account.provider.clone())
       .collect::<Vec<_>>();
+    if providers.is_empty() {
+      providers.push(agent.default_provider_id().to_string());
+    }
     providers.sort();
     providers.dedup();
     let profiles = doc["profiles"].or_insert(toml_edit::table());
     let profile_item = profiles[profile].or_insert(toml_edit::table());
     profile_item["mode"] = toml_edit::value("route");
-    profile_item["agent_id"] = toml_edit::value(agent_id);
-    if providers.is_empty() {
-      profile_item.as_table_mut().map(|table| table.remove("providers"));
-    } else {
-      profile_item["providers"] = array_value(&providers);
-    }
+    profile_item["agent_id"] = toml_edit::value(agent.agent_id());
+    profile_item["providers"] = array_value(&providers);
     if accounts.is_empty() {
       profile_item.as_table_mut().map(|table| table.remove("accounts"));
     } else {
@@ -595,16 +612,11 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 fn default_gateway_auth_path() -> PathBuf {
-  if let Some(dirs) = directories::ProjectDirs::from("", "", "tokn-router") {
-    dirs.config_dir().join("auth.yaml")
-  } else {
-    PathBuf::from("auth.yaml")
-  }
+  default_auth_path()
 }
 
 fn manifest_dir() -> Result<PathBuf> {
-  let dirs = tokn_config::project_dirs()?;
-  Ok(dirs.config_dir().join("agent-migrations"))
+  Ok(tokn_config::paths::config_dir()?.join("agent-migrations"))
 }
 
 fn manifest_path(timestamp: &str, agent: AgentKind) -> Result<PathBuf> {
@@ -694,6 +706,62 @@ mod tests {
       json["providers"]["tokn-router"]["options"]["baseURL"],
       "http://127.0.0.1:4141/opencode/v1"
     );
+  }
+
+  #[test]
+  fn default_gateway_auth_path_uses_auth_store_default() {
+    assert_eq!(default_gateway_auth_path(), default_auth_path());
+  }
+
+  #[test]
+  fn migration_plan_rejects_missing_imported_accounts() {
+    let plan = MigrationPlan {
+      agent: AgentKind::Opencode,
+      timestamp: "20260604T153012Z".into(),
+      profile: "opencode".into(),
+      gateway_config_path: PathBuf::from("config.toml"),
+      gateway_auth_path: PathBuf::from("auth.yaml"),
+      target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
+      imported_accounts: Vec::new(),
+      edits: Vec::new(),
+    };
+
+    let err = validate_migration_plan(&plan).unwrap_err();
+    assert!(err.to_string().contains("no credentials were discovered"));
+  }
+
+  #[test]
+  fn upsert_profile_without_imported_accounts_scopes_to_agent_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    upsert_profile(&path, "opencode", AgentKind::Opencode, &[]).unwrap();
+
+    let (cfg, _) = Config::load(Some(&path)).unwrap();
+    let profile = cfg.profiles.get("opencode").unwrap();
+    assert_eq!(profile.agent_id, Some(tokn_core::AgentId::Opencode));
+    assert_eq!(profile.providers.as_deref(), Some(&[ID_OPENAI.to_string()][..]));
+    assert_eq!(profile.accounts, None);
+  }
+
+  #[test]
+  fn upsert_profile_with_imported_accounts_scopes_to_accounts_and_providers() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let accounts = vec![codex_account_from_auth_json(&serde_json::json!({
+      "tokens": {
+        "refresh_token": "rt"
+      }
+    }))
+    .unwrap()];
+
+    upsert_profile(&path, "codex", AgentKind::CodexCli, &accounts).unwrap();
+
+    let (cfg, _) = Config::load(Some(&path)).unwrap();
+    let profile = cfg.profiles.get("codex").unwrap();
+    assert_eq!(profile.agent_id, Some(tokn_core::AgentId::CodexCli));
+    assert_eq!(profile.providers.as_deref(), Some(&[ID_CODEX.to_string()][..]));
+    assert_eq!(profile.accounts.as_deref(), Some(&["codex-cli".to_string()][..]));
   }
 
   #[test]

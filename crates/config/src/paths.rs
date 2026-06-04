@@ -2,13 +2,19 @@ use super::Result;
 use std::path::PathBuf;
 
 pub fn config_path() -> Result<PathBuf> {
-  let dirs = super::project_dirs()?;
-  Ok(dirs.config_dir().join("config.toml"))
+  Ok(config_dir()?.join("config.toml"))
+}
+
+pub fn config_dir() -> Result<PathBuf> {
+  tokn_core::util::paths::config_dir().ok_or(super::Error::NoProjectDirs)
 }
 
 pub fn data_dir() -> Result<PathBuf> {
-  let dirs = super::project_dirs()?;
-  Ok(dirs.data_dir().to_path_buf())
+  tokn_core::util::paths::data_dir().ok_or(super::Error::NoProjectDirs)
+}
+
+pub fn cache_dir() -> Result<PathBuf> {
+  tokn_core::util::paths::cache_dir().ok_or(super::Error::NoProjectDirs)
 }
 
 pub fn default_usage_db() -> Result<PathBuf> {
@@ -28,6 +34,5 @@ pub fn default_logs_dir() -> Result<PathBuf> {
 }
 
 pub fn default_ca_dir() -> Result<PathBuf> {
-  let dirs = super::project_dirs()?;
-  Ok(dirs.config_dir().join("ca"))
+  Ok(config_dir()?.join("ca"))
 }

@@ -2651,7 +2651,6 @@ name = "tokn-config"
 version = "0.2.0-rc.3"
 dependencies = [
  "anyhow",
- "directories",
  "reqwest",
  "serde",
  "serde_json",

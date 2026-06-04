@@ -198,14 +198,11 @@ fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>
   }
 }
 
-/// Default path: `~/.config/tokn-router/auth.yaml` (or the platform
-/// equivalent via `directories::ProjectDirs`).
+/// Default path: the gateway config directory's `auth.yaml`.
 pub fn default_auth_path() -> PathBuf {
-  if let Some(dirs) = directories::ProjectDirs::from("", "", "tokn-router") {
-    dirs.config_dir().join(AUTH_FILE_NAME)
-  } else {
-    PathBuf::from(AUTH_FILE_NAME)
-  }
+  tokn_config::paths::config_dir()
+    .map(|dir| dir.join(AUTH_FILE_NAME))
+    .unwrap_or_else(|_| PathBuf::from(AUTH_FILE_NAME))
 }
 
 #[cfg(unix)]
@@ -271,6 +268,12 @@ mod tests {
     assert_eq!(loaded.accounts.len(), 2);
     assert_eq!(loaded.accounts[0].id, "a1");
     assert_eq!(loaded.accounts[1].id, "a2");
+  }
+
+  #[test]
+  fn default_auth_path_uses_gateway_config_dir() {
+    let expected = tokn_config::paths::config_dir().unwrap().join(AUTH_FILE_NAME);
+    assert_eq!(default_auth_path(), expected);
   }
 
   #[test]
