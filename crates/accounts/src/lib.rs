@@ -6,6 +6,7 @@
 //! pool to consume.
 
 pub mod affinity;
+pub mod inventory;
 pub mod registry;
 pub mod routing;
 
@@ -13,5 +14,6 @@ mod handle;
 mod pool;
 
 pub use handle::AccountHandle;
+pub use inventory::{AccountInventory, AccountPoolRuleset};
 pub use pool::{AccountPool, EndpointAcquire, Error, Result, SessionAcquire};
 pub use routing::{ResolveError, RouteResolution, RouteResolver, RouteSelector};

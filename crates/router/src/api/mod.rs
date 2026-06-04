@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokn_accounts::registry::Registry as ProviderRegistry;
 use tokn_accounts::routing::RouteResolver;
-use tokn_accounts::AccountPool;
+use tokn_accounts::{AccountInventory, AccountPool, AccountPoolRuleset};
 use tokn_config::ProxyProviderMode;
 use tokn_config::RouteMode;
 use tokn_config::{AgentId, Config, ModelFamily, ProfileConfig};
@@ -32,6 +32,7 @@ use tracing::{Level, Span};
 
 #[derive(Clone)]
 pub struct AppState {
+  pub inventory: Arc<AccountInventory>,
   pub pool: Arc<AccountPool>,
   pub provider_registry: Arc<ProviderRegistry>,
   pub identity: Arc<AccountIdentityResolver>,
@@ -68,17 +69,18 @@ pub struct AppState {
 pub struct RequestPolicyRuntime {
   pub mode: RouteMode,
   pub agent_id: Option<AgentId>,
+  pub ruleset: AccountPoolRuleset,
+  pub pool: Arc<AccountPool>,
   pub route: Arc<RouteResolver>,
   pub model_families: Vec<ModelFamily>,
-  pub providers: Option<Arc<BTreeSet<String>>>,
-  pub accounts: Option<Arc<BTreeSet<String>>>,
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
   pub passthrough_pipeline: Arc<tokn_requests::Pipeline>,
 }
 
 #[derive(Clone)]
 struct PolicyBuildDeps {
-  pool: Arc<AccountPool>,
+  cfg: Config,
+  inventory: Arc<AccountInventory>,
   http: reqwest::Client,
   events: Arc<EventBus>,
 }
@@ -232,12 +234,13 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   validate_policy_accounts(cfg, accounts)?;
   let identity = Arc::new(AccountIdentityResolver::from_accounts(accounts));
   let default_mode = effective_default_mode(cfg);
-  let pool = if accounts.is_empty() && matches!(default_mode, RouteMode::Passthrough) {
-    AccountPool::empty(cfg)
+  let inventory = if accounts.is_empty() && matches!(default_mode, RouteMode::Passthrough) {
+    AccountInventory::empty()
   } else {
     let registry = provider_registry.clone();
-    AccountPool::from_accounts_with(accounts, cfg, move |account| registry.build(account))?
+    AccountInventory::from_accounts_with(accounts, move |account| registry.build(account))?
   };
+  let pool = AccountPool::from_inventory(&inventory, cfg, &AccountPoolRuleset::all())?;
   let default_families = effective_default_families(cfg);
   let route = Arc::new(RouteResolver::new(default_mode, &default_families));
   let http = tokn_core::util::http::build_client(&cfg.proxy.to_http_options())?;
@@ -250,7 +253,8 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     cfg.defaults.accounts.clone(),
     default_families,
     PolicyBuildDeps {
-      pool: pool.clone(),
+      cfg: cfg.clone(),
+      inventory: inventory.clone(),
       http: http.clone(),
       events: events.clone(),
     },
@@ -262,7 +266,8 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
       profile,
       default_policy.as_ref(),
       PolicyBuildDeps {
-        pool: pool.clone(),
+        cfg: cfg.clone(),
+        inventory: inventory.clone(),
         http: http.clone(),
         events: events.clone(),
       },
@@ -272,6 +277,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
   let proxy_switch_pipeline = build_proxy_switch_pipeline(pool.clone(), http.clone(), events.clone());
   Ok(AppState {
+    inventory,
     pool,
     provider_registry,
     identity,
@@ -315,12 +321,14 @@ fn build_profile_runtime(
   let agent_id = profile.agent_id.clone().or_else(|| default_policy.agent_id.clone());
   let providers = profile.providers.clone().or_else(|| {
     default_policy
+      .ruleset
       .providers
       .as_ref()
       .map(|providers| providers.iter().cloned().collect())
   });
   let accounts = profile.accounts.clone().or_else(|| {
     default_policy
+      .ruleset
       .accounts
       .as_ref()
       .map(|accounts| accounts.iter().cloned().collect())
@@ -342,30 +350,27 @@ fn build_policy_runtime(
   deps: PolicyBuildDeps,
 ) -> Arc<RequestPolicyRuntime> {
   let route = Arc::new(RouteResolver::new(mode, &families));
-  let providers = providers.map(|ids| Arc::new(ids.into_iter().collect::<BTreeSet<_>>()));
-  let accounts = accounts.map(|ids| Arc::new(ids.into_iter().collect::<BTreeSet<_>>()));
+  let ruleset = AccountPoolRuleset::from_filters(providers, accounts);
+  let pool = AccountPool::from_inventory(&deps.inventory, &deps.cfg, &ruleset)
+    .expect("building account pool from validated inventory must not fail");
   Arc::new(RequestPolicyRuntime {
     mode,
     agent_id,
+    ruleset,
+    pool: pool.clone(),
     route: route.clone(),
     model_families: families,
-    providers: providers.clone(),
-    accounts: accounts.clone(),
-    request_pipeline: build_request_pipeline_with_providers(
+    request_pipeline: build_request_pipeline(
       format!("router-{name}"),
-      deps.pool.clone(),
+      pool.clone(),
       route.clone(),
-      providers.clone(),
-      accounts.clone(),
       deps.http.clone(),
       deps.events.clone(),
     ),
-    passthrough_pipeline: build_passthrough_pipeline_with_providers(
+    passthrough_pipeline: build_passthrough_pipeline(
       format!("router-{name}-passthrough"),
-      deps.pool,
+      pool,
       route,
-      providers,
-      accounts,
       deps.http,
       deps.events,
     ),
@@ -464,12 +469,10 @@ fn validate_policy_accounts(cfg: &Config, accounts: &[AccountConfig]) -> Result<
 /// endpoints. The pipeline shares `AppState.events` so persistence
 /// (`RequestEventHandler`) receives `StageEvent::*` and `RecordEvent::*`
 /// automatically.
-fn build_request_pipeline_with_providers(
+fn build_request_pipeline(
   name: impl Into<smol_str::SmolStr>,
   pool: Arc<AccountPool>,
   route: Arc<RouteResolver>,
-  providers: Option<Arc<BTreeSet<String>>>,
-  accounts: Option<Arc<BTreeSet<String>>>,
   http: reqwest::Client,
   events: Arc<EventBus>,
 ) -> Arc<tokn_requests::Pipeline> {
@@ -477,7 +480,7 @@ fn build_request_pipeline_with_providers(
     DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
     PoolAccountSelector, PoolResolve,
   };
-  let selector = Arc::new(PoolAccountSelector::new_filtered(pool, route, providers, accounts));
+  let selector = Arc::new(PoolAccountSelector::new(pool, route));
   let profile = tokn_requests::Profile::full(
     name,
     Arc::new(DefaultExtract),
@@ -502,12 +505,10 @@ fn build_request_pipeline_with_providers(
 ///
 /// Mirrors the behaviour of the legacy `crates/router/src/relay/passthrough.rs`
 /// helpers but reuses the standard pipeline plumbing.
-fn build_passthrough_pipeline_with_providers(
+fn build_passthrough_pipeline(
   name: impl Into<smol_str::SmolStr>,
   pool: Arc<AccountPool>,
   route: Arc<RouteResolver>,
-  providers: Option<Arc<BTreeSet<String>>>,
-  accounts: Option<Arc<BTreeSet<String>>>,
   http: reqwest::Client,
   events: Arc<EventBus>,
 ) -> Arc<tokn_requests::Pipeline> {
@@ -515,7 +516,7 @@ fn build_passthrough_pipeline_with_providers(
     DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
     PoolAccountSelector, PoolResolve,
   };
-  let selector = Arc::new(PoolAccountSelector::new_filtered(pool, route, providers, accounts));
+  let selector = Arc::new(PoolAccountSelector::new(pool, route));
   let profile = tokn_requests::Profile::full(
     name,
     Arc::new(PassthroughExtract),
@@ -595,6 +596,7 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use axum::routing::get;
   use bytes::Bytes;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
   use tower::ServiceExt;
 
@@ -603,6 +605,10 @@ mod tests {
   }
 
   fn zai_account_with_id(id: &str) -> AccountCfg {
+    zai_account_with_id_and_base(id, None)
+  }
+
+  fn zai_account_with_id_and_base(id: &str, base_url: Option<String>) -> AccountCfg {
     AccountCfg {
       id: id.into(),
       provider: "zai-coding-plan".into(),
@@ -610,7 +616,7 @@ mod tests {
       tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
-      base_url: None,
+      base_url,
       headers: Default::default(),
       auth_type: None,
       username: None,
@@ -784,6 +790,7 @@ mod tests {
     );
     let accounts = vec![zai_account()];
     let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    assert_eq!(state.profiles.get("openai-only").unwrap().pool.len(), 0);
     let app = router(state);
 
     let req = Request::builder()
@@ -797,6 +804,69 @@ mod tests {
     assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
   }
 
+  #[tokio::test]
+  async fn profile_models_uses_prefiltered_policy_pool() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_url = format!("http://{addr}");
+    let (req_tx, req_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let n = stream.read(&mut buf).await.unwrap();
+      buf.truncate(n);
+      let body = br#"{"object":"list","data":[{"id":"policy-only-model","object":"model"}]}"#;
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+      stream.flush().await.unwrap();
+      let _ = req_tx.send(buf);
+    });
+
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        accounts: Some(vec!["local".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![
+      zai_account_with_id_and_base("local", Some(upstream_url)),
+      zai_account_with_id("excluded"),
+    ];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    assert_eq!(state.pool.len(), 2);
+    assert_eq!(state.profiles.get("work").unwrap().pool.len(), 1);
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/work/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let ids = json["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["policy-only-model"]);
+
+    let upstream_req = req_rx.await.unwrap();
+    let upstream_req = String::from_utf8_lossy(&upstream_req);
+    assert!(upstream_req.starts_with("GET /models "));
+    server.await.unwrap();
+  }
+
   #[test]
   fn profile_without_providers_inherits_unrestricted_defaults() {
     let mut cfg = Config::default();
@@ -805,8 +875,9 @@ mod tests {
     let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
 
     let work = state.profiles.get("work").expect("work profile");
-    assert!(state.default_policy.providers.is_none());
-    assert!(work.providers.is_none());
+    assert!(state.default_policy.ruleset.providers.is_none());
+    assert!(work.ruleset.providers.is_none());
+    assert_eq!(work.pool.len(), 1);
   }
 
   #[test]
@@ -826,10 +897,11 @@ mod tests {
     let providers = state
       .profiles
       .get("zai-only")
-      .and_then(|profile| profile.providers.as_deref())
+      .and_then(|profile| profile.ruleset.providers.as_ref())
       .expect("profile should have provider filter");
     assert!(providers.contains("zai-coding-plan"));
     assert!(!providers.contains("openai"));
+    assert_eq!(state.profiles.get("zai-only").unwrap().pool.len(), 1);
   }
 
   #[test]
@@ -849,10 +921,20 @@ mod tests {
     let profile_accounts = state
       .profiles
       .get("agent")
-      .and_then(|profile| profile.accounts.as_deref())
+      .and_then(|profile| profile.ruleset.accounts.as_ref())
       .expect("profile should have account filter");
     assert!(profile_accounts.contains("acct"));
     assert!(!profile_accounts.contains("other"));
+    let account_ids = state
+      .profiles
+      .get("agent")
+      .unwrap()
+      .pool
+      .all()
+      .iter()
+      .map(|account| account.id())
+      .collect::<Vec<_>>();
+    assert_eq!(account_ids, vec!["acct".to_string()]);
   }
 
   #[test]
