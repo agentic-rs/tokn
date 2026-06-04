@@ -23,28 +23,12 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
   let mut seen: HashSet<String> = HashSet::new();
   let mut last_err: Option<String> = None;
 
-  let accounts = s.pool.all();
+  let accounts = policy.pool.all();
   let span = tracing::Span::current();
   span.record("accounts", accounts.len());
 
   for acct in accounts {
     let provider = acct.provider.clone();
-    if policy
-      .providers
-      .as_ref()
-      .map(|providers| !providers.contains(provider.info().id.as_str()))
-      .unwrap_or(false)
-    {
-      continue;
-    }
-    if policy
-      .accounts
-      .as_ref()
-      .map(|accounts| !accounts.contains(acct.id().as_str()))
-      .unwrap_or(false)
-    {
-      continue;
-    }
     debug!(account = %acct.id(), provider = %provider.info().id, "list_models: querying account");
     match provider.list_models(&s.http).await {
       Ok(v) => {

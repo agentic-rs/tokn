@@ -17,52 +17,17 @@ use crate::pipeline::error::{PipelineError, RequestsError};
 use crate::pipeline::stages::Extracted;
 use async_trait::async_trait;
 use smol_str::SmolStr;
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokn_accounts::{AccountPool, EndpointAcquire, RouteResolver};
 
 pub struct PoolAccountSelector {
   pool: Arc<AccountPool>,
   resolver: Arc<RouteResolver>,
-  allowed_providers: Option<Arc<BTreeSet<String>>>,
-  allowed_accounts: Option<Arc<BTreeSet<String>>>,
 }
 
 impl PoolAccountSelector {
   pub fn new(pool: Arc<AccountPool>, resolver: Arc<RouteResolver>) -> Self {
-    Self {
-      pool,
-      resolver,
-      allowed_providers: None,
-      allowed_accounts: None,
-    }
-  }
-
-  pub fn new_with_providers(
-    pool: Arc<AccountPool>,
-    resolver: Arc<RouteResolver>,
-    allowed_providers: Option<Arc<BTreeSet<String>>>,
-  ) -> Self {
-    Self {
-      pool,
-      resolver,
-      allowed_providers,
-      allowed_accounts: None,
-    }
-  }
-
-  pub fn new_filtered(
-    pool: Arc<AccountPool>,
-    resolver: Arc<RouteResolver>,
-    allowed_providers: Option<Arc<BTreeSet<String>>>,
-    allowed_accounts: Option<Arc<BTreeSet<String>>>,
-  ) -> Self {
-    Self {
-      pool,
-      resolver,
-      allowed_providers,
-      allowed_accounts,
-    }
+    Self { pool, resolver }
   }
 }
 
@@ -85,13 +50,10 @@ impl AccountSelector for PoolAccountSelector {
       .resolve(extracted.model.as_str(), extracted.route_mode_hint.as_deref())
       .map_err(|e| PipelineError::permanent(Stage::Resolve, RequestsError::Resolve { source: e }))?;
 
-    match self.pool.acquire_for_route_filtered(
-      extracted.session_id.as_deref(),
-      &route,
-      request_endpoint,
-      self.allowed_providers.as_deref(),
-      self.allowed_accounts.as_deref(),
-    ) {
+    match self
+      .pool
+      .acquire_for_route(extracted.session_id.as_deref(), &route, request_endpoint)
+    {
       EndpointAcquire::Account { acct, endpoint } => {
         let provider_id = SmolStr::from(acct.provider.info().id.as_str());
         let account_id = SmolStr::from(acct.id());
