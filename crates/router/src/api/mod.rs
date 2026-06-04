@@ -596,6 +596,7 @@ mod tests {
   use axum::http::{Request, StatusCode};
   use axum::routing::get;
   use bytes::Bytes;
+  use tokio::io::{AsyncReadExt, AsyncWriteExt};
   use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
   use tower::ServiceExt;
 
@@ -604,6 +605,10 @@ mod tests {
   }
 
   fn zai_account_with_id(id: &str) -> AccountCfg {
+    zai_account_with_id_and_base(id, None)
+  }
+
+  fn zai_account_with_id_and_base(id: &str, base_url: Option<String>) -> AccountCfg {
     AccountCfg {
       id: id.into(),
       provider: "zai-coding-plan".into(),
@@ -611,7 +616,7 @@ mod tests {
       tier: tokn_core::account::AccountTier::Active,
       tags: Vec::new(),
       label: None,
-      base_url: None,
+      base_url,
       headers: Default::default(),
       auth_type: None,
       username: None,
@@ -785,6 +790,7 @@ mod tests {
     );
     let accounts = vec![zai_account()];
     let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    assert_eq!(state.profiles.get("openai-only").unwrap().pool.len(), 0);
     let app = router(state);
 
     let req = Request::builder()
@@ -796,6 +802,69 @@ mod tests {
     let resp = app.oneshot(req).await.unwrap();
 
     assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+  }
+
+  #[tokio::test]
+  async fn profile_models_uses_prefiltered_policy_pool() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_url = format!("http://{addr}");
+    let (req_tx, req_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let n = stream.read(&mut buf).await.unwrap();
+      buf.truncate(n);
+      let body = br#"{"object":"list","data":[{"id":"policy-only-model","object":"model"}]}"#;
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+      stream.flush().await.unwrap();
+      let _ = req_tx.send(buf);
+    });
+
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        accounts: Some(vec!["local".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![
+      zai_account_with_id_and_base("local", Some(upstream_url)),
+      zai_account_with_id("excluded"),
+    ];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    assert_eq!(state.pool.len(), 2);
+    assert_eq!(state.profiles.get("work").unwrap().pool.len(), 1);
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/work/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let ids = json["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["policy-only-model"]);
+
+    let upstream_req = req_rx.await.unwrap();
+    let upstream_req = String::from_utf8_lossy(&upstream_req);
+    assert!(upstream_req.starts_with("GET /models "));
+    server.await.unwrap();
   }
 
   #[test]

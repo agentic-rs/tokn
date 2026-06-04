@@ -744,4 +744,61 @@ mod tests {
       assert_eq!(acct.id(), "a2");
     }
   }
+
+  #[test]
+  fn ruleset_restricts_pool_to_allowed_provider_ids() {
+    let p = pool();
+    let inventory = AccountInventory::from_handles_for_test(p.all().to_vec());
+    let filtered = AccountPool::from_inventory(
+      &inventory,
+      &Config::default(),
+      &AccountPoolRuleset {
+        providers: Some(["provider-b".to_string()].into_iter().collect()),
+        accounts: None,
+      },
+    )
+    .unwrap();
+    let route = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("model-b", None)
+      .unwrap();
+
+    let EndpointAcquire::Account { acct, .. } = filtered.acquire_for_route(None, &route, Endpoint::ChatCompletions)
+    else {
+      panic!("expected provider-b account");
+    };
+    assert_eq!(acct.provider.info().id, "provider-b");
+    assert_eq!(acct.id(), "b1");
+    assert_eq!(filtered.len(), 1);
+  }
+
+  #[test]
+  fn pools_built_from_inventory_share_account_health() {
+    let p = pool();
+    let inventory = AccountInventory::from_handles_for_test(p.all().to_vec());
+    let all = AccountPool::from_inventory(&inventory, &Config::default(), &AccountPoolRuleset::all()).unwrap();
+    let a1_only = AccountPool::from_inventory(
+      &inventory,
+      &Config::default(),
+      &AccountPoolRuleset {
+        providers: None,
+        accounts: Some(["a1".to_string()].into_iter().collect()),
+      },
+    )
+    .unwrap();
+    let route = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("model-a", None)
+      .unwrap();
+
+    let EndpointAcquire::Account { acct: a1, .. } = a1_only.acquire_for_route(None, &route, Endpoint::ChatCompletions)
+    else {
+      panic!("expected a1 account");
+    };
+    assert_eq!(a1.id(), "a1");
+    a1.mark_failure(Duration::from_secs(60));
+
+    let EndpointAcquire::Account { acct, .. } = all.acquire_for_route(None, &route, Endpoint::ChatCompletions) else {
+      panic!("expected fallback healthy account from shared inventory");
+    };
+    assert_eq!(acct.id(), "a2");
+  }
 }
