@@ -85,7 +85,7 @@ fn account_from_auth_json(json: &Value) -> Option<Account> {
     .and_then(Value::as_str)
     .filter(|s| !s.trim().is_empty());
   Some(Account {
-    id: "codex-cli".into(),
+    id: "codex-cli-codex".into(),
     provider: ID_CODEX.into(),
     enabled: true,
     tier: AccountTier::Active,
@@ -128,7 +128,7 @@ mod tests {
       }
     }))
     .unwrap();
-    assert_eq!(account.id, "codex-cli");
+    assert_eq!(account.id, "codex-cli-codex");
     assert_eq!(account.provider, "codex");
     assert_eq!(account.provider_account_id.as_deref(), Some("acc"));
     assert_eq!(account.refresh_token.unwrap().expose(), "rt");

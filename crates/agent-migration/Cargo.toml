@@ -13,6 +13,7 @@ readme = "../../README.md"
 tokn-auth = { workspace = true }
 tokn-config = { workspace = true }
 tokn-core = { workspace = true }
+tokn-provider-copilot = { workspace = true }
 tokn-provider-openai = { workspace = true }
 anyhow = { workspace = true }
 directories = { workspace = true }

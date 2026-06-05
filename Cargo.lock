@@ -2624,6 +2624,7 @@ dependencies = [
  "time",
  "tokn-auth",
  "tokn-core",
+ "tokn-provider-copilot",
  "tokn-provider-openai",
  "tokn-router-config",
  "toml",

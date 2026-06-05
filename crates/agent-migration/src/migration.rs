@@ -331,7 +331,9 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let gateway_config_path = dir.path().join("config.toml");
     let agent_home = dir.path().join("agent-home");
+    let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
     let opencode_config_path = agent_home.join(".config/opencode/opencode.json");
+    std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
     std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
     std::fs::write(
       &gateway_config_path,
@@ -343,15 +345,20 @@ port = 4141
     )
     .unwrap();
     std::fs::write(
+      &opencode_auth_path,
+      serde_json::json!({
+        "openai": {
+          "type": "api",
+          "key": "sk-test"
+        }
+      })
+      .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
       &opencode_config_path,
       serde_json::json!({
-        "providers": {
-          "openai": {
-            "options": {
-              "apiKey": "sk-test"
-            }
-          }
-        }
+        "mcp": {}
       })
       .to_string(),
     )
@@ -418,7 +425,7 @@ port = 4141
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let accounts = vec![Account {
-      id: "codex-cli".into(),
+      id: "codex-cli-codex".into(),
       provider: tokn_core::provider::ID_CODEX.into(),
       enabled: true,
       tier: tokn_core::account::AccountTier::Active,
@@ -450,7 +457,7 @@ port = 4141
       profile.providers.as_deref(),
       Some(&[tokn_core::provider::ID_CODEX.to_string()][..])
     );
-    assert_eq!(profile.accounts.as_deref(), Some(&["codex-cli".to_string()][..]));
+    assert_eq!(profile.accounts.as_deref(), Some(&["codex-cli-codex".to_string()][..]));
   }
 
   #[test]
@@ -606,7 +613,7 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       profile: "codex".into(),
       target_base_url: "http://127.0.0.1:4141/codex/v1".into(),
-      imported_account_ids: vec!["codex-cli".into()],
+      imported_account_ids: vec!["codex-cli-codex".into()],
       files: vec![FileBackup {
         original: original.clone(),
         backup: Some(backup),
@@ -670,7 +677,7 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       profile: "codex".into(),
       target_base_url: "http://127.0.0.1:4141/codex/v1".into(),
-      imported_account_ids: vec!["codex-cli".into()],
+      imported_account_ids: vec!["codex-cli-codex".into()],
       files: Vec::new(),
     };
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
