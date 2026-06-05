@@ -2613,6 +2613,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokn-agent-migration"
+version = "0.2.0-rc.3"
+dependencies = [
+ "anyhow",
+ "directories",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokn-auth",
+ "tokn-core",
+ "tokn-provider-openai",
+ "tokn-router-config",
+ "toml",
+ "toml_edit",
+]
+
+[[package]]
 name = "tokn-auth"
 version = "0.2.0-rc.3"
 dependencies = [
@@ -2767,6 +2785,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokn-agent-migration",
  "tokn-auth",
  "tokn-catalogue",
  "tokn-convert",

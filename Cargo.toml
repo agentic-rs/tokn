@@ -5,6 +5,7 @@ members = [
   "crates/core",
   "crates/config",
   "crates/legacy-config",
+  "crates/agent-migration",
   "crates/auth",
   "crates/catalogue",
   "crates/convert",
@@ -41,6 +42,7 @@ tokn-mock-server = { version = "0.2.0-rc.3", path = "crates/mock-server" }
 tokn-core = { version = "0.2.0-rc.3", path = "crates/core" }
 tokn-config = { package = "tokn-router-config", version = "0.2.0-rc.3", path = "crates/config" }
 tokn-router-legacy-config = { version = "0.2.0-rc.3", path = "crates/legacy-config" }
+tokn-agent-migration = { version = "0.2.0-rc.3", path = "crates/agent-migration" }
 tokn-auth = { version = "0.2.0-rc.3", path = "crates/auth" }
 tokn-catalogue = { version = "0.2.0-rc.3", path = "crates/catalogue" }
 tokn-convert = { version = "0.2.0-rc.3", path = "crates/convert" }
