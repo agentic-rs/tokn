@@ -818,19 +818,29 @@ mod tests {
     assert!(err.to_string().contains("no accounts configured"));
   }
 
-  fn empty_passthrough_state(body_max_bytes: usize) -> AppState {
+  fn passthrough_state(
+    body_max_bytes: usize,
+    default_mode: RouteMode,
+    proxy_provider_mode: ProxyProviderMode,
+    profile_name: &str,
+  ) -> AppState {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
-    cfg.defaults.mode = RouteMode::Passthrough;
+    cfg.defaults.mode = default_mode;
     cfg.db.enabled = true;
     cfg.db.body_max_bytes = body_max_bytes;
-    build_state(&cfg, &[], Arc::new(EventBus::noop())).expect("passthrough state should build")
+    cfg
+      .proxy_mode
+      .provider_modes
+      .insert("openai".into(), proxy_provider_mode);
+    cfg.profiles.insert(profile_name.into(), ProfileConfig::default());
+    build_state(&cfg, &[zai_account()], Arc::new(EventBus::noop())).expect("test state should build")
   }
 
   #[tokio::test]
   async fn admin_config_reload_swaps_live_state() {
-    let initial = empty_passthrough_state(1);
-    let replacement = empty_passthrough_state(2);
+    let initial = passthrough_state(1, RouteMode::Passthrough, ProxyProviderMode::Passthrough, "old-profile");
+    let replacement = passthrough_state(2, RouteMode::Fuzzy, ProxyProviderMode::Switch, "new-profile");
     let live = LiveAppState::new(initial);
     let live_for_reload = live.clone();
     assert!(live
@@ -862,7 +872,16 @@ mod tests {
       .unwrap();
 
     assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(live.current().body_max_bytes, 2);
+    let current = live.current();
+    assert_eq!(current.body_max_bytes, 2);
+    assert_eq!(current.default_policy.mode, RouteMode::Fuzzy);
+    assert_eq!(current.route.resolve_mode(None).unwrap(), RouteMode::Fuzzy);
+    assert_eq!(
+      current.proxy_provider_modes.get("openai"),
+      Some(&ProxyProviderMode::Switch)
+    );
+    assert!(current.profiles.contains_key("new-profile"));
+    assert!(!current.profiles.contains_key("old-profile"));
     let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "reloaded");
@@ -873,7 +892,12 @@ mod tests {
 
   #[tokio::test]
   async fn admin_config_reload_failure_keeps_live_state() {
-    let live = LiveAppState::new(empty_passthrough_state(1));
+    let live = LiveAppState::new(passthrough_state(
+      1,
+      RouteMode::Passthrough,
+      ProxyProviderMode::Passthrough,
+      "old-profile",
+    ));
     assert!(live
       .set_admin_reloader(AdminReloader::new(|| async { Err("invalid config".into()) }))
       .is_ok());
@@ -891,7 +915,15 @@ mod tests {
       .unwrap();
 
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(live.current().body_max_bytes, 1);
+    let current = live.current();
+    assert_eq!(current.body_max_bytes, 1);
+    assert_eq!(current.default_policy.mode, RouteMode::Passthrough);
+    assert_eq!(current.route.resolve_mode(None).unwrap(), RouteMode::Passthrough);
+    assert_eq!(
+      current.proxy_provider_modes.get("openai"),
+      Some(&ProxyProviderMode::Passthrough)
+    );
+    assert!(current.profiles.contains_key("old-profile"));
     let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["type"], "reload_failed");
