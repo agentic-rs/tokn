@@ -148,4 +148,41 @@ provider = "github-copilot"
       "version: 1\naccounts: []\n"
     );
   }
+
+  #[test]
+  fn migrate_home_noops_without_legacy_accounts() {
+    let missing = tempfile::tempdir().unwrap();
+    assert!(migrate_home(missing.path()).unwrap().is_empty());
+
+    let empty = tempfile::tempdir().unwrap();
+    fs::write(empty.path().join("config.toml"), "[server]\nport = 4141\n").unwrap();
+    assert!(migrate_home(empty.path()).unwrap().is_empty());
+    assert!(!empty.path().join("auth.yaml").exists());
+  }
+
+  #[test]
+  fn load_legacy_accounts_reports_missing_empty_and_present() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.toml");
+    assert!(load_legacy_accounts(&missing).unwrap().is_none());
+
+    let empty = dir.path().join("empty.toml");
+    fs::write(&empty, "[server]\nport = 4141\n").unwrap();
+    assert!(load_legacy_accounts(&empty).unwrap().is_none());
+
+    let present = dir.path().join("present.toml");
+    fs::write(
+      &present,
+      r#"
+[[accounts]]
+id = "legacy"
+provider = "github-copilot"
+enabled = true
+"#,
+    )
+    .unwrap();
+    let accounts = load_legacy_accounts(&present).unwrap().unwrap();
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(accounts[0].id, "legacy");
+  }
 }

@@ -18,7 +18,6 @@ pub struct LegacyHome {
 pub enum LocationAction {
   CopyFile { from: PathBuf, to: PathBuf },
   CopyDir { from: PathBuf, to: PathBuf },
-  SkipExisting { path: PathBuf },
 }
 
 const LEGACY_PROJECT_QUALIFIER: &str = "dev";
@@ -103,6 +102,18 @@ mod tests {
   use super::*;
 
   #[test]
+  fn discover_reports_legacy_home_candidates() {
+    let homes = discover();
+
+    assert!(homes
+      .iter()
+      .any(|home| matches!(home.kind, LegacyHomeKind::ProjectDirs)));
+    assert!(homes
+      .iter()
+      .any(|home| matches!(home.kind, LegacyHomeKind::AccidentalToknRouter)));
+  }
+
+  #[test]
   fn migrate_copies_missing_files_and_skips_existing() {
     let old = tempfile::tempdir().unwrap();
     let target = tempfile::tempdir().unwrap();
@@ -121,5 +132,55 @@ mod tests {
     assert_eq!(fs::read_to_string(target.path().join("auth.yaml")).unwrap(), "new");
     assert_eq!(actions.len(), 1);
     assert!(matches!(actions[0], LocationAction::CopyFile { .. }));
+  }
+
+  #[test]
+  fn migrate_home_copies_nested_directories() {
+    let old = tempfile::tempdir().unwrap();
+    let target = tempfile::tempdir().unwrap();
+    fs::create_dir_all(old.path().join("requests/nested")).unwrap();
+    fs::write(old.path().join("requests/nested/day.db"), "db").unwrap();
+
+    let home = LegacyHome {
+      kind: LegacyHomeKind::ProjectDirs,
+      path: old.path().to_path_buf(),
+    };
+    let mut actions = Vec::new();
+    migrate_home(&home, target.path(), &mut actions).unwrap();
+
+    assert_eq!(
+      fs::read_to_string(target.path().join("requests/nested/day.db")).unwrap(),
+      "db"
+    );
+    assert!(matches!(actions.as_slice(), [LocationAction::CopyDir { .. }]));
+  }
+
+  #[test]
+  fn migrate_home_noops_for_missing_or_target_home() {
+    let missing = tempfile::tempdir().unwrap();
+    let missing_path = missing.path().join("missing");
+    let target = tempfile::tempdir().unwrap();
+    let mut actions = Vec::new();
+
+    migrate_home(
+      &LegacyHome {
+        kind: LegacyHomeKind::ProjectDirs,
+        path: missing_path,
+      },
+      target.path(),
+      &mut actions,
+    )
+    .unwrap();
+    migrate_home(
+      &LegacyHome {
+        kind: LegacyHomeKind::ProjectDirs,
+        path: target.path().to_path_buf(),
+      },
+      target.path(),
+      &mut actions,
+    )
+    .unwrap();
+
+    assert!(actions.is_empty());
   }
 }
