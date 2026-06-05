@@ -7,13 +7,20 @@ pub mod response;
 
 use crate::api::identity::AccountIdentityResolver;
 use anyhow::Result;
+use arc_swap::ArcSwap;
 use axum::http::{HeaderMap, HeaderName, Request, Response};
 use axum::middleware::{self, Next};
+use axum::response::IntoResponse;
+use axum::response::Response as AxumResponse;
 use axum::routing::{get, post};
+use axum::Json;
 use axum::Router;
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
 use tokn_accounts::registry::Registry as ProviderRegistry;
 use tokn_accounts::routing::RouteResolver;
@@ -29,6 +36,71 @@ const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy =
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
+
+type ReloadFuture = Pin<Box<dyn Future<Output = std::result::Result<ReloadReport, String>> + Send>>;
+
+#[derive(Clone)]
+pub struct AdminReloader {
+  reload: Arc<dyn Fn() -> ReloadFuture + Send + Sync>,
+}
+
+impl AdminReloader {
+  pub fn new<F, Fut>(reload: F) -> Self
+  where
+    F: Fn() -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = std::result::Result<ReloadReport, String>> + Send + 'static,
+  {
+    Self {
+      reload: Arc::new(move || Box::pin(reload())),
+    }
+  }
+
+  async fn reload(&self) -> std::result::Result<ReloadReport, String> {
+    (self.reload)().await
+  }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ReloadReport {
+  pub status: &'static str,
+  pub generation: u64,
+  pub accounts: usize,
+  pub route_mode: &'static str,
+}
+
+#[derive(Clone)]
+pub struct LiveAppState {
+  current: Arc<ArcSwap<AppState>>,
+  admin_reloader: Arc<OnceLock<AdminReloader>>,
+}
+
+impl LiveAppState {
+  pub fn new(state: AppState) -> Self {
+    Self {
+      current: Arc::new(ArcSwap::from_pointee(state)),
+      admin_reloader: Arc::new(OnceLock::new()),
+    }
+  }
+
+  pub fn current(&self) -> AppState {
+    self.current.load_full().as_ref().clone()
+  }
+
+  pub fn swap(&self, state: AppState) {
+    self.current.store(Arc::new(state));
+  }
+
+  pub fn set_admin_reloader(&self, reloader: AdminReloader) -> std::result::Result<(), AdminReloader> {
+    self.admin_reloader.set(reloader)
+  }
+
+  async fn reload(&self) -> std::result::Result<ReloadReport, String> {
+    let Some(reloader) = self.admin_reloader.get() else {
+      return Err("admin config reload is not configured".into());
+    };
+    reloader.reload().await
+  }
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -140,6 +212,10 @@ async fn track_request(req: Request<axum::body::Body>, next: Next) -> Response<a
 }
 
 pub fn router(state: AppState) -> Router {
+  router_live(LiveAppState::new(state))
+}
+
+pub fn router_live(state: LiveAppState) -> Router {
   let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
 
   // TraceLayer is customised so the per-request span carries `request_id`
@@ -209,6 +285,7 @@ pub fn router(state: AppState) -> Router {
     .route("/v1/responses", post(endpoints::responses))
     .route("/v1/messages", post(endpoints::messages))
     .merge(profile_routes)
+    .route("/admin/config/reload", post(admin_config_reload))
     .route("/healthz", get(health))
     .with_state(state)
     // Layers run outermost-first on request, innermost-first on response.
@@ -224,6 +301,36 @@ pub fn router(state: AppState) -> Router {
 
 async fn health() -> &'static str {
   "ok"
+}
+
+async fn admin_config_reload(axum::extract::State(state): axum::extract::State<LiveAppState>) -> AxumResponse {
+  match state.reload().await {
+    Ok(report) => Json(report).into_response(),
+    Err(message) if message == "admin config reload is not configured" => (
+      axum::http::StatusCode::NOT_FOUND,
+      Json(serde_json::json!({
+        "error": {
+          "message": message,
+          "type": "not_found",
+          "code": 404,
+          "request_id": serde_json::Value::Null,
+        }
+      })),
+    )
+      .into_response(),
+    Err(message) => (
+      axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+      Json(serde_json::json!({
+        "error": {
+          "message": message,
+          "type": "reload_failed",
+          "code": 422,
+          "request_id": serde_json::Value::Null,
+        }
+      })),
+    )
+      .into_response(),
+  }
 }
 
 pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
@@ -709,6 +816,86 @@ mod tests {
     assert!(res.is_err(), "non-passthrough mode should require accounts");
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("no accounts configured"));
+  }
+
+  fn empty_passthrough_state(body_max_bytes: usize) -> AppState {
+    let mut cfg = Config::default();
+    cfg.server.route_mode = RouteMode::Passthrough;
+    cfg.defaults.mode = RouteMode::Passthrough;
+    cfg.db.enabled = true;
+    cfg.db.body_max_bytes = body_max_bytes;
+    build_state(&cfg, &[], Arc::new(EventBus::noop())).expect("passthrough state should build")
+  }
+
+  #[tokio::test]
+  async fn admin_config_reload_swaps_live_state() {
+    let initial = empty_passthrough_state(1);
+    let replacement = empty_passthrough_state(2);
+    let live = LiveAppState::new(initial);
+    let live_for_reload = live.clone();
+    assert!(live
+      .set_admin_reloader(AdminReloader::new(move || {
+        let live = live_for_reload.clone();
+        let replacement = replacement.clone();
+        async move {
+          live.swap(replacement);
+          Ok(ReloadReport {
+            status: "reloaded",
+            generation: 1,
+            accounts: 0,
+            route_mode: "passthrough",
+          })
+        }
+      }))
+      .is_ok());
+    let app = router_live(live.clone());
+
+    let resp = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/admin/config/reload")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(live.current().body_max_bytes, 2);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "reloaded");
+    assert_eq!(json["generation"], 1);
+    assert_eq!(json["accounts"], 0);
+    assert_eq!(json["route_mode"], "passthrough");
+  }
+
+  #[tokio::test]
+  async fn admin_config_reload_failure_keeps_live_state() {
+    let live = LiveAppState::new(empty_passthrough_state(1));
+    assert!(live
+      .set_admin_reloader(AdminReloader::new(|| async { Err("invalid config".into()) }))
+      .is_ok());
+    let app = router_live(live.clone());
+
+    let resp = app
+      .oneshot(
+        Request::builder()
+          .method("POST")
+          .uri("/admin/config/reload")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(live.current().body_max_bytes, 1);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["type"], "reload_failed");
+    assert_eq!(json["error"]["message"], "invalid config");
   }
 
   #[test]
