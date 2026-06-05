@@ -104,7 +104,21 @@ fn print_plan(plan: &MigrationPlan) {
   } else {
     println!("imported_accounts:");
     for account in &plan.imported_accounts {
-      println!("  - {} ({})", account.id, account.provider);
+      println!(
+        "  - id: {} provider: {} credential: {}",
+        account.id,
+        account.provider,
+        credential_summary(account)
+      );
+      if let Some(label) = account.label.as_deref() {
+        println!("    label: {label}");
+      }
+      if let Some(username) = account.username.as_deref() {
+        println!("    username: {username}");
+      }
+      if let Some(provider_account_id) = account.provider_account_id.as_deref() {
+        println!("    provider_account_id: {provider_account_id}");
+      }
     }
   }
   println!("edits:");
@@ -112,6 +126,18 @@ fn print_plan(plan: &MigrationPlan) {
   println!("  - {}", plan.gateway_auth_path.display());
   for edit in &plan.edits {
     println!("  - {}", edit.path.display());
+  }
+}
+
+fn credential_summary(account: &tokn_config::Account) -> &'static str {
+  if account.refresh_token.is_some() {
+    "refresh_token"
+  } else if account.api_key.is_some() {
+    "api_key"
+  } else if account.access_token.is_some() {
+    "access_token"
+  } else {
+    "unknown"
   }
 }
 
