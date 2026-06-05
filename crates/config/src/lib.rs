@@ -1,7 +1,6 @@
 pub mod error;
 pub mod paths;
 
-use directories::ProjectDirs;
 pub use error::{Error, Result};
 pub use tokn_core::account::{Account, AccountConfig, AccountState, AccountTier, AuthType};
 pub use tokn_core::AgentId;
@@ -600,10 +599,6 @@ fn is_proxy_host(s: &str) -> bool {
       .all(|b| matches!(b, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*'))
 }
 
-pub fn project_dirs() -> Result<ProjectDirs> {
-  tokn_core::util::paths::project_dirs().ok_or(Error::NoProjectDirs)
-}
-
 fn write_atomic(path: &Path, contents: &str) -> Result<()> {
   let tmp = path.with_extension("toml.tmp");
   std::fs::write(&tmp, contents).context(error::WriteSnafu { path: tmp.clone() })?;
@@ -623,6 +618,21 @@ fn write_atomic(path: &Path, contents: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn default_paths_use_tokn_router_home() {
+    let home = tokn_core::util::paths::router_home().expect("home directory should resolve");
+
+    assert_eq!(paths::config_dir().unwrap(), home);
+    assert_eq!(paths::config_path().unwrap(), home.join("config.toml"));
+    assert_eq!(paths::data_dir().unwrap(), home);
+    assert_eq!(paths::cache_dir().unwrap(), home.join("cache"));
+    assert_eq!(paths::default_usage_db().unwrap(), home.join("usage.db"));
+    assert_eq!(paths::default_sessions_db().unwrap(), home.join("sessions.db"));
+    assert_eq!(paths::default_requests_dir().unwrap(), home.join("requests"));
+    assert_eq!(paths::default_logs_dir().unwrap(), home.join("logs"));
+    assert_eq!(paths::default_ca_dir().unwrap(), home.join("ca"));
+  }
 
   #[test]
   fn proxy_mode_defaults_to_route_mode() {

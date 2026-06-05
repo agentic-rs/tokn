@@ -1,8 +1,8 @@
 [package]
-name = "tokn-auth"
+name = "tokn-router-legacy-config"
 version.workspace = true
 edition.workspace = true
-description = "Authentication provider interfaces and credential storage for tokn providers"
+description = "Legacy location and schema migration helpers for tokn-router config"
 documentation.workspace = true
 homepage.workspace = true
 repository.workspace = true
@@ -13,14 +13,9 @@ tokn-core = { workspace = true }
 tokn-config = { workspace = true }
 
 anyhow = { workspace = true }
-async-trait = { workspace = true }
-reqwest = { workspace = true }
+directories = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 serde_yaml = "0.9"
-thiserror = { workspace = true }
-time = { workspace = true }
-tokio = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 

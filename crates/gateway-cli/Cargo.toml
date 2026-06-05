@@ -20,6 +20,7 @@ path = "src/main.rs"
 [dependencies]
 tokn-core = { workspace = true }
 tokn-config = { workspace = true }
+tokn-router-legacy-config = { workspace = true }
 tokn-catalogue = { workspace = true }
 tokn-convert = { workspace = true }
 tokn-router = { workspace = true }

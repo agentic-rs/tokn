@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use std::path::Path;
 use std::path::PathBuf;
 
 use crate::config::Config;
@@ -25,7 +26,7 @@ pub use error::{Error, Result};
 #[derive(Parser, Debug)]
 #[command(name = "tokn-router", about = "GitHub Copilot -> OpenAI-compatible API")]
 pub struct Cli {
-  /// Path to config file (default: ~/.config/tokn-router/config.toml)
+  /// Path to config file (default: ~/.tokn/router/config.toml)
   #[arg(long, global = true)]
   pub config: Option<PathBuf>,
 
@@ -63,6 +64,7 @@ pub enum Cmd {
 impl Cli {
   pub async fn run(self) -> Result<()> {
     let cfg_path = self.config.clone();
+    prepare_default_config_home(cfg_path.as_deref())?;
 
     // Initialize logging *before* dispatching: load just enough config to
     // pick up the [logging] section, then install the real subscriber. If
@@ -91,6 +93,20 @@ impl Cli {
     };
     r.map_err(Error::from)
   }
+}
+
+fn prepare_default_config_home(cfg_path: Option<&Path>) -> anyhow::Result<()> {
+  if cfg_path.is_some() {
+    return Ok(());
+  }
+  let Some(home) = tokn_core::util::paths::router_home() else {
+    return Ok(());
+  };
+  let report = tokn_router_legacy_config::ensure_latest_home(&home)?;
+  if !report.is_empty() {
+    eprintln!("migrated legacy tokn-router config into {}", home.display());
+  }
+  Ok(())
 }
 
 /// Read-only subcommands keep stdout uncluttered by suppressing
