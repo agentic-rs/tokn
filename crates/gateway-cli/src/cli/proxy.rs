@@ -32,6 +32,12 @@ pub enum ProxyCmd {
   Env(EnvArgs),
   /// Enter a shell with proxy + CA env vars set
   Shell(ShellArgs),
+  /// Run Codex with proxy + CA env vars set
+  Codex(AgentProxyArgs),
+  /// Run opencode with proxy + CA env vars set
+  Opencode(AgentProxyArgs),
+  /// Run pi with proxy + CA env vars set
+  Pi(AgentProxyArgs),
   /// Inspect or regenerate the local proxy CA
   Ca(CaArgs),
 }
@@ -67,6 +73,16 @@ pub struct ShellArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct AgentProxyArgs {
+  /// Run via npx instead of a local executable.
+  #[arg(long)]
+  pub npx: bool,
+  /// Arguments forwarded to the agent command.
+  #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+  pub args: Vec<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct CaArgs {
   #[command(subcommand)]
   pub cmd: CaCmd,
@@ -97,6 +113,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
     ProxyCmd::Start(args) => start(cfg_path, args, passthrough).await,
     ProxyCmd::Env(args) => env(cfg_path, args).await,
     ProxyCmd::Shell(args) => shell(cfg_path, args).await,
+    ProxyCmd::Codex(args) => agent(cfg_path, AgentKind::Codex, args).await,
+    ProxyCmd::Opencode(args) => agent(cfg_path, AgentKind::Opencode, args).await,
+    ProxyCmd::Pi(args) => agent(cfg_path, AgentKind::Pi, args).await,
     ProxyCmd::Ca(args) => ca(cfg_path, args).await,
   }
 }
@@ -209,6 +228,23 @@ async fn shell(cfg_path: Option<PathBuf>, args: ShellArgs) -> Result<()> {
   Ok(())
 }
 
+async fn agent(cfg_path: Option<PathBuf>, kind: AgentKind, args: AgentProxyArgs) -> Result<()> {
+  let env = resolved_proxy_env(cfg_path.as_deref())?;
+  let spec = agent_command_spec(kind, args.npx, args.args);
+  println!("Running {} with proxy env: {}", kind.name(), spec.display());
+  println!("HTTPS_PROXY={}", env.get("HTTPS_PROXY").unwrap_or(""));
+  println!("SSL_CERT_FILE={}", env.get("SSL_CERT_FILE").unwrap_or(""));
+
+  let mut cmd = Command::new(&spec.program);
+  cmd.args(&spec.args);
+  cmd.envs(env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+  let status = cmd.status().with_context(|| format!("launch {}", spec.display()))?;
+  if !status.success() {
+    anyhow::bail!("{} exited with status {status}", kind.name());
+  }
+  Ok(())
+}
+
 async fn ca(cfg_path: Option<PathBuf>, args: CaArgs) -> Result<()> {
   let (cfg, _) = Config::load(cfg_path.as_deref())?;
   let ca_dir = cfg.proxy_mode.resolved_ca_dir()?;
@@ -295,6 +331,63 @@ struct ProxyEnv {
 impl ProxyEnv {
   fn get(&self, key: &str) -> Option<&str> {
     self.vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+  }
+}
+
+#[derive(Copy, Clone, Debug)]
+enum AgentKind {
+  Codex,
+  Opencode,
+  Pi,
+}
+
+impl AgentKind {
+  fn name(self) -> &'static str {
+    match self {
+      Self::Codex => "codex",
+      Self::Opencode => "opencode",
+      Self::Pi => "pi",
+    }
+  }
+
+  fn npx_package(self) -> &'static str {
+    match self {
+      Self::Codex => "@openai/codex",
+      Self::Opencode => "opencode-ai",
+      Self::Pi => "@earendil-works/pi-coding-agent",
+    }
+  }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct CommandSpec {
+  program: String,
+  args: Vec<String>,
+}
+
+impl CommandSpec {
+  fn display(&self) -> String {
+    std::iter::once(self.program.as_str())
+      .chain(self.args.iter().map(String::as_str))
+      .collect::<Vec<_>>()
+      .join(" ")
+  }
+}
+
+fn agent_command_spec(kind: AgentKind, npx: bool, forwarded_args: Vec<String>) -> CommandSpec {
+  if npx {
+    CommandSpec {
+      program: "npx".into(),
+      args: ["-y".into(), kind.npx_package().into()]
+        .into_iter()
+        .chain(forwarded_args)
+        .collect(),
+    }
+  } else {
+    CommandSpec {
+      program: kind.name().into(),
+      args: forwarded_args,
+    }
   }
 }
 
@@ -389,6 +482,35 @@ mod tests {
     assert_eq!(
       client_no_proxy_value(&configured),
       "localhost,127.0.0.1,::1,internal.local"
+    );
+  }
+
+  #[test]
+  fn local_agent_command_uses_agent_binary_and_forwards_args() {
+    assert_eq!(
+      agent_command_spec(AgentKind::Codex, false, vec!["--model".into(), "gpt-5".into()]),
+      CommandSpec {
+        program: "codex".into(),
+        args: vec!["--model".into(), "gpt-5".into()],
+      }
+    );
+  }
+
+  #[test]
+  fn npx_agent_command_uses_agent_package_and_forwards_args() {
+    assert_eq!(
+      agent_command_spec(AgentKind::Opencode, true, vec!["run".into()]),
+      CommandSpec {
+        program: "npx".into(),
+        args: vec!["-y".into(), "opencode-ai".into(), "run".into()],
+      }
+    );
+    assert_eq!(
+      agent_command_spec(AgentKind::Pi, true, Vec::new()),
+      CommandSpec {
+        program: "npx".into(),
+        args: vec!["-y".into(), "@earendil-works/pi-coding-agent".into()],
+      }
     );
   }
 }
