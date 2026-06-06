@@ -640,6 +640,41 @@ mod tests {
   }
 
   #[test]
+  fn proxied_request_snapshot_keeps_old_policy_while_new_request_uses_reloaded_policy() {
+    let live = LiveAppState::new(state_with_provider_modes(&[("openai", ProxyProviderMode::Passthrough)]));
+    let old_request_state = live.current();
+    live.swap(state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+
+    assert_eq!(
+      resolve_proxy_route_mode(
+        &old_request_state,
+        old_request_state.route.as_ref(),
+        &headers,
+        "api.openai.com",
+        "/v1/chat/completions"
+      ),
+      Ok(RouteMode::Passthrough),
+      "already-captured proxy request state should keep old provider policy"
+    );
+
+    let new_request_state = live.current();
+    assert_eq!(
+      resolve_proxy_route_mode(
+        &new_request_state,
+        new_request_state.route.as_ref(),
+        &headers,
+        "api.openai.com",
+        "/v1/chat/completions"
+      ),
+      Ok(RouteMode::Switch),
+      "new proxy request state should use reloaded provider policy"
+    );
+  }
+
+  #[test]
   fn unknown_provider_falls_back_to_global_proxy_mode() {
     let state = state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]);
     let route = RouteResolver::new(RouteMode::Passthrough, &[]);

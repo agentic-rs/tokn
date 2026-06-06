@@ -700,7 +700,7 @@ mod tests {
   use crate::config::{Account as AccountCfg, Config, ProfileConfig};
   use crate::util::secret::Secret;
   use axum::body::{to_bytes, Body};
-  use axum::http::{Request, StatusCode};
+  use axum::http::{Method, Request, StatusCode};
   use axum::routing::get;
   use bytes::Bytes;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -739,6 +739,126 @@ mod tests {
       last_refresh: None,
       settings: toml::Table::new(),
     }
+  }
+
+  fn core_account(cfg: AccountCfg) -> AccountConfig {
+    let s = toml::to_string(&cfg).expect("serialize account");
+    toml::from_str(&s).expect("parse core account")
+  }
+
+  struct ControlledUpstream {
+    base_url: String,
+    arrived: tokio::sync::oneshot::Receiver<()>,
+    release: tokio::sync::oneshot::Sender<()>,
+    request: tokio::sync::oneshot::Receiver<Vec<u8>>,
+    task: tokio::task::JoinHandle<()>,
+  }
+
+  async fn controlled_chat_upstream(label: &'static str) -> ControlledUpstream {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let (arrived_tx, arrived) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = tokio::sync::oneshot::channel();
+    let (request_tx, request) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let req = read_http_request(&mut stream).await;
+      let _ = arrived_tx.send(());
+      let _ = release_rx.await;
+      let body = chat_completion_body(label);
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body.as_bytes()).await.unwrap();
+      stream.flush().await.unwrap();
+      let _ = request_tx.send(req);
+    });
+    ControlledUpstream {
+      base_url,
+      arrived,
+      release,
+      request,
+      task,
+    }
+  }
+
+  async fn read_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    let mut buf = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+      let n = stream.read(&mut chunk).await.unwrap();
+      assert!(n > 0, "connection closed before request was complete");
+      buf.extend_from_slice(&chunk[..n]);
+      let Some(header_end) = find_header_end(&buf) else {
+        continue;
+      };
+      let headers = String::from_utf8_lossy(&buf[..header_end]);
+      let content_len = headers
+        .lines()
+        .find_map(|line| {
+          line
+            .strip_prefix("Content-Length:")
+            .or_else(|| line.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(0);
+      if buf.len() >= header_end + 4 + content_len {
+        return buf;
+      }
+    }
+  }
+
+  fn find_header_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|window| window == b"\r\n\r\n")
+  }
+
+  fn chat_completion_body(label: &str) -> String {
+    serde_json::json!({
+      "id": format!("chatcmpl-{label}"),
+      "object": "chat.completion",
+      "created": 0,
+      "model": "glm-4.7",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": label,
+        },
+        "finish_reason": "stop",
+      }],
+      "usage": {
+        "prompt_tokens": 1,
+        "completion_tokens": 1,
+        "total_tokens": 2,
+      },
+    })
+    .to_string()
+  }
+
+  fn routed_state_for_upstream(base_url: String) -> AppState {
+    let mut cfg = Config::default();
+    cfg.defaults.mode = RouteMode::Route;
+    build_state(
+      &cfg,
+      &[core_account(zai_account_with_id_and_base("routed", Some(base_url)))],
+      Arc::new(EventBus::noop()),
+    )
+    .expect("routed test state should build")
+  }
+
+  fn chat_request(request_id: &str) -> Request<Body> {
+    Request::builder()
+      .method(Method::POST)
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .header("x-request-id", request_id)
+      .body(Body::from(Bytes::from_static(
+        br#"{"model":"glm-4.7","messages":[{"role":"user","content":"hi"}],"stream":false}"#,
+      )))
+      .unwrap()
   }
 
   /// Build the same layer stack the real router uses, around a stub handler.
@@ -928,6 +1048,92 @@ mod tests {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["type"], "reload_failed");
     assert_eq!(json["error"]["message"], "invalid config");
+  }
+
+  #[tokio::test]
+  async fn routed_requests_keep_in_flight_policy_and_new_requests_use_reloaded_policy() {
+    let old_upstream = controlled_chat_upstream("old").await;
+    let new_upstream = controlled_chat_upstream("new").await;
+    let live = LiveAppState::new(routed_state_for_upstream(old_upstream.base_url.clone()));
+    let replacement = routed_state_for_upstream(new_upstream.base_url.clone());
+    let live_for_reload = live.clone();
+    assert!(live
+      .set_admin_reloader(AdminReloader::new(move || {
+        let live = live_for_reload.clone();
+        let replacement = replacement.clone();
+        async move {
+          live.swap(replacement);
+          Ok(ReloadReport {
+            status: "reloaded",
+            generation: 1,
+            accounts: 1,
+            route_mode: "route",
+          })
+        }
+      }))
+      .is_ok());
+    let app = router_live(live);
+
+    let old_request = {
+      let app = app.clone();
+      tokio::spawn(async move { app.oneshot(chat_request("old-request")).await.unwrap() })
+    };
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), old_upstream.arrived)
+      .await
+      .expect("old request should reach old upstream before reload")
+      .unwrap();
+    let reload = app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .method(Method::POST)
+          .uri("/admin/config/reload")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(reload.status(), StatusCode::OK);
+    let _ = to_bytes(reload.into_body(), usize::MAX).await.unwrap();
+
+    old_upstream.release.send(()).unwrap();
+    let old_response = old_request.await.unwrap();
+    assert_eq!(old_response.status(), StatusCode::OK);
+    let old_body = to_bytes(old_response.into_body(), usize::MAX).await.unwrap();
+    assert!(
+      String::from_utf8_lossy(&old_body).contains("chatcmpl-old"),
+      "old in-flight request should finish with old upstream response"
+    );
+    old_upstream.task.await.unwrap();
+    let old_raw_request = String::from_utf8_lossy(&old_upstream.request.await.unwrap()).to_string();
+    assert!(
+      old_raw_request.contains(r#""model":"glm-4.7""#),
+      "old upstream should receive the pre-reload request"
+    );
+
+    let new_request = {
+      let app = app.clone();
+      tokio::spawn(async move { app.oneshot(chat_request("new-request")).await.unwrap() })
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(2), new_upstream.arrived)
+      .await
+      .expect("new request should reach reloaded upstream")
+      .unwrap();
+    new_upstream.release.send(()).unwrap();
+    let new_response = new_request.await.unwrap();
+    assert_eq!(new_response.status(), StatusCode::OK);
+    let new_body = to_bytes(new_response.into_body(), usize::MAX).await.unwrap();
+    assert!(
+      String::from_utf8_lossy(&new_body).contains("chatcmpl-new"),
+      "new request should finish with reloaded upstream response"
+    );
+    new_upstream.task.await.unwrap();
+    let new_raw_request = String::from_utf8_lossy(&new_upstream.request.await.unwrap()).to_string();
+    assert!(
+      new_raw_request.contains(r#""model":"glm-4.7""#),
+      "new upstream should receive the post-reload request"
+    );
   }
 
   #[test]
