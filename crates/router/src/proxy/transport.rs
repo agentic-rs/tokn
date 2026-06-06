@@ -5,7 +5,7 @@ use super::{
   extract_proxy_auth_mode, rewrite_target, split_authority, HostPolicy, ProxyCa, ProxyPlainHttpHandler,
   ProxyPlainHttpRequest, ProxyPlainHttpResponse,
 };
-use crate::api::{error::ApiError, AppState};
+use crate::api::{error::ApiError, AppState, LiveAppState};
 use crate::pipeline::request_header_extract;
 use anyhow::{Context, Result};
 use axum::body::Body;
@@ -39,12 +39,11 @@ const PROXY_GET_HELP: &str = "tokn-router proxy is running. Configure HTTP_PROXY
 pub(super) async fn handle_client(
   stream: TcpStream,
   peer: SocketAddr,
-  state: Arc<AppState>,
+  state: Arc<LiveAppState>,
   router: Router,
   ca: Arc<ProxyCa>,
   host_policy: HostPolicy,
   outbound_proxy: Arc<ConnectProxy>,
-  route_resolver: Arc<RouteResolver>,
   plain_http_handler: Option<ProxyPlainHttpHandler>,
 ) -> Result<()> {
   let mut reader = BufReader::new(stream);
@@ -122,19 +121,7 @@ pub(super) async fn handle_client(
   if intercept {
     stream.write_all(CONNECT_OK).await?;
     stream.flush().await?;
-    intercept_tls(
-      stream,
-      peer,
-      local,
-      &host,
-      port,
-      state,
-      router,
-      ca,
-      route_resolver,
-      proxy_route_mode,
-    )
-    .await
+    intercept_tls(stream, peer, local, &host, port, state, router, ca, proxy_route_mode).await
   } else {
     tunnel(stream, &host, port, outbound_proxy.as_ref()).await
   }
@@ -186,10 +173,9 @@ async fn intercept_tls(
   local: SocketAddr,
   host: &str,
   port: u16,
-  state: Arc<AppState>,
+  state: Arc<LiveAppState>,
   router: Router,
   ca: Arc<ProxyCa>,
-  route_resolver: Arc<RouteResolver>,
   proxy_route_mode: Option<String>,
 ) -> Result<()> {
   let resolver = Arc::new(DynamicResolver {
@@ -210,7 +196,6 @@ async fn intercept_tls(
     route_intercepted_request(
       state.clone(),
       router.clone(),
-      route_resolver.clone(),
       peer,
       local,
       host.clone(),
@@ -228,9 +213,8 @@ async fn intercept_tls(
 
 #[allow(clippy::too_many_arguments)]
 async fn route_intercepted_request(
-  state: Arc<AppState>,
+  live_state: Arc<LiveAppState>,
   router: Router,
-  route_resolver: Arc<RouteResolver>,
   peer: SocketAddr,
   local: SocketAddr,
   intercepted_host: String,
@@ -238,13 +222,18 @@ async fn route_intercepted_request(
   mut req: Request<hyper::body::Incoming>,
   proxy_route_mode: Option<String>,
 ) -> Result<Response<Body>, std::convert::Infallible> {
+  let state = live_state.current();
+
   // WebSocket connections are not supported by this proxy. Detect them early and return an error response.
   if is_websocket_upgrade_headers(req.headers()) {
     return Ok(websocket_upgrade_response());
   }
 
   if let Some(ref mode) = proxy_route_mode {
-    if !req.headers().contains_key(RouteResolver::mode_header()) {
+    if !req
+      .headers()
+      .contains_key(tokn_accounts::routing::RouteResolver::mode_header())
+    {
       if let Ok(val) = HeaderValue::from_str(mode) {
         req
           .headers_mut()
@@ -268,8 +257,8 @@ async fn route_intercepted_request(
   let method = req.method().clone();
 
   let route_mode = resolve_proxy_route_mode(
-    state.as_ref(),
-    route_resolver.as_ref(),
+    &state,
+    state.route.as_ref(),
     req.headers(),
     &host,
     req.uri().path_and_query().map(|v| v.as_str()).unwrap_or(&path),
@@ -280,7 +269,7 @@ async fn route_intercepted_request(
     let response = match resolved_mode {
       Ok(RouteMode::Passthrough) => {
         super::passthrough_pipeline::proxy_passthrough_via_pipeline(
-          state.as_ref(),
+          &state,
           &intercepted_host,
           intercepted_port,
           "https",
@@ -292,7 +281,7 @@ async fn route_intercepted_request(
       }
       Ok(RouteMode::Switch) => {
         super::passthrough_pipeline::proxy_switch_via_pipeline(
-          state.as_ref(),
+          &state,
           &intercepted_host,
           intercepted_port,
           "https",
@@ -647,6 +636,41 @@ mod tests {
     assert_eq!(
       resolve_proxy_route_mode(&state, &route, &headers, "api.openai.com", "/v1/chat/completions"),
       Ok(RouteMode::Switch)
+    );
+  }
+
+  #[test]
+  fn proxied_request_snapshot_keeps_old_policy_while_new_request_uses_reloaded_policy() {
+    let live = LiveAppState::new(state_with_provider_modes(&[("openai", ProxyProviderMode::Passthrough)]));
+    let old_request_state = live.current();
+    live.swap(state_with_provider_modes(&[("openai", ProxyProviderMode::Switch)]));
+
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("api.openai.com"));
+
+    assert_eq!(
+      resolve_proxy_route_mode(
+        &old_request_state,
+        old_request_state.route.as_ref(),
+        &headers,
+        "api.openai.com",
+        "/v1/chat/completions"
+      ),
+      Ok(RouteMode::Passthrough),
+      "already-captured proxy request state should keep old provider policy"
+    );
+
+    let new_request_state = live.current();
+    assert_eq!(
+      resolve_proxy_route_mode(
+        &new_request_state,
+        new_request_state.route.as_ref(),
+        &headers,
+        "api.openai.com",
+        "/v1/chat/completions"
+      ),
+      Ok(RouteMode::Switch),
+      "new proxy request state should use reloaded provider policy"
     );
   }
 

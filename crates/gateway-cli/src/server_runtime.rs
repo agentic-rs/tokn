@@ -97,19 +97,6 @@ pub fn build_state_for_route_mode(
   build_state(&cfg, accounts, events)
 }
 
-pub fn state_with_route_mode(
-  state: &tokn_router::api::AppState,
-  route_mode: RouteMode,
-  cfg: &Config,
-) -> tokn_router::api::AppState {
-  let mut state = state.clone();
-  state.route = Arc::new(tokn_router::accounts::routing::RouteResolver::new(
-    route_mode,
-    &cfg.model_families,
-  ));
-  state
-}
-
 pub fn resolve_bind_addr(host: &str, port: u16, insecure_allow_remote: bool) -> Result<SocketAddr> {
   ensure_bind_host(host, insecure_allow_remote)?;
   Ok(format!("{host}:{port}").parse()?)

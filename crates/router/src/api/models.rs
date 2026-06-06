@@ -1,5 +1,5 @@
 use super::error::ApiError;
-use super::{AppState, RequestPolicyRuntime};
+use super::{AppState, LiveAppState, RequestPolicyRuntime};
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
@@ -13,7 +13,8 @@ use tracing::{debug, instrument};
 /// `"x_tokn_router"` so OpenAI-shape stays intact for legacy clients while
 /// richer consumers (TUIs, dashboards) can pick up capabilities/costs/limits.
 #[instrument(name = "list_models", skip_all, fields(accounts = tracing::field::Empty, models = tracing::field::Empty))]
-pub async fn list_models(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
+pub async fn list_models(State(s): State<LiveAppState>) -> Result<Json<Value>, ApiError> {
+  let s = s.current();
   let policy = s.default_policy.clone();
   list_models_for_policy(s, policy).await
 }
@@ -104,9 +105,10 @@ fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider)
 
 /// Profile-prefixed variant: `/{profile}/v1/models`
 pub async fn list_models_with_profile(
-  State(s): State<AppState>,
+  State(s): State<LiveAppState>,
   Path(profile): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+  let s = s.current();
   let policy = s
     .profiles
     .get(&profile)

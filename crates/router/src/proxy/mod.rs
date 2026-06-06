@@ -3,7 +3,7 @@ mod connect_proxy;
 pub mod passthrough_pipeline;
 mod transport;
 
-use crate::api::AppState;
+use crate::api::{AppState, LiveAppState};
 use anyhow::{Context, Result};
 use axum::http::Method;
 use axum::Router;
@@ -85,12 +85,18 @@ pub async fn serve<F>(state: AppState, options: ProxyOptions, shutdown: F) -> Re
 where
   F: Future<Output = ()> + Send,
 {
+  serve_live(LiveAppState::new(state), options, shutdown).await
+}
+
+pub async fn serve_live<F>(state: LiveAppState, options: ProxyOptions, shutdown: F) -> Result<()>
+where
+  F: Future<Output = ()> + Send,
+{
   let listener = TcpListener::bind(options.addr)
     .await
     .with_context(|| format!("bind {}", options.addr))?;
   let ca = Arc::new(load_or_generate_ca(&options.ca_dir, false)?);
   let state = Arc::new(state);
-  let route_resolver = state.route.clone();
   let router = proxy_router((*state).clone());
   let host_policy = HostPolicy::new(&options);
   let outbound_proxy = Arc::new(connect_proxy::ConnectProxy::from_options(&options.outbound_proxy));
@@ -110,10 +116,9 @@ where
         let state = state.clone();
         let host_policy = host_policy.clone();
         let outbound_proxy = outbound_proxy.clone();
-        let route_resolver = route_resolver.clone();
         let plain_http_handler = plain_http_handler.clone();
         tokio::spawn(async move {
-          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, route_resolver, plain_http_handler).await {
+          if let Err(err) = handle_client(stream, peer, state, router, ca, host_policy, outbound_proxy, plain_http_handler).await {
             if is_benign_disconnect(&err) {
               tracing::debug!(%peer, error = %err, "proxy connection closed by peer");
             } else {
@@ -186,8 +191,8 @@ pub(crate) fn rewrite_target(host: &str, path: &str, method: &Method) -> Option<
   Registry::builtin().rewrite_target(host, method.as_str(), path)
 }
 
-fn proxy_router(state: AppState) -> Router {
-  crate::api::router(state)
+fn proxy_router(state: LiveAppState) -> Router {
+  crate::api::router_live(state)
 }
 
 fn split_authority(authority: &str) -> Result<(String, u16)> {

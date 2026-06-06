@@ -1,5 +1,5 @@
 use super::error::ApiError;
-use super::{AppState, RequestPolicyRuntime};
+use super::{AppState, LiveAppState, RequestPolicyRuntime};
 use crate::pipeline::{request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser};
 use axum::body::Bytes;
 use axum::extract::{Path, State};
@@ -150,10 +150,11 @@ fn apply_endpoint_compat_defaults(
   ),
 )]
 pub async fn chat_completions(
-  State(state): State<AppState>,
+  State(state): State<LiveAppState>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = state.default_policy.clone();
   handle(state, policy, &ChatParser, inbound, body).await
 }
@@ -168,7 +169,12 @@ pub async fn chat_completions(
     initiator = tracing::field::Empty,
   ),
 )]
-pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
+pub async fn responses(
+  State(state): State<LiveAppState>,
+  inbound: HeaderMap,
+  body: Bytes,
+) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = state.default_policy.clone();
   handle(state, policy, &ResponsesParser, inbound, body).await
 }
@@ -183,7 +189,12 @@ pub async fn responses(State(state): State<AppState>, inbound: HeaderMap, body: 
     initiator = tracing::field::Empty,
   ),
 )]
-pub async fn messages(State(state): State<AppState>, inbound: HeaderMap, body: Bytes) -> Result<Response, ApiError> {
+pub async fn messages(
+  State(state): State<LiveAppState>,
+  inbound: HeaderMap,
+  body: Bytes,
+) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = state.default_policy.clone();
   handle(state, policy, &MessagesParser, inbound, body).await
 }
@@ -191,31 +202,34 @@ pub async fn messages(State(state): State<AppState>, inbound: HeaderMap, body: B
 // --- Profile-prefixed variants ---
 
 pub async fn chat_completions_with_profile(
-  State(state): State<AppState>,
+  State(state): State<LiveAppState>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = profile_policy(&state, &profile)?;
   handle(state, policy, &ChatParser, inbound, body).await
 }
 
 pub async fn responses_with_profile(
-  State(state): State<AppState>,
+  State(state): State<LiveAppState>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = profile_policy(&state, &profile)?;
   handle(state, policy, &ResponsesParser, inbound, body).await
 }
 
 pub async fn messages_with_profile(
-  State(state): State<AppState>,
+  State(state): State<LiveAppState>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
+  let state = state.current();
   let policy = profile_policy(&state, &profile)?;
   handle(state, policy, &MessagesParser, inbound, body).await
 }
