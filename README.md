@@ -131,9 +131,11 @@ tokn-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var
 tokn-router account list|remove ID|show ID
 tokn-router headers [--account ID]   # inspect resolved Copilot identity headers
 tokn-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--insecure-allow-remote]
-tokn-router proxy [start] [--port N] [--route-mode MODE] [--no-proxy] [--insecure-allow-remote]
+tokn-router proxy start [--port N] [--route-mode MODE] [--passthrough] [--no-proxy] [--insecure-allow-remote]
 tokn-router proxy env [--shell sh|fish|pwsh]
 tokn-router proxy shell [--shell /path/to/shell]
+tokn-router proxy run [--npx] codex|opencode|pi [ARGS...]
+tokn-router proxy exec COMMAND [ARGS...]
 tokn-router proxy ca path|show|regenerate
 tokn-router usage [--since 24h] [--account ID]
 tokn-router config get|set|unset KEY [--account ID] [--add]
@@ -151,7 +153,7 @@ pool.
 First run generates a local CA under `~/.config/tokn-router/ca/`:
 
 ```sh
-tokn-router proxy
+tokn-router proxy start
 tokn-router proxy ca show
 ```
 
@@ -169,6 +171,18 @@ tokn-router proxy shell
 
 `proxy shell` uses `SHELL` when available and falls back to `/bin/sh`. Pass
 `--shell /path/to/shell` to override detection.
+
+To run a coding agent with proxy + CA variables injected:
+
+```sh
+tokn-router proxy run --npx pi --mode json --print hello
+```
+
+To run any command with the same proxy environment:
+
+```sh
+tokn-router proxy exec curl https://api.openai.com/v1/models
+```
 
 The emitted env block sets:
 
