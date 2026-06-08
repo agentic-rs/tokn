@@ -60,12 +60,16 @@ port = 4141
 
 [defaults]
 mode = "route"
+# Required when mode is "passthrough" or "switch"; optional otherwise.
+# default_provider_id = "github-copilot"
 # Omit providers to allow every globally enabled provider.
 # providers = ["github-copilot", "openai"]
 
 [profiles.coding]
 mode = "fuzzy"
 agent_id = "codex-cli"
+# Overrides [defaults].default_provider_id when present.
+# default_provider_id = "github-copilot"
 providers = ["github-copilot"]
 # Optional: restrict this profile to specific account ids.
 # accounts = ["personal"]
@@ -114,7 +118,9 @@ ids; if omitted, the profile inherits the default provider set. Profile
 `accounts` entries must be configured account ids; if omitted, the profile
 inherits the default account set. Profile
 `model_families`, when present, replaces default model families for that
-profile.
+profile. API `passthrough` and `switch` policies require `default_provider_id`
+so the router can target a deterministic provider while preserving request
+bytes.
 
 The downstream client may also send `X-Initiator: user|agent` per request,
 which overrides the auto-classifier and the config setting.

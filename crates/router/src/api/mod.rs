@@ -122,6 +122,10 @@ pub struct AppState {
   /// (no JSON parse, no cross-endpoint translation) while still
   /// emitting `RecordEvent::*` for observability and persistence.
   pub passthrough_pipeline: Arc<tokn_requests::Pipeline>,
+  /// Shared `tokn-requests` pipeline used when router-owned JSON
+  /// endpoints run in [`RouteMode::Switch`]. The body stays verbatim,
+  /// but inbound auth is stripped before provider auth is injected.
+  pub switch_pipeline: Arc<tokn_requests::Pipeline>,
   /// Shared `tokn-requests` pipeline used by the MITM proxy passthrough
   /// path. Unlike [`Self::passthrough_pipeline`], this variant does **no
   /// account resolution** — the intercepted TLS host is the upstream
@@ -141,12 +145,14 @@ pub struct AppState {
 pub struct RequestPolicyRuntime {
   pub mode: RouteMode,
   pub agent_id: Option<AgentId>,
+  pub default_provider_id: Option<String>,
   pub ruleset: AccountPoolRuleset,
   pub pool: Arc<AccountPool>,
   pub route: Arc<RouteResolver>,
   pub model_families: Vec<ModelFamily>,
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
   pub passthrough_pipeline: Arc<tokn_requests::Pipeline>,
+  pub switch_pipeline: Arc<tokn_requests::Pipeline>,
 }
 
 #[derive(Clone)]
@@ -155,6 +161,15 @@ struct PolicyBuildDeps {
   inventory: Arc<AccountInventory>,
   http: reqwest::Client,
   events: Arc<EventBus>,
+}
+
+struct PolicySpec {
+  mode: RouteMode,
+  agent_id: Option<AgentId>,
+  default_provider_id: Option<String>,
+  providers: Option<Vec<String>>,
+  accounts: Option<Vec<String>>,
+  families: Vec<ModelFamily>,
 }
 
 /// Header name used for request ids. Honors inbound `x-request-id` if present.
@@ -334,6 +349,25 @@ async fn admin_config_reload(axum::extract::State(state): axum::extract::State<L
 }
 
 pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
+  build_state_inner(cfg, accounts, events, StateBuildKind::Api)
+}
+
+pub fn build_proxy_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBus>) -> Result<AppState> {
+  build_state_inner(cfg, accounts, events, StateBuildKind::Proxy)
+}
+
+#[derive(Clone, Copy)]
+enum StateBuildKind {
+  Api,
+  Proxy,
+}
+
+fn build_state_inner(
+  cfg: &Config,
+  accounts: &[AccountConfig],
+  events: Arc<EventBus>,
+  kind: StateBuildKind,
+) -> Result<AppState> {
   cfg.validate()?;
   let provider_registry = Arc::new(ProviderRegistry::builtin());
   let _ = validate_proxy_provider_modes(cfg, provider_registry.as_ref());
@@ -349,16 +383,26 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
   };
   let pool = AccountPool::from_inventory(&inventory, cfg, &AccountPoolRuleset::all())?;
   let default_families = effective_default_families(cfg);
-  let route = Arc::new(RouteResolver::new(default_mode, &default_families));
+  if matches!(kind, StateBuildKind::Api) {
+    validate_api_default_provider_modes(cfg, default_mode)?;
+  }
+  let route = Arc::new(RouteResolver::with_default_provider(
+    default_mode,
+    cfg.defaults.default_provider_id.clone(),
+    &default_families,
+  ));
   let http = tokn_core::util::http::build_client(&cfg.proxy.to_http_options())?;
   let body_max_bytes = if cfg.db.enabled { cfg.db.body_max_bytes } else { 0 };
   let default_policy = build_policy_runtime(
     "default",
-    default_mode,
-    cfg.defaults.agent_id.clone(),
-    cfg.defaults.providers.clone(),
-    cfg.defaults.accounts.clone(),
-    default_families,
+    PolicySpec {
+      mode: default_mode,
+      agent_id: cfg.defaults.agent_id.clone(),
+      default_provider_id: cfg.defaults.default_provider_id.clone(),
+      providers: cfg.defaults.providers.clone(),
+      accounts: cfg.defaults.accounts.clone(),
+      families: default_families,
+    },
     PolicyBuildDeps {
       cfg: cfg.clone(),
       inventory: inventory.clone(),
@@ -391,6 +435,7 @@ pub fn build_state(cfg: &Config, accounts: &[AccountConfig], events: Arc<EventBu
     route,
     request_pipeline: default_policy.request_pipeline.clone(),
     passthrough_pipeline: default_policy.passthrough_pipeline.clone(),
+    switch_pipeline: default_policy.switch_pipeline.clone(),
     default_policy,
     profiles: Arc::new(profiles),
     http,
@@ -426,6 +471,10 @@ fn build_profile_runtime(
 ) -> Arc<RequestPolicyRuntime> {
   let mode = profile.mode.unwrap_or(default_policy.mode);
   let agent_id = profile.agent_id.clone().or_else(|| default_policy.agent_id.clone());
+  let default_provider_id = profile
+    .default_provider_id
+    .clone()
+    .or_else(|| default_policy.default_provider_id.clone());
   let providers = profile.providers.clone().or_else(|| {
     default_policy
       .ruleset
@@ -444,29 +493,37 @@ fn build_profile_runtime(
     .model_families
     .clone()
     .unwrap_or_else(|| default_policy.model_families.clone());
-  build_policy_runtime(name, mode, agent_id, providers, accounts, families, deps)
+  build_policy_runtime(
+    name,
+    PolicySpec {
+      mode,
+      agent_id,
+      default_provider_id,
+      providers,
+      accounts,
+      families,
+    },
+    deps,
+  )
 }
 
-fn build_policy_runtime(
-  name: &str,
-  mode: RouteMode,
-  agent_id: Option<AgentId>,
-  providers: Option<Vec<String>>,
-  accounts: Option<Vec<String>>,
-  families: Vec<ModelFamily>,
-  deps: PolicyBuildDeps,
-) -> Arc<RequestPolicyRuntime> {
-  let route = Arc::new(RouteResolver::new(mode, &families));
-  let ruleset = AccountPoolRuleset::from_filters(providers, accounts);
+fn build_policy_runtime(name: &str, spec: PolicySpec, deps: PolicyBuildDeps) -> Arc<RequestPolicyRuntime> {
+  let route = Arc::new(RouteResolver::with_default_provider(
+    spec.mode,
+    spec.default_provider_id.clone(),
+    &spec.families,
+  ));
+  let ruleset = AccountPoolRuleset::from_filters(spec.providers, spec.accounts);
   let pool = AccountPool::from_inventory(&deps.inventory, &deps.cfg, &ruleset)
     .expect("building account pool from validated inventory must not fail");
   Arc::new(RequestPolicyRuntime {
-    mode,
-    agent_id,
+    mode: spec.mode,
+    agent_id: spec.agent_id,
+    default_provider_id: spec.default_provider_id,
     ruleset,
     pool: pool.clone(),
     route: route.clone(),
-    model_families: families,
+    model_families: spec.families,
     request_pipeline: build_request_pipeline(
       format!("router-{name}"),
       pool.clone(),
@@ -476,12 +533,45 @@ fn build_policy_runtime(
     ),
     passthrough_pipeline: build_passthrough_pipeline(
       format!("router-{name}-passthrough"),
+      pool.clone(),
+      route.clone(),
+      deps.http.clone(),
+      deps.events.clone(),
+      PassthroughAuthMode::PreserveClient,
+    ),
+    switch_pipeline: build_passthrough_pipeline(
+      format!("router-{name}-switch"),
       pool,
       route,
       deps.http,
       deps.events,
+      PassthroughAuthMode::Router,
     ),
   })
+}
+
+fn validate_api_default_provider_modes(cfg: &Config, default_mode: RouteMode) -> Result<()> {
+  let mut missing = Vec::new();
+  if matches!(default_mode, RouteMode::Passthrough | RouteMode::Switch) && cfg.defaults.default_provider_id.is_none() {
+    missing.push("defaults.default_provider_id".to_string());
+  }
+  for (profile_name, profile) in &cfg.profiles {
+    let mode = profile.mode.unwrap_or(default_mode);
+    let default_provider_id = profile
+      .default_provider_id
+      .as_ref()
+      .or(cfg.defaults.default_provider_id.as_ref());
+    if matches!(mode, RouteMode::Passthrough | RouteMode::Switch) && default_provider_id.is_none() {
+      missing.push(format!("profiles.{profile_name}.default_provider_id"));
+    }
+  }
+  if missing.is_empty() {
+    return Ok(());
+  }
+  anyhow::bail!(
+    "API passthrough/switch policies require default_provider_id: {}",
+    missing.join(", ")
+  )
 }
 
 fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegistry) -> Result<()> {
@@ -506,6 +596,11 @@ fn validate_proxy_provider_modes(cfg: &Config, provider_registry: &ProviderRegis
 
 fn validate_policy_providers(cfg: &Config, provider_registry: &ProviderRegistry) -> Result<()> {
   let mut unresolved = Vec::new();
+  if let Some(provider_id) = cfg.defaults.default_provider_id.as_deref() {
+    if provider_registry.resolve(provider_id).is_none() {
+      unresolved.push(format!("defaults.default_provider_id:{provider_id}"));
+    }
+  }
   for provider_id in cfg
     .defaults
     .providers
@@ -517,6 +612,11 @@ fn validate_policy_providers(cfg: &Config, provider_registry: &ProviderRegistry)
     }
   }
   for (profile_name, profile) in &cfg.profiles {
+    if let Some(provider_id) = profile.default_provider_id.as_deref() {
+      if provider_registry.resolve(provider_id).is_none() {
+        unresolved.push(format!("profiles.{profile_name}.default_provider_id:{provider_id}"));
+      }
+    }
     for provider_id in profile
       .providers
       .iter()
@@ -618,6 +718,7 @@ fn build_passthrough_pipeline(
   route: Arc<RouteResolver>,
   http: reqwest::Client,
   events: Arc<EventBus>,
+  auth_mode: PassthroughAuthMode,
 ) -> Arc<tokn_requests::Pipeline> {
   use tokn_requests::stages::{
     DefaultSend, PassthroughBuildHeaders, PassthroughConvertRequest, PassthroughConvertResponse, PassthroughExtract,
@@ -628,7 +729,10 @@ fn build_passthrough_pipeline(
     name,
     Arc::new(PassthroughExtract),
     Arc::new(PoolResolve::new(selector)),
-    Arc::new(PassthroughBuildHeaders::new()),
+    Arc::new(match auth_mode {
+      PassthroughAuthMode::PreserveClient => PassthroughBuildHeaders::new(),
+      PassthroughAuthMode::Router => PassthroughBuildHeaders::router_auth(),
+    }),
     Arc::new(PassthroughConvertRequest),
     Arc::new(DefaultSend::new(http)),
     Arc::new(PassthroughConvertResponse::new()),
@@ -638,6 +742,12 @@ fn build_passthrough_pipeline(
     events,
     PIPELINE_RETRY_POLICY,
   ))
+}
+
+#[derive(Clone, Copy)]
+enum PassthroughAuthMode {
+  PreserveClient,
+  Router,
 }
 
 /// Construct the proxy-passthrough `tokn-requests` pipeline used by the
@@ -922,8 +1032,31 @@ mod tests {
     cfg.server.route_mode = RouteMode::Passthrough;
     let bus = EventBus::new(16);
 
-    let state = build_state(&cfg, &[], Arc::new(bus)).expect("passthrough mode should allow empty accounts");
+    let state =
+      build_proxy_state(&cfg, &[], Arc::new(bus)).expect("proxy passthrough mode should allow empty accounts");
     assert_eq!(state.pool.len(), 0);
+  }
+
+  #[test]
+  fn build_state_rejects_api_passthrough_without_default_provider_id() {
+    let mut cfg = Config::default();
+    cfg.defaults.mode = RouteMode::Passthrough;
+    let err = match build_state(&cfg, &[zai_account()], Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("API passthrough must require default_provider_id"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("defaults.default_provider_id"));
+  }
+
+  #[test]
+  fn build_state_rejects_api_switch_without_default_provider_id() {
+    let mut cfg = Config::default();
+    cfg.defaults.mode = RouteMode::Switch;
+    let err = match build_state(&cfg, &[zai_account()], Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("API switch must require provider"),
+      Err(err) => err,
+    };
+    assert!(err.to_string().contains("defaults.default_provider_id"));
   }
 
   #[test]
@@ -932,7 +1065,7 @@ mod tests {
     cfg.server.route_mode = RouteMode::Route;
     let bus = EventBus::new(16);
 
-    let res = build_state(&cfg, &[], Arc::new(bus));
+    let res = build_proxy_state(&cfg, &[], Arc::new(bus));
     assert!(res.is_err(), "non-passthrough mode should require accounts");
     let err = res.err().expect("checked above");
     assert!(err.to_string().contains("no accounts configured"));
@@ -947,6 +1080,9 @@ mod tests {
     let mut cfg = Config::default();
     cfg.server.route_mode = RouteMode::Passthrough;
     cfg.defaults.mode = default_mode;
+    if matches!(default_mode, RouteMode::Passthrough | RouteMode::Switch) {
+      cfg.defaults.default_provider_id = Some("zai-coding-plan".into());
+    }
     cfg.db.enabled = true;
     cfg.db.body_max_bytes = body_max_bytes;
     cfg
@@ -1146,7 +1282,7 @@ mod tests {
       .insert("made-up-provider".into(), ProxyProviderMode::Switch);
     let bus = EventBus::new(16);
 
-    let res = build_state(&cfg, &[], Arc::new(bus));
+    let res = build_proxy_state(&cfg, &[], Arc::new(bus));
     assert!(
       res.is_ok(),
       "unknown provider ids should only warn and not fail state construction"
@@ -1201,6 +1337,58 @@ mod tests {
     assert!(message.contains("unknown"));
     assert_eq!(json["error"]["type"], "not_implemented_error");
     assert_eq!(json["error"]["code"], 501);
+  }
+
+  #[tokio::test]
+  async fn api_switch_forwards_verbatim_to_default_provider_with_router_auth() {
+    let upstream = controlled_chat_upstream("switch").await;
+    let mut cfg = Config::default();
+    cfg.defaults.mode = RouteMode::Switch;
+    cfg.defaults.default_provider_id = Some("zai-coding-plan".into());
+    let state = build_state(
+      &cfg,
+      &[core_account(zai_account_with_id_and_base(
+        "switch",
+        Some(upstream.base_url.clone()),
+      ))],
+      Arc::new(EventBus::noop()),
+    )
+    .unwrap();
+    let app = router(state);
+    let inbound_body =
+      Bytes::from_static(br#"{"stream":false,"messages":[{"role":"user","content":"hi"}],"model":"glm-4.7"}"#);
+
+    let request = Request::builder()
+      .method(Method::POST)
+      .uri("/v1/chat/completions")
+      .header("content-type", "application/json")
+      .header("authorization", "Bearer client-secret-must-not-leak")
+      .body(Body::from(inbound_body.clone()))
+      .unwrap();
+    let response = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), upstream.arrived)
+      .await
+      .expect("switch request should reach upstream")
+      .unwrap();
+    upstream.release.send(()).unwrap();
+    let response = response.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    upstream.task.await.unwrap();
+    let raw_request = String::from_utf8_lossy(&upstream.request.await.unwrap()).to_string();
+    let lower = raw_request.to_ascii_lowercase();
+    assert!(
+      raw_request.contains(std::str::from_utf8(&inbound_body).unwrap()),
+      "switch should forward the original body bytes, got:\n{raw_request}"
+    );
+    assert!(
+      lower.contains("authorization: bearer sk-test"),
+      "switch should inject router account auth, got:\n{raw_request}"
+    );
+    assert!(
+      !raw_request.contains("client-secret-must-not-leak"),
+      "switch must strip inbound client auth"
+    );
   }
 
   #[tokio::test]
@@ -1306,6 +1494,27 @@ mod tests {
   }
 
   #[test]
+  fn profile_inherits_default_provider_id() {
+    let mut cfg = Config::default();
+    cfg.defaults.default_provider_id = Some("zai-coding-plan".into());
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        mode: Some(RouteMode::Passthrough),
+        ..Default::default()
+      },
+    );
+    let state = build_state(&cfg, &[zai_account()], Arc::new(EventBus::noop())).unwrap();
+    let work = state.profiles.get("work").expect("work profile");
+    assert_eq!(work.default_provider_id.as_deref(), Some("zai-coding-plan"));
+    let resolved = work.route.resolve("glm-4.6", None).unwrap();
+    assert_eq!(
+      resolved.selector,
+      tokn_accounts::routing::RouteSelector::Provider("zai-coding-plan".into())
+    );
+  }
+
+  #[test]
   fn profile_providers_replace_default_providers() {
     let mut cfg = Config::default();
     cfg.defaults.providers = Some(vec!["openai".into()]);
@@ -1397,6 +1606,16 @@ mod tests {
 
   #[test]
   fn build_state_rejects_unknown_policy_provider_filters() {
+    let mut cfg = Config::default();
+    cfg.defaults.default_provider_id = Some("made-up-provider".into());
+    let err = match build_state(&cfg, &[], Arc::new(EventBus::noop())) {
+      Ok(_) => panic!("unknown default provider id must fail"),
+      Err(err) => err,
+    };
+    assert!(err
+      .to_string()
+      .contains("defaults.default_provider_id:made-up-provider"));
+
     let mut cfg = Config::default();
     cfg.defaults.providers = Some(vec!["made-up-provider".into()]);
     let err = match build_state(&cfg, &[], Arc::new(EventBus::noop())) {

@@ -363,7 +363,15 @@ impl AccountPool {
     match &route.selector {
       RouteSelector::Any => acct.provider.supports(&route.upstream_model, endpoint),
       RouteSelector::Provider(provider) => {
-        acct.provider.info().id == *provider && self.account_matches(acct, Some(&route.upstream_model), endpoint)
+        let model = if matches!(
+          route.mode,
+          tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
+        ) {
+          None
+        } else {
+          Some(route.upstream_model.as_str())
+        };
+        acct.provider.info().id == *provider && self.account_matches(acct, model, endpoint)
       }
       RouteSelector::Model => self.account_matches(acct, Some(&route.upstream_model), endpoint),
       RouteSelector::Fuzzy { candidates } => candidates
@@ -376,7 +384,15 @@ impl AccountPool {
     match &route.selector {
       RouteSelector::Any => self.acquire_any_convertible(requested),
       RouteSelector::Provider(provider) => {
-        self.acquire_provider_convertible(provider, &route.upstream_model, requested)
+        let model = if matches!(
+          route.mode,
+          tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
+        ) {
+          ""
+        } else {
+          &route.upstream_model
+        };
+        self.acquire_provider_convertible(provider, model, requested)
       }
       RouteSelector::Model => self.acquire_from_buckets_convertible(Some(&route.upstream_model), requested),
       RouteSelector::Fuzzy { candidates } => {

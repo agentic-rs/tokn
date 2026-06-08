@@ -79,6 +79,8 @@ pub struct DefaultsConfig {
   #[serde(default)]
   pub agent_id: Option<AgentId>,
   #[serde(default)]
+  pub default_provider_id: Option<String>,
+  #[serde(default)]
   pub providers: Option<Vec<String>>,
   #[serde(default)]
   pub accounts: Option<Vec<String>>,
@@ -92,6 +94,8 @@ pub struct ProfileConfig {
   pub mode: Option<RouteMode>,
   #[serde(default)]
   pub agent_id: Option<AgentId>,
+  #[serde(default)]
+  pub default_provider_id: Option<String>,
   #[serde(default)]
   pub providers: Option<Vec<String>>,
   #[serde(default)]
@@ -427,6 +431,10 @@ impl Config {
     self.proxy_mode.validate()?;
     validate_model_families(&self.model_families)?;
     validate_model_families(&self.defaults.model_families)?;
+    validate_provider_id(
+      "defaults.default_provider_id",
+      self.defaults.default_provider_id.as_deref(),
+    )?;
     validate_providers("defaults.providers", self.defaults.providers.as_deref())?;
     validate_account_ids("defaults.accounts", self.defaults.accounts.as_deref())?;
     for (name, profile) in &self.profiles {
@@ -434,6 +442,10 @@ impl Config {
       if let Some(model_families) = profile.model_families.as_deref() {
         validate_model_families(model_families)?;
       }
+      validate_provider_id(
+        &format!("profiles.{name}.default_provider_id"),
+        profile.default_provider_id.as_deref(),
+      )?;
       validate_providers(&format!("profiles.{name}.providers"), profile.providers.as_deref())?;
       validate_account_ids(&format!("profiles.{name}.accounts"), profile.accounts.as_deref())?;
     }
@@ -558,6 +570,17 @@ fn validate_profile_name(name: &str) -> Result<()> {
 
 fn validate_providers(section: &str, providers: Option<&[String]>) -> Result<()> {
   validate_ids(section, providers, "provider ids must be non-empty")
+}
+
+fn validate_provider_id(section: &str, provider_id: Option<&str>) -> Result<()> {
+  if matches!(provider_id, Some(id) if id.trim().is_empty()) {
+    return error::InvalidAccountSnafu {
+      id: section.to_string(),
+      message: "provider id must be non-empty".to_string(),
+    }
+    .fail();
+  }
+  Ok(())
 }
 
 fn validate_account_ids(section: &str, ids: Option<&[String]>) -> Result<()> {
@@ -693,6 +716,7 @@ mod tests {
       r#"
         [defaults]
         mode = "route"
+        default_provider_id = "github-copilot"
         providers = ["github-copilot"]
 
         [[defaults.model_families]]
@@ -702,6 +726,7 @@ mod tests {
         [profiles.work]
         mode = "fuzzy"
         agent_id = "codex-cli"
+        default_provider_id = "codex"
         providers = ["codex"]
 
         [[profiles.work.model_families]]
@@ -712,6 +737,7 @@ mod tests {
     .expect("config should deserialize");
 
     assert_eq!(cfg.defaults.mode, RouteMode::Route);
+    assert_eq!(cfg.defaults.default_provider_id.as_deref(), Some("github-copilot"));
     assert_eq!(
       cfg.defaults.providers.as_deref(),
       Some(&["github-copilot".to_string()][..])
@@ -719,6 +745,7 @@ mod tests {
     let work = cfg.profiles.get("work").expect("work profile");
     assert_eq!(work.mode, Some(RouteMode::Fuzzy));
     assert_eq!(work.agent_id, Some(AgentId::CodexCli));
+    assert_eq!(work.default_provider_id.as_deref(), Some("codex"));
     assert_eq!(work.providers.as_deref(), Some(&["codex".to_string()][..]));
     assert_eq!(work.model_families.as_ref().unwrap()[0].name, "glm");
   }
@@ -749,5 +776,18 @@ mod tests {
     .expect("config should deserialize before validation");
     let err = cfg.validate().expect_err("empty provider ids must fail validation");
     assert!(err.to_string().contains("provider ids must be non-empty"));
+  }
+
+  #[test]
+  fn default_provider_id_rejects_empty_id() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [defaults]
+        default_provider_id = " "
+      "#,
+    )
+    .expect("config should deserialize before validation");
+    let err = cfg.validate().expect_err("empty default provider id must fail");
+    assert!(err.to_string().contains("provider id must be non-empty"));
   }
 }

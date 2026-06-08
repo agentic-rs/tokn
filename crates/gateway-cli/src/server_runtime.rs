@@ -97,6 +97,18 @@ pub fn build_state_for_route_mode(
   build_state(&cfg, accounts, events)
 }
 
+pub fn build_proxy_state_for_route_mode(
+  cfg: &Config,
+  accounts: &[AccountConfig],
+  events: Arc<EventBus>,
+  route_mode: RouteMode,
+) -> Result<tokn_router::api::AppState> {
+  let mut cfg = cfg.clone();
+  cfg.server.route_mode = route_mode;
+  cfg.defaults.mode = route_mode;
+  tokn_router::api::build_proxy_state(&cfg, accounts, events)
+}
+
 pub fn resolve_bind_addr(host: &str, port: u16, insecure_allow_remote: bool) -> Result<SocketAddr> {
   ensure_bind_host(host, insecure_allow_remote)?;
   Ok(format!("{host}:{port}").parse()?)

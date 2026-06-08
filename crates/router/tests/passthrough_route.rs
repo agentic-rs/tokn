@@ -94,6 +94,7 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
     "passthrough".into(),
     ProfileConfig {
       mode: Some(RouteMode::Passthrough),
+      default_provider_id: Some("zai-coding-plan".into()),
       ..Default::default()
     },
   );
@@ -205,6 +206,7 @@ async fn passthrough_route_streams_sse_verbatim_and_emits_usage() {
     "passthrough".into(),
     ProfileConfig {
       mode: Some(RouteMode::Passthrough),
+      default_provider_id: Some("zai-coding-plan".into()),
       ..Default::default()
     },
   );

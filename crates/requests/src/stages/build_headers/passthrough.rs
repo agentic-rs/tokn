@@ -84,6 +84,16 @@ impl PassthroughBuildHeaders {
       preserve_client_auth: false,
     }
   }
+
+  /// Strip inbound auth while letting reqwest derive `Host` from the
+  /// provider URL. Used by API switch mode: bytes stay verbatim, but
+  /// credentials come from the selected router account.
+  pub fn router_auth() -> Self {
+    Self {
+      preserve_host: false,
+      preserve_client_auth: false,
+    }
+  }
 }
 
 #[async_trait]

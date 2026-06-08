@@ -24,7 +24,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokn_config::RouteMode;
 use tokn_core::account::{AccountTier, AuthType};
 use tokn_core::event::EventBus;
-use tokn_router::api::build_state;
+use tokn_router::api::build_proxy_state;
 use tokn_router::config::Config;
 use tokn_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
 use tokn_router::util::secret::Secret;
@@ -89,7 +89,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(256));
   let mut rx = events.subscribe();
-  let state = build_state(&cfg, &[], events.clone()).unwrap();
+  let state = build_proxy_state(&cfg, &[], events.clone()).unwrap();
 
   let inbound_body =
     Bytes::from_static(br#"{"stream":false,"model":"glm-4.6","messages":[{"role":"user","content":"hi proxy"}]}"#);
@@ -439,7 +439,7 @@ async fn proxy_passthrough_pipeline_decodes_zstd_for_model_peek_and_forwards_raw
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(256));
   let mut rx = events.subscribe();
-  let state = build_state(&cfg, &[], events).unwrap();
+  let state = build_proxy_state(&cfg, &[], events).unwrap();
 
   let decoded_body =
     Bytes::from_static(br#"{"stream":false,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
@@ -569,7 +569,7 @@ async fn proxy_passthrough_pipeline_streams_emit_bodies_and_completed() {
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(512));
   let mut rx = events.subscribe();
-  let state = build_state(&cfg, &[], events.clone()).unwrap();
+  let state = build_proxy_state(&cfg, &[], events.clone()).unwrap();
 
   let inbound_body =
     Bytes::from_static(br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
@@ -709,7 +709,7 @@ async fn proxy_passthrough_4xx_stream_request_completes_before_downstream_body_d
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(256));
   let mut rx = events.subscribe();
-  let state = build_state(&cfg, &[], events).unwrap();
+  let state = build_proxy_state(&cfg, &[], events).unwrap();
 
   let inbound_body =
     Bytes::from_static(br#"{"stream":true,"model":"glm-4.6","messages":[{"role":"user","content":"hi"}]}"#);
@@ -790,7 +790,7 @@ async fn proxy_passthrough_preserves_unknown_request_endpoint() {
   cfg.server.route_mode = RouteMode::Passthrough;
   let events = Arc::new(EventBus::new(128));
   let mut rx = events.subscribe();
-  let state = build_state(&cfg, &[], events).unwrap();
+  let state = build_proxy_state(&cfg, &[], events).unwrap();
 
   let req = Request::builder()
     .method(Method::POST)
@@ -838,7 +838,7 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
   let mut cfg = Config::default();
   cfg.server.route_mode = RouteMode::Switch;
   let events = Arc::new(EventBus::new(64));
-  let state = build_state(&cfg, &[openai_account()], events).unwrap();
+  let state = build_proxy_state(&cfg, &[openai_account()], events).unwrap();
 
   let req = Request::builder()
     .method(Method::POST)

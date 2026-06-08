@@ -51,7 +51,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let app_live = tokn_router::api::LiveAppState::new(app_state);
   let proxy_live = if args.with_proxy {
     Some(tokn_router::api::LiveAppState::new(
-      crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), proxy_mode)?,
+      crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), proxy_mode)?,
     ))
   } else {
     None
@@ -162,7 +162,7 @@ fn install_reload_endpoint(
         .map_err(|e| e.to_string())?;
       let proxy_state = if with_proxy {
         Some(
-          crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), proxy_mode)
+          crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), proxy_mode)
             .map_err(|e| e.to_string())?,
         )
       } else {

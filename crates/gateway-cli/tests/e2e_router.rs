@@ -107,6 +107,7 @@ async fn router_modes_return_expected_results_and_persist_request_rows() {
       mode_name(mode).into(),
       ProfileConfig {
         mode: Some(mode),
+        default_provider_id: matches!(mode, RouteMode::Passthrough).then_some("zai-coding-plan".into()),
         ..Default::default()
       },
     );
