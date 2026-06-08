@@ -27,7 +27,16 @@ esac
 
 fetch_ca() {
   mkdir -p "$ca_dir"
-  curl -fsSL "$api_url/-/lan/ca.crt" -o "$ca_cert"
+  if ! curl -fsSL "$api_url/-/lan/ca.crt" -o "$ca_cert"; then
+    echo "tokn-agent: failed to download CA from $api_url/-/lan/ca.crt" >&2
+    echo "tokn-agent: ensure the gateway is running and accessible; ca_dir=$ca_dir" >&2
+    exit 1
+  fi
+  if [ ! -s "$ca_cert" ]; then
+    echo "tokn-agent: downloaded CA is missing or empty: $ca_cert" >&2
+    echo "tokn-agent: ensure the gateway CA endpoint is serving a certificate" >&2
+    exit 1
+  fi
   if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
     cat /etc/ssl/certs/ca-certificates.crt "$ca_cert" > "$ca_bundle"
   else
@@ -38,6 +47,34 @@ fetch_ca() {
   export REQUESTS_CA_BUNDLE="$ca_bundle"
   export CURL_CA_BUNDLE="$ca_bundle"
   export GIT_SSL_CAINFO="$ca_bundle"
+}
+
+proxy_with_credentials() {
+  proxy_user="$1"
+  case "$proxy_url" in
+    http://*)
+      proxy_scheme="http"
+      proxy_host="${proxy_url#http://}"
+      ;;
+    https://*)
+      proxy_scheme="https"
+      proxy_host="${proxy_url#https://}"
+      ;;
+    *://*)
+      echo "tokn-agent: unsupported proxy URL scheme in TOKN_GATEWAY_PROXY_URL=$proxy_url" >&2
+      echo "tokn-agent: expected http://, https://, or a scheme-less host:port" >&2
+      exit 1
+      ;;
+    *)
+      proxy_scheme="http"
+      proxy_host="$proxy_url"
+      ;;
+  esac
+  if [ -z "$proxy_host" ]; then
+    echo "tokn-agent: TOKN_GATEWAY_PROXY_URL resolved to an empty proxy host" >&2
+    exit 1
+  fi
+  printf '%s://%s:x@%s' "$proxy_scheme" "$proxy_user" "$proxy_host"
 }
 
 case "$mode" in
@@ -53,15 +90,17 @@ case "$mode" in
     ;;
   proxy-switch)
     fetch_ca
-    export HTTPS_PROXY="${HTTPS_PROXY:-http://switch:x@${proxy_url#http://}}"
-    export HTTP_PROXY="${HTTP_PROXY:-http://switch:x@${proxy_url#http://}}"
+    proxy_with_auth="$(proxy_with_credentials switch)"
+    export HTTPS_PROXY="${HTTPS_PROXY:-$proxy_with_auth}"
+    export HTTP_PROXY="${HTTP_PROXY:-$proxy_with_auth}"
     export ALL_PROXY="${ALL_PROXY:-$HTTPS_PROXY}"
     export NO_PROXY="${NO_PROXY:-gateway,localhost,127.0.0.1,::1}"
     ;;
   proxy-passthrough)
     fetch_ca
-    export HTTPS_PROXY="${HTTPS_PROXY:-http://passthrough:x@${proxy_url#http://}}"
-    export HTTP_PROXY="${HTTP_PROXY:-http://passthrough:x@${proxy_url#http://}}"
+    proxy_with_auth="$(proxy_with_credentials passthrough)"
+    export HTTPS_PROXY="${HTTPS_PROXY:-$proxy_with_auth}"
+    export HTTP_PROXY="${HTTP_PROXY:-$proxy_with_auth}"
     export ALL_PROXY="${ALL_PROXY:-$HTTPS_PROXY}"
     export NO_PROXY="${NO_PROXY:-gateway,localhost,127.0.0.1,::1}"
     ;;
