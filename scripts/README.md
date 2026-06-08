@@ -5,11 +5,22 @@ workspace root a JavaScript package.
 
 ## Docker PR Trial
 
-Download the `tokn-gateway-cli-image` artifact from CI, then load it, build the
-agent runner image once, and start the gateway:
+Download and load the `tokn-gateway-cli-image` artifact from CI, build the agent
+runner image once, and start the gateway:
+
+```sh
+bun --cwd scripts docker load --pr 67
+```
+
+If you already downloaded the artifact tar manually:
 
 ```sh
 bun --cwd scripts docker load ./tokn-gateway-cli-image.tar
+```
+
+Then:
+
+```sh
 bun --cwd scripts docker build-agent
 bun --cwd scripts docker up
 ```

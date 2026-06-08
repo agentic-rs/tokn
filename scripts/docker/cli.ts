@@ -1,11 +1,14 @@
-import { basename, dirname, resolve } from "node:path";
+import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
+const tmpRoot = "/tmp";
 const projectName = "tokn-router-pr";
 const engine = process.env.TOKN_CONTAINER_ENGINE ?? "podman";
 const gatewayImage = "tokn-gateway-cli:ci";
 const agentImage = "tokn-agent-runner:ci";
+const gatewayArtifactName = "tokn-gateway-cli-image";
 const networkName = `${projectName}-net`;
 const gatewayContainer = `${projectName}-gateway`;
 const routerStateVolume = `${projectName}-router-state`;
@@ -27,6 +30,7 @@ type ParsedAgentArgs = {
 function usage(): never {
   console.error(`Usage:
   bun --cwd scripts docker load <image.tar>
+  bun --cwd scripts docker load --pr <number>
   bun --cwd scripts docker up
   bun --cwd scripts docker agent --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down
@@ -59,6 +63,10 @@ function run(program: string, args: string[], options: RunOptions = {}): string 
     throw new Error(`command failed (${proc.exitCode}): ${rendered}`);
   }
   return stdout;
+}
+
+function gh(args: string[], options: RunOptions = {}): string {
+  return run("gh", args, options);
 }
 
 function container(args: string[], options: RunOptions = {}): string {
@@ -96,6 +104,13 @@ function requireValue(args: string[], index: number, flag: string): string {
     throw new Error(`${flag} requires a value`);
   }
   return value;
+}
+
+function requirePositiveInteger(raw: string, label: string): number {
+  if (!/^[1-9][0-9]*$/.test(raw)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return Number(raw);
 }
 
 function parseAgentArgs(args: string[]): ParsedAgentArgs {
@@ -145,9 +160,7 @@ function imageRefFromDockerLoad(output: string): string {
   return image;
 }
 
-function loadImage(args: string[]): void {
-  if (args.length !== 1) usage();
-  const tarPath = resolve(args[0]);
+function loadTar(tarPath: string): void {
   console.log(`Loading ${basename(tarPath)}...`);
   const output = container(["load", "-i", tarPath], { capture: true });
   process.stdout.write(output);
@@ -156,6 +169,84 @@ function loadImage(args: string[]): void {
     container(["tag", loadedRef, gatewayImage]);
     console.log(`Tagged ${loadedRef} as ${gatewayImage}`);
   }
+}
+
+function loadImage(args: string[]): void {
+  if (args.length === 1) {
+    loadTar(resolve(args[0]));
+    return;
+  }
+  if (args.length === 2 && args[0] === "--pr") {
+    loadPrImage(requirePositiveInteger(args[1], "--pr"));
+    return;
+  }
+  usage();
+}
+
+type PullRequestView = {
+  headRefName: string;
+};
+
+type WorkflowRun = {
+  databaseId: number;
+  headBranch: string;
+  status: string;
+  conclusion: string;
+  url: string;
+};
+
+function loadPrImage(prNumber: number): void {
+  const pr = JSON.parse(gh(["pr", "view", String(prNumber), "--json", "headRefName"], { capture: true })) as PullRequestView;
+  if (!pr.headRefName) {
+    throw new Error(`could not resolve head branch for PR #${prNumber}`);
+  }
+
+  const runs = JSON.parse(
+    gh(
+      [
+        "run",
+        "list",
+        "--branch",
+        pr.headRefName,
+        "--status",
+        "success",
+        "--json",
+        "databaseId,headBranch,status,conclusion,url",
+        "--limit",
+        "20",
+      ],
+      { capture: true },
+    ),
+  ) as WorkflowRun[];
+  const run = runs.find((candidate) => candidate.conclusion === "success");
+  if (!run) {
+    throw new Error(`could not find a successful workflow run for PR #${prNumber} branch ${pr.headRefName}`);
+  }
+
+  const downloadDir = join(tmpRoot, `tokn-pr-${prNumber}-${run.databaseId}`);
+  rmSync(downloadDir, { recursive: true, force: true });
+  mkdirSync(downloadDir, { recursive: true });
+  console.log(`Downloading ${gatewayArtifactName} from ${run.url}...`);
+  gh(["run", "download", String(run.databaseId), "--name", gatewayArtifactName, "--dir", downloadDir]);
+  const tarPath = findFirstFile(downloadDir, (path) => path.endsWith(".tar"));
+  if (!tarPath) {
+    throw new Error(`downloaded artifact did not contain a .tar file under ${downloadDir}`);
+  }
+  loadTar(tarPath);
+}
+
+function findFirstFile(root: string, predicate: (path: string) => boolean): string | undefined {
+  for (const entry of readdirSync(root)) {
+    const path = join(root, entry);
+    const stat = statSync(path);
+    if (stat.isDirectory()) {
+      const found = findFirstFile(path, predicate);
+      if (found) return found;
+    } else if (stat.isFile() && predicate(path)) {
+      return path;
+    }
+  }
+  return undefined;
 }
 
 function up(): void {
