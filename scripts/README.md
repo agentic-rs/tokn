@@ -12,30 +12,32 @@ runner image once, and start the gateway:
 bun --cwd scripts docker load --pr 67
 ```
 
+This tags the loaded gateway image as `tokn-gateway-cli:pr-67`.
+
 If you already downloaded the artifact tar manually:
 
 ```sh
-bun --cwd scripts docker load ./tokn-gateway-cli-image.tar
+bun --cwd scripts docker load --tag pr-67 ./tokn-gateway-cli-image.tar
 ```
 
 Then:
 
 ```sh
 bun --cwd scripts docker build-agent
-bun --cwd scripts docker up
+bun --cwd scripts docker up --tag pr-67
 ```
 
 Run disposable agent containers against that gateway:
 
 ```sh
-bun --cwd scripts docker agent --agent opencode --mode api-route
-bun --cwd scripts docker agent --agent codex --mode proxy-switch
+bun --cwd scripts docker agent --tag pr-67 --agent opencode --mode api-route
+bun --cwd scripts docker agent --tag pr-67 --agent codex --mode proxy-switch
 ```
 
 Forward arguments to the selected agent after `--`:
 
 ```sh
-bun --cwd scripts docker agent --agent codex --mode api-route -- --help
+bun --cwd scripts docker agent --tag pr-67 --agent codex --mode api-route -- --help
 ```
 
 Modes:
@@ -51,17 +53,20 @@ Modes:
 Lifecycle:
 
 ```sh
-bun --cwd scripts docker status
-bun --cwd scripts docker logs
-bun --cwd scripts docker down
+bun --cwd scripts docker status --tag pr-67
+bun --cwd scripts docker logs --tag pr-67
+bun --cwd scripts docker down --tag pr-67
 ```
 
 `down` keeps the persistent gateway state volume. To remove containers and
 volumes, use the explicit reset guard:
 
 ```sh
-bun --cwd scripts docker reset --yes
+bun --cwd scripts docker reset --tag pr-67 --yes
 ```
 
 The CLI uses Podman by default. Set `TOKN_CONTAINER_ENGINE=docker` only if you
 want the same lifecycle managed through Docker-compatible commands.
+
+Omit `--tag` to use the default `ci` tag, or set `TOKN_TAG=pr-67` to make a tag
+the default for one shell session.

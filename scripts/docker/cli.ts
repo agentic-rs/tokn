@@ -4,14 +4,11 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const tmpRoot = "/tmp";
-const projectName = "tokn-router-pr";
 const engine = process.env.TOKN_CONTAINER_ENGINE ?? "podman";
-const gatewayImage = "tokn-gateway-cli:ci";
+const defaultTag = "ci";
+const gatewayImageRepo = "tokn-gateway-cli";
 const agentImage = "tokn-agent-runner:ci";
 const gatewayArtifactName = "tokn-gateway-cli-image";
-const networkName = `${projectName}-net`;
-const gatewayContainer = `${projectName}-gateway`;
-const routerStateVolume = `${projectName}-router-state`;
 const repoRoot = resolve(scriptDir, "../..");
 const agents = new Set(["codex", "opencode", "pi"]);
 const modes = new Set(["api-route", "proxy-switch", "api-passthrough", "proxy-passthrough"]);
@@ -24,19 +21,33 @@ type RunOptions = {
 type ParsedAgentArgs = {
   agent: string;
   mode: string;
+  tag: string;
   forwarded: string[];
+};
+
+type TaggedArgs = {
+  tag: string;
+  rest: string[];
+};
+
+type HarnessNames = {
+  gatewayImage: string;
+  gatewayContainer: string;
+  networkName: string;
+  projectName: string;
+  routerStateVolume: string;
 };
 
 function usage(): never {
   console.error(`Usage:
-  bun --cwd scripts docker load <image.tar>
+  bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
-  bun --cwd scripts docker up
-  bun --cwd scripts docker agent --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
-  bun --cwd scripts docker down
-  bun --cwd scripts docker reset --yes
-  bun --cwd scripts docker status
-  bun --cwd scripts docker logs
+  bun --cwd scripts docker up [--tag <tag>]
+  bun --cwd scripts docker agent [--tag <tag>] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
+  bun --cwd scripts docker down [--tag <tag>]
+  bun --cwd scripts docker reset [--tag <tag>] --yes
+  bun --cwd scripts docker status [--tag <tag>]
+  bun --cwd scripts docker logs [--tag <tag>]
   bun --cwd scripts docker build-agent
 
 Environment:
@@ -86,9 +97,20 @@ function resourceExists(kind: "container" | "image" | "network" | "volume", name
   return containerOk([kind, "inspect", name]);
 }
 
-function ensureNetwork(): void {
-  if (!resourceExists("network", networkName)) {
-    container(["network", "create", networkName]);
+function namesForTag(tag: string): HarnessNames {
+  const projectName = `tokn-router-${tag}`;
+  return {
+    gatewayImage: `${gatewayImageRepo}:${tag}`,
+    gatewayContainer: `${projectName}-gateway`,
+    networkName: `${projectName}-net`,
+    projectName,
+    routerStateVolume: `${projectName}-router-state`,
+  };
+}
+
+function ensureNetwork(names: HarnessNames): void {
+  if (!resourceExists("network", names.networkName)) {
+    container(["network", "create", names.networkName]);
   }
 }
 
@@ -106,6 +128,13 @@ function requireValue(args: string[], index: number, flag: string): string {
   return value;
 }
 
+function requireTag(raw: string): string {
+  if (!/^[a-z0-9][a-z0-9_.-]*$/.test(raw)) {
+    throw new Error("--tag must start with a lowercase letter or digit and contain only lowercase letters, digits, '.', '_', or '-'");
+  }
+  return raw;
+}
+
 function requirePositiveInteger(raw: string, label: string): number {
   if (!/^[1-9][0-9]*$/.test(raw)) {
     throw new Error(`${label} must be a positive integer`);
@@ -113,12 +142,31 @@ function requirePositiveInteger(raw: string, label: string): number {
   return Number(raw);
 }
 
+function parseTaggedArgs(args: string[]): TaggedArgs {
+  let tag = process.env.TOKN_TAG ?? defaultTag;
+  const rest: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === "--tag") {
+      tag = requireTag(requireValue(args, i, "--tag"));
+      i += 1;
+    } else if (arg.startsWith("--tag=")) {
+      tag = requireTag(arg.slice("--tag=".length));
+    } else {
+      rest.push(arg);
+    }
+  }
+  return { tag: requireTag(tag), rest };
+}
+
 function parseAgentArgs(args: string[]): ParsedAgentArgs {
+  const rawForwardedAt = args.indexOf("--");
+  const rawOptionArgs = rawForwardedAt >= 0 ? args.slice(0, rawForwardedAt) : args;
+  const tagged = parseTaggedArgs(rawOptionArgs);
   let agent = process.env.TOKN_AGENT ?? "codex";
   let mode = process.env.TOKN_MODE ?? "api-route";
-  let forwardedAt = args.indexOf("--");
-  const optionArgs = forwardedAt >= 0 ? args.slice(0, forwardedAt) : args;
-  const forwarded = forwardedAt >= 0 ? args.slice(forwardedAt + 1) : [];
+  const optionArgs = tagged.rest;
+  const forwarded = rawForwardedAt >= 0 ? args.slice(rawForwardedAt + 1) : [];
 
   for (let i = 0; i < optionArgs.length; i += 1) {
     const arg = optionArgs[i];
@@ -145,7 +193,7 @@ function parseAgentArgs(args: string[]): ParsedAgentArgs {
       `unsupported mode '${mode}' (expected api-route, proxy-switch, api-passthrough, or proxy-passthrough)`,
     );
   }
-  return { agent, mode, forwarded };
+  return { agent, mode, tag: tagged.tag, forwarded };
 }
 
 function imageRefFromDockerLoad(output: string): string {
@@ -160,24 +208,27 @@ function imageRefFromDockerLoad(output: string): string {
   return image;
 }
 
-function loadTar(tarPath: string): void {
+function loadTar(tarPath: string, targetImage: string): void {
   console.log(`Loading ${basename(tarPath)}...`);
   const output = container(["load", "-i", tarPath], { capture: true });
   process.stdout.write(output);
   const loadedRef = imageRefFromDockerLoad(output);
-  if (loadedRef !== gatewayImage) {
-    container(["tag", loadedRef, gatewayImage]);
-    console.log(`Tagged ${loadedRef} as ${gatewayImage}`);
+  if (loadedRef !== targetImage) {
+    container(["tag", loadedRef, targetImage]);
+    console.log(`Tagged ${loadedRef} as ${targetImage}`);
   }
 }
 
 function loadImage(args: string[]): void {
-  if (args.length === 1) {
-    loadTar(resolve(args[0]));
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length === 1) {
+    loadTar(resolve(tagged.rest[0]), namesForTag(tagged.tag).gatewayImage);
     return;
   }
-  if (args.length === 2 && args[0] === "--pr") {
-    loadPrImage(requirePositiveInteger(args[1], "--pr"));
+  if (tagged.rest.length === 2 && tagged.rest[0] === "--pr") {
+    const prNumber = requirePositiveInteger(tagged.rest[1], "--pr");
+    const targetTag = tagged.tag === defaultTag ? `pr-${prNumber}` : tagged.tag;
+    loadPrImage(prNumber, namesForTag(targetTag).gatewayImage);
     return;
   }
   usage();
@@ -195,7 +246,7 @@ type WorkflowRun = {
   url: string;
 };
 
-function loadPrImage(prNumber: number): void {
+function loadPrImage(prNumber: number, targetImage: string): void {
   const pr = JSON.parse(gh(["pr", "view", String(prNumber), "--json", "headRefName"], { capture: true })) as PullRequestView;
   if (!pr.headRefName) {
     throw new Error(`could not resolve head branch for PR #${prNumber}`);
@@ -232,7 +283,7 @@ function loadPrImage(prNumber: number): void {
   if (!tarPath) {
     throw new Error(`downloaded artifact did not contain a .tar file under ${downloadDir}`);
   }
-  loadTar(tarPath);
+  loadTar(tarPath, targetImage);
 }
 
 function findFirstFile(root: string, predicate: (path: string) => boolean): string | undefined {
@@ -249,26 +300,32 @@ function findFirstFile(root: string, predicate: (path: string) => boolean): stri
   return undefined;
 }
 
-function up(): void {
-  ensureImage(gatewayImage, "run `bun --cwd scripts docker load <image.tar>` first");
-  ensureNetwork();
-  if (resourceExists("container", gatewayContainer)) {
-    container(["rm", "-f", gatewayContainer]);
+function up(args: string[] = []): void {
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length !== 0) usage();
+  const names = namesForTag(tagged.tag);
+  const loadHint = /^pr-[1-9][0-9]*$/.test(tagged.tag)
+    ? `run \`bun --cwd scripts docker load --pr ${tagged.tag.slice("pr-".length)}\` first`
+    : `run \`bun --cwd scripts docker load --tag ${tagged.tag} <image.tar>\` first`;
+  ensureImage(names.gatewayImage, loadHint);
+  ensureNetwork(names);
+  if (resourceExists("container", names.gatewayContainer)) {
+    container(["rm", "-f", names.gatewayContainer]);
   }
   container([
     "run",
     "-d",
     "--name",
-    gatewayContainer,
+    names.gatewayContainer,
     "--network",
-    networkName,
+    names.networkName,
     "-p",
     "127.0.0.1:4141:4141",
     "-p",
     "127.0.0.1:4142:4142",
     "-v",
-    `${routerStateVolume}:/root/.tokn/router`,
-    gatewayImage,
+    `${names.routerStateVolume}:/root/.tokn/router`,
+    names.gatewayImage,
     "serve",
     "--host",
     "0.0.0.0",
@@ -283,25 +340,26 @@ function buildAgent(): void {
 
 function agent(args: string[]): void {
   const parsed = parseAgentArgs(args);
+  const names = namesForTag(parsed.tag);
   ensureImage(agentImage, "run `bun --cwd scripts docker build-agent` first");
-  if (!resourceExists("container", gatewayContainer)) {
-    throw new Error("gateway is not running; run `bun --cwd scripts docker up` first");
+  if (!resourceExists("container", names.gatewayContainer)) {
+    throw new Error(`gateway is not running; run \`bun --cwd scripts docker up --tag ${parsed.tag}\` first`);
   }
-  ensureNetwork();
+  ensureNetwork(names);
   run(engine, [
     "run",
     "--rm",
     ...(process.stdin.isTTY && process.stdout.isTTY ? ["-it"] : []),
     "--network",
-    networkName,
+    names.networkName,
     "-e",
     `TOKN_AGENT=${parsed.agent}`,
     "-e",
     `TOKN_MODE=${parsed.mode}`,
     "-e",
-    "TOKN_GATEWAY_API_URL=http://tokn-router-pr-gateway:4141",
+    `TOKN_GATEWAY_API_URL=http://${names.gatewayContainer}:4141`,
     "-e",
-    "TOKN_GATEWAY_PROXY_URL=http://tokn-router-pr-gateway:4142",
+    `TOKN_GATEWAY_PROXY_URL=http://${names.gatewayContainer}:4142`,
     "-v",
     `${repoRoot}:/workspace`,
     "-w",
@@ -311,35 +369,46 @@ function agent(args: string[]): void {
   ]);
 }
 
-function down(): void {
-  if (resourceExists("container", gatewayContainer)) {
-    container(["rm", "-f", gatewayContainer]);
+function down(args: string[] = []): void {
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length !== 0) usage();
+  const names = namesForTag(tagged.tag);
+  if (resourceExists("container", names.gatewayContainer)) {
+    container(["rm", "-f", names.gatewayContainer]);
   }
-  if (resourceExists("network", networkName)) {
-    container(["network", "rm", networkName]);
+  if (resourceExists("network", names.networkName)) {
+    container(["network", "rm", names.networkName]);
   }
 }
 
 function reset(args: string[]): void {
-  if (args.length !== 1 || args[0] !== "--yes") {
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length !== 1 || tagged.rest[0] !== "--yes") {
     throw new Error("reset removes containers and volumes; pass --yes to confirm");
   }
-  down();
-  if (resourceExists("volume", routerStateVolume)) {
-    container(["volume", "rm", routerStateVolume]);
+  const names = namesForTag(tagged.tag);
+  down(["--tag", tagged.tag]);
+  if (resourceExists("volume", names.routerStateVolume)) {
+    container(["volume", "rm", names.routerStateVolume]);
   }
 }
 
-function status(): void {
-  container(["ps", "-a", "--filter", `name=${projectName}`]);
-  container(["image", "ls", gatewayImage]);
+function status(args: string[] = []): void {
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length !== 0) usage();
+  const names = namesForTag(tagged.tag);
+  container(["ps", "-a", "--filter", `name=${names.projectName}`]);
+  container(["image", "ls", names.gatewayImage]);
   container(["image", "ls", agentImage]);
-  container(["volume", "ls", "--filter", `name=${routerStateVolume}`]);
-  container(["network", "ls", "--filter", `name=${networkName}`]);
+  container(["volume", "ls", "--filter", `name=${names.routerStateVolume}`]);
+  container(["network", "ls", "--filter", `name=${names.networkName}`]);
 }
 
-function logs(): void {
-  container(["logs", "-f", gatewayContainer]);
+function logs(args: string[] = []): void {
+  const tagged = parseTaggedArgs(args);
+  if (tagged.rest.length !== 0) usage();
+  const names = namesForTag(tagged.tag);
+  container(["logs", "-f", names.gatewayContainer]);
 }
 
 function main(): void {
@@ -350,26 +419,22 @@ function main(): void {
         loadImage(args);
         break;
       case "up":
-        if (args.length !== 0) usage();
-        up();
+        up(args);
         break;
       case "agent":
         agent(args);
         break;
       case "down":
-        if (args.length !== 0) usage();
-        down();
+        down(args);
         break;
       case "reset":
         reset(args);
         break;
       case "status":
-        if (args.length !== 0) usage();
-        status();
+        status(args);
         break;
       case "logs":
-        if (args.length !== 0) usage();
-        logs();
+        logs(args);
         break;
       case "build-agent":
         if (args.length !== 0) usage();
