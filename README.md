@@ -21,6 +21,10 @@ Schema snapshots track the active release line in [`VERSION`](/Users/clouds/.cod
 If `VERSION` is still on `v0.2.x`, keep schema snapshot updates on the `v0.2.0`
 files instead of introducing `v0.3.0` snapshot names early.
 
+Docker PR trial helpers live under [`scripts/`](/Users/clouds/.codex/worktrees/59e1/llm-router/scripts/README.md).
+They load the CI image artifact, run a persistent gateway container, and launch
+disposable Codex/opencode/pi agent containers through Bun.
+
 ## Install
 
 ```sh
