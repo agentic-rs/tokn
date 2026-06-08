@@ -16,12 +16,8 @@ const DEFAULT_CLIENT_NO_PROXY: &[&str] = &["localhost", "127.0.0.1", "::1"];
 
 #[derive(Args, Debug)]
 pub struct ProxyArgs {
-  /// Route intercepted requests directly to the original upstream with the
-  /// client's own credentials.
-  #[arg(long, global = true)]
-  pub passthrough: bool,
   #[command(subcommand)]
-  pub cmd: Option<ProxyCmd>,
+  pub cmd: ProxyCmd,
 }
 
 #[derive(Subcommand, Debug)]
@@ -32,6 +28,10 @@ pub enum ProxyCmd {
   Env(EnvArgs),
   /// Enter a shell with proxy + CA env vars set
   Shell(ShellArgs),
+  /// Run a known coding agent with proxy + CA env vars set
+  Run(RunArgs),
+  /// Run an arbitrary command with proxy + CA env vars set
+  Exec(ExecArgs),
   /// Run Codex with proxy + CA env vars set
   Codex(AgentProxyArgs),
   /// Run opencode with proxy + CA env vars set
@@ -50,6 +50,10 @@ pub struct StartArgs {
   pub port: Option<u16>,
   #[arg(long, value_enum)]
   pub route_mode: Option<RouteModeArg>,
+  /// Route intercepted requests directly to the original upstream with the
+  /// client's own credentials.
+  #[arg(long)]
+  pub passthrough: bool,
   #[arg(long)]
   pub ca_dir: Option<PathBuf>,
   /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
@@ -83,6 +87,26 @@ pub struct AgentProxyArgs {
 }
 
 #[derive(Args, Debug)]
+pub struct RunArgs {
+  /// Run via npx instead of a local executable.
+  #[arg(long)]
+  pub npx: bool,
+  /// Agent preset to run.
+  #[arg(value_enum)]
+  pub agent: AgentKind,
+  /// Arguments forwarded to the agent command.
+  #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+  pub args: Vec<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct ExecArgs {
+  /// Command and arguments to run.
+  #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true, num_args = 1..)]
+  pub command: Vec<String>,
+}
+
+#[derive(Args, Debug)]
 pub struct CaArgs {
   #[command(subcommand)]
   pub cmd: CaCmd,
@@ -108,11 +132,22 @@ pub enum Shell {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
-  let ProxyArgs { passthrough, cmd } = args;
-  match cmd.unwrap_or(ProxyCmd::Start(StartArgs::default())) {
-    ProxyCmd::Start(args) => start(cfg_path, args, passthrough).await,
+  match args.cmd {
+    ProxyCmd::Start(args) => start(cfg_path, args).await,
     ProxyCmd::Env(args) => env(cfg_path, args).await,
     ProxyCmd::Shell(args) => shell(cfg_path, args).await,
+    ProxyCmd::Run(args) => {
+      agent(
+        cfg_path,
+        args.agent,
+        AgentProxyArgs {
+          npx: args.npx,
+          args: args.args,
+        },
+      )
+      .await
+    }
+    ProxyCmd::Exec(args) => exec(cfg_path, args).await,
     ProxyCmd::Codex(args) => agent(cfg_path, AgentKind::Codex, args).await,
     ProxyCmd::Opencode(args) => agent(cfg_path, AgentKind::Opencode, args).await,
     ProxyCmd::Pi(args) => agent(cfg_path, AgentKind::Pi, args).await,
@@ -121,8 +156,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ProxyArgs) -> Result<()> {
 }
 
 #[allow(clippy::result_large_err)]
-async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) -> Result<()> {
-  if passthrough && args.route_mode.is_some() {
+async fn start(cfg_path: Option<PathBuf>, args: StartArgs) -> Result<()> {
+  if args.passthrough && args.route_mode.is_some() {
     anyhow::bail!("--passthrough and --route-mode cannot be used together");
   }
   let (mut cfg, resolved_cfg_path) = Config::load(cfg_path.as_deref())?;
@@ -136,7 +171,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs, passthrough: bool) ->
   let route_mode = args
     .route_mode
     .map(Into::into)
-    .or_else(|| passthrough.then_some(RouteMode::Passthrough))
+    .or_else(|| args.passthrough.then_some(RouteMode::Passthrough))
     .unwrap_or(cfg.proxy_mode.route_mode);
   let ca_dir = args
     .ca_dir
@@ -231,16 +266,26 @@ async fn shell(cfg_path: Option<PathBuf>, args: ShellArgs) -> Result<()> {
 async fn agent(cfg_path: Option<PathBuf>, kind: AgentKind, args: AgentProxyArgs) -> Result<()> {
   let env = resolved_proxy_env(cfg_path.as_deref())?;
   let spec = agent_command_spec(kind, args.npx, args.args);
-  println!("Running {} with proxy env: {}", kind.name(), spec.display());
-  println!("HTTPS_PROXY={}", env.get("HTTPS_PROXY").unwrap_or(""));
-  println!("SSL_CERT_FILE={}", env.get("SSL_CERT_FILE").unwrap_or(""));
+  run_with_proxy_env(kind.name(), &env, spec)
+}
+
+async fn exec(cfg_path: Option<PathBuf>, args: ExecArgs) -> Result<()> {
+  let env = resolved_proxy_env(cfg_path.as_deref())?;
+  let spec = CommandSpec::from_argv(args.command)?;
+  run_with_proxy_env("command", &env, spec)
+}
+
+fn run_with_proxy_env(label: &str, env: &ProxyEnv, spec: CommandSpec) -> Result<()> {
+  eprintln!("Running {label} with proxy env: {}", spec.display());
+  eprintln!("HTTPS_PROXY={}", env.get("HTTPS_PROXY").unwrap_or(""));
+  eprintln!("SSL_CERT_FILE={}", env.get("SSL_CERT_FILE").unwrap_or(""));
 
   let mut cmd = Command::new(&spec.program);
   cmd.args(&spec.args);
   cmd.envs(env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
   let status = cmd.status().with_context(|| format!("launch {}", spec.display()))?;
   if !status.success() {
-    anyhow::bail!("{} exited with status {status}", kind.name());
+    anyhow::bail!("{label} exited with status {status}");
   }
   Ok(())
 }
@@ -334,8 +379,8 @@ impl ProxyEnv {
   }
 }
 
-#[derive(Copy, Clone, Debug)]
-enum AgentKind {
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+pub enum AgentKind {
   Codex,
   Opencode,
   Pi,
@@ -366,6 +411,15 @@ struct CommandSpec {
 }
 
 impl CommandSpec {
+  fn from_argv(argv: Vec<String>) -> Result<Self> {
+    let mut argv = argv.into_iter();
+    let program = argv.next().context("missing command to execute")?;
+    Ok(Self {
+      program,
+      args: argv.collect(),
+    })
+  }
+
   fn display(&self) -> String {
     std::iter::once(self.program.as_str())
       .chain(self.args.iter().map(String::as_str))
@@ -458,6 +512,8 @@ fn route_mode_name(mode: RouteMode) -> &'static str {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::cli::{Cli, Cmd};
+  use clap::Parser;
 
   #[test]
   fn client_no_proxy_includes_configured_entries() {
@@ -510,6 +566,126 @@ mod tests {
       CommandSpec {
         program: "npx".into(),
         args: vec!["-y".into(), "@earendil-works/pi-coding-agent".into()],
+      }
+    );
+  }
+
+  #[test]
+  fn command_spec_rejects_empty_argv() {
+    assert!(CommandSpec::from_argv(Vec::new()).is_err());
+  }
+
+  #[test]
+  fn proxy_env_runner_returns_success_for_successful_child() {
+    if std::env::var_os("TOKN_PROXY_TEST_CHILD").is_some() {
+      return;
+    }
+
+    let mut env = ProxyEnv {
+      vars: vec![
+        ("HTTPS_PROXY".into(), "http://127.0.0.1:4142".into()),
+        ("SSL_CERT_FILE".into(), "ca-bundle.crt".into()),
+      ],
+    };
+    env.vars.push(("TOKN_PROXY_TEST_CHILD".into(), "1".into()));
+    let spec = CommandSpec {
+      program: std::env::current_exe().unwrap().display().to_string(),
+      args: vec![
+        "cli::proxy::tests::proxy_env_runner_returns_success_for_successful_child".into(),
+        "--exact".into(),
+      ],
+    };
+
+    run_with_proxy_env("test", &env, spec).unwrap();
+  }
+
+  #[test]
+  fn proxy_env_runner_reports_failed_child_status() {
+    if std::env::var_os("TOKN_PROXY_TEST_CHILD").is_some() {
+      std::process::exit(7);
+    }
+
+    let env = ProxyEnv {
+      vars: vec![
+        ("HTTPS_PROXY".into(), "http://127.0.0.1:4142".into()),
+        ("SSL_CERT_FILE".into(), "ca-bundle.crt".into()),
+      ],
+    };
+    let spec = CommandSpec {
+      program: std::env::current_exe().unwrap().display().to_string(),
+      args: vec![
+        "cli::proxy::tests::proxy_env_runner_reports_failed_child_status".into(),
+        "--exact".into(),
+      ],
+    };
+
+    let mut spec_env = env;
+    spec_env.vars.push(("TOKN_PROXY_TEST_CHILD".into(), "1".into()));
+    let err = run_with_proxy_env("test", &spec_env, spec).unwrap_err();
+    assert!(err.to_string().contains("test exited with status"));
+  }
+
+  #[test]
+  fn proxy_requires_a_subcommand() {
+    assert!(Cli::try_parse_from(["tokn-router", "proxy"]).is_err());
+  }
+
+  #[test]
+  fn proxy_passthrough_is_start_only() {
+    assert!(Cli::try_parse_from(["tokn-router", "proxy", "--passthrough", "env"]).is_err());
+
+    let cli = Cli::try_parse_from(["tokn-router", "proxy", "start", "--passthrough"]).unwrap();
+    let Cmd::Proxy(proxy) = cli.cmd else {
+      panic!("expected proxy command");
+    };
+    let ProxyCmd::Start(args) = proxy.cmd else {
+      panic!("expected proxy start command");
+    };
+    assert!(args.passthrough);
+  }
+
+  #[test]
+  fn proxy_run_parses_agent_preset_and_forwarded_args() {
+    let cli = Cli::try_parse_from([
+      "tokn-router",
+      "proxy",
+      "run",
+      "--npx",
+      "pi",
+      "--mode",
+      "json",
+      "--print",
+      "hello",
+    ])
+    .unwrap();
+
+    let Cmd::Proxy(proxy) = cli.cmd else {
+      panic!("expected proxy command");
+    };
+    let ProxyCmd::Run(args) = proxy.cmd else {
+      panic!("expected proxy run command");
+    };
+    assert!(args.npx);
+    assert_eq!(args.agent, AgentKind::Pi);
+    assert_eq!(args.args, ["--mode", "json", "--print", "hello"]);
+  }
+
+  #[test]
+  fn proxy_exec_parses_command_line() {
+    let cli = Cli::try_parse_from(["tokn-router", "proxy", "exec", "printenv", "HTTPS_PROXY"]).unwrap();
+
+    let Cmd::Proxy(proxy) = cli.cmd else {
+      panic!("expected proxy command");
+    };
+    let ProxyCmd::Exec(args) = proxy.cmd else {
+      panic!("expected proxy exec command");
+    };
+    assert_eq!(args.command, ["printenv", "HTTPS_PROXY"]);
+    assert_eq!(
+      CommandSpec::from_argv(args.command).unwrap(),
+      CommandSpec {
+        program: "printenv".into(),
+        args: vec!["HTTPS_PROXY".into()],
       }
     );
   }
