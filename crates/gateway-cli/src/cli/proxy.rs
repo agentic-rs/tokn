@@ -571,6 +571,61 @@ mod tests {
   }
 
   #[test]
+  fn command_spec_rejects_empty_argv() {
+    assert!(CommandSpec::from_argv(Vec::new()).is_err());
+  }
+
+  #[test]
+  fn proxy_env_runner_returns_success_for_successful_child() {
+    if std::env::var_os("TOKN_PROXY_TEST_CHILD").is_some() {
+      return;
+    }
+
+    let mut env = ProxyEnv {
+      vars: vec![
+        ("HTTPS_PROXY".into(), "http://127.0.0.1:4142".into()),
+        ("SSL_CERT_FILE".into(), "ca-bundle.crt".into()),
+      ],
+    };
+    env.vars.push(("TOKN_PROXY_TEST_CHILD".into(), "1".into()));
+    let spec = CommandSpec {
+      program: std::env::current_exe().unwrap().display().to_string(),
+      args: vec![
+        "cli::proxy::tests::proxy_env_runner_returns_success_for_successful_child".into(),
+        "--exact".into(),
+      ],
+    };
+
+    run_with_proxy_env("test", &env, spec).unwrap();
+  }
+
+  #[test]
+  fn proxy_env_runner_reports_failed_child_status() {
+    if std::env::var_os("TOKN_PROXY_TEST_CHILD").is_some() {
+      std::process::exit(7);
+    }
+
+    let env = ProxyEnv {
+      vars: vec![
+        ("HTTPS_PROXY".into(), "http://127.0.0.1:4142".into()),
+        ("SSL_CERT_FILE".into(), "ca-bundle.crt".into()),
+      ],
+    };
+    let spec = CommandSpec {
+      program: std::env::current_exe().unwrap().display().to_string(),
+      args: vec![
+        "cli::proxy::tests::proxy_env_runner_reports_failed_child_status".into(),
+        "--exact".into(),
+      ],
+    };
+
+    let mut spec_env = env;
+    spec_env.vars.push(("TOKN_PROXY_TEST_CHILD".into(), "1".into()));
+    let err = run_with_proxy_env("test", &spec_env, spec).unwrap_err();
+    assert!(err.to_string().contains("test exited with status"));
+  }
+
+  #[test]
   fn proxy_requires_a_subcommand() {
     assert!(Cli::try_parse_from(["tokn-router", "proxy"]).is_err());
   }
