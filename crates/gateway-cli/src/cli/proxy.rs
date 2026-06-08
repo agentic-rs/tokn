@@ -231,9 +231,9 @@ async fn shell(cfg_path: Option<PathBuf>, args: ShellArgs) -> Result<()> {
 async fn agent(cfg_path: Option<PathBuf>, kind: AgentKind, args: AgentProxyArgs) -> Result<()> {
   let env = resolved_proxy_env(cfg_path.as_deref())?;
   let spec = agent_command_spec(kind, args.npx, args.args);
-  println!("Running {} with proxy env: {}", kind.name(), spec.display());
-  println!("HTTPS_PROXY={}", env.get("HTTPS_PROXY").unwrap_or(""));
-  println!("SSL_CERT_FILE={}", env.get("SSL_CERT_FILE").unwrap_or(""));
+  eprintln!("Running {} with proxy env: {}", kind.name(), spec.display());
+  eprintln!("HTTPS_PROXY={}", env.get("HTTPS_PROXY").unwrap_or(""));
+  eprintln!("SSL_CERT_FILE={}", env.get("SSL_CERT_FILE").unwrap_or(""));
 
   let mut cmd = Command::new(&spec.program);
   cmd.args(&spec.args);
