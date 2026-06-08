@@ -1,57 +1,101 @@
-# tokn-router
+# tokn
 
-Turn a GitHub Copilot subscription into a local **OpenAI-compatible** API.
+Local, account-aware LLM gateway for OpenAI-compatible clients.
 
-Single static binary, written in Rust. No database, no web UI, no third-party
-services. Just a focused CLI that:
+`tokn` runs a local HTTP API and optional MITM forward proxy, routes requests
+across configured provider accounts, and records local usage/session/request
+history. GitHub Copilot is still the default provider, but the gateway now also
+supports OpenAI, ChatGPT Codex, DeepSeek, llama.cpp, Z.ai, and Zhipu BigModel.
 
-- Logs into GitHub via device flow (or imports an existing token from `gh` /
-  the official Copilot plugin).
-- Exposes `POST /v1/chat/completions` and `GET /v1/models` on `127.0.0.1`.
-- Forwards requests to `api.githubcopilot.com` with full SSE streaming.
-- Pools multiple Copilot accounts with round-robin and automatic failover.
-- Records per-request usage to a local SQLite file.
+The shipped Cargo package is `tokn-gateway-cli` and the binary is
+`tokn-gateway`.
 
-Inspired by [`sub2api`](https://github.com/Wei-Shaw/sub2api) but intentionally
-minimal.
+## Active Development
 
-## Development Notes
+**This project is moving quickly.** Config shape, database schemas, API
+behavior, provider routing, and proxy behavior are all expected to change as the
+gateway settles.
 
-Schema snapshots track the active release line in [`VERSION`](/Users/clouds/.codex/worktrees/59e1/llm-router/VERSION).
-If `VERSION` is still on `v0.2.x`, keep schema snapshot updates on the `v0.2.0`
-files instead of introducing `v0.3.0` snapshot names early.
+## Features
+
+- OpenAI-compatible local API on `127.0.0.1:4141`.
+- Endpoints for `GET /v1/models`, `POST /v1/chat/completions`,
+  `POST /v1/responses`, and `POST /v1/messages`.
+- Profile-prefixed routes like `/{profile}/v1/chat/completions`.
+- Multiple accounts per provider with active/fallback/disabled tiers.
+- Route modes for passthrough, provider switching, exact routing, catalogue
+  routing, and fuzzy model-family routing.
+- Streaming support through the shared request pipeline.
+- Local SQLite-backed usage, session, and request-body persistence.
+- Optional HTTP CONNECT proxy with local CA generation for agent workflows.
 
 ## Install
 
+From this workspace:
+
 ```sh
-cargo install --path .
+cargo install --path crates/gateway-cli
 ```
 
-## Quick start
+Or run directly during development:
 
 ```sh
-# 1. Add a Copilot account (GitHub device flow)
-tokn-router login
+cargo run -p tokn-gateway-cli -- --help
+```
 
-#    or import an existing GitHub token
-tokn-router import --from gh
+## Quick Start
 
-# 2. Start the local server (default 127.0.0.1:4141)
-tokn-router serve
+Add an account, start the API server, then point any OpenAI-compatible client at
+the local base URL.
 
-# 3. Point any OpenAI-compatible client at it
+```sh
+# Interactive provider/account setup.
+tokn-gateway account add
+
+# GitHub Copilot device-flow login.
+tokn-gateway account login --provider github-copilot
+
+# Or import a static API key from the environment.
+OPENAI_API_KEY=sk-... tokn-gateway account import --provider openai --from env --id openai
+
+# Start the local API server.
+tokn-gateway serve
+
+# Send a chat-completions request.
 curl http://127.0.0.1:4141/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
     "model": "gpt-4o",
-    "messages": [{"role":"user","content":"hi"}],
+    "messages": [{"role": "user", "content": "hi"}],
     "stream": true
   }'
 ```
 
-## Config
+For clients that expect `OPENAI_BASE_URL`, use:
 
-`~/.config/tokn-router/config.toml` (mode `0600`).
+```sh
+export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
+```
+
+## Config And Data
+
+Default files live under `~/.tokn/router/`:
+
+- `config.toml`: runtime config.
+- `auth.yaml`: stored account credentials.
+- `usage.db`: usage summaries.
+- `sessions.db`: session affinity data.
+- `requests/`: archived request bodies.
+- `ca/`: proxy CA material.
+- `logs/`: file logs when enabled.
+
+Print the config path with:
+
+```sh
+tokn-gateway config path
+```
+
+Minimal config:
 
 ```toml
 [server]
@@ -60,144 +104,184 @@ port = 4141
 
 [defaults]
 mode = "route"
-# Omit providers to allow every globally enabled provider.
+# Omit providers/accounts to allow every configured active account.
 # providers = ["github-copilot", "openai"]
-
-[profiles.coding]
-mode = "fuzzy"
-agent_id = "codex-cli"
-providers = ["github-copilot"]
-# Optional: restrict this profile to specific account ids.
-# accounts = ["personal"]
-
-[[profiles.coding.model_families]]
-name = "glm"
-members = ["glm-4.6", "glm-5.1"]
+# accounts = ["personal", "openai"]
 
 [pool]
 strategy = "round_robin"
 failure_cooldown_secs = 60
+session_ttl_secs = 18000
 
-[usage]
+[db]
 enabled = true
+record_sessions = true
+record_request_bodies = true
+body_max_bytes = 10485760
 
-# Optional outbound HTTP/HTTPS/SOCKS5 proxy. Omit the section entirely to make
-# a direct connection. Setting `system = true` defers to the standard
-# HTTP_PROXY / HTTPS_PROXY env vars.
 [proxy]
 # url = "http://user:pass@proxy.example.com:8080"
 # url = "socks5h://127.0.0.1:1080"
 # system = false
 # no_proxy = ["localhost", "127.0.0.1", ".internal"]
-
-[[accounts]]
-id = "personal"
-provider = "github-copilot"   # default — see "Providers" below for others
-auth_type = "bearer"
-refresh_token = "gho_..."
-access_token = "tid=..."
-access_token_expires_at = 1730000000
-refresh_url = "https://api.github.com/copilot_internal/v2/token"
-
-[accounts.settings]
-editor_version         = "vscode/1.95.0"
-editor_plugin_version  = "copilot-chat/0.20.0"
-user_agent             = "GitHubCopilotChat/0.20.0"
-copilot_integration_id = "vscode-chat"
-openai_intent          = "conversation-panel"
-initiator_mode         = "auto"
 ```
 
-`/v1/...` uses `[defaults]`. `/{profile}/v1/...` uses `[defaults]` plus the
-named profile overrides. Profile `providers` entries must be canonical provider
-ids; if omitted, the profile inherits the default provider set. Profile
-`accounts` entries must be configured account ids; if omitted, the profile
-inherits the default account set. Profile
-`model_families`, when present, replaces default model families for that
-profile.
+Profiles merge with `[defaults]` and are selected by prefixing the route:
 
-The downstream client may also send `X-Initiator: user|agent` per request,
-which overrides the auto-classifier and the config setting.
+```toml
+[profiles.coding]
+mode = "fuzzy"
+agent_id = "codex-cli"
+providers = ["github-copilot"]
+accounts = ["personal"]
 
-If Copilot starts rejecting requests with 401/403 + HTML, your editor identity
-headers are likely stale. Bump the account's `[accounts.settings]` values to
-match the current VS Code Copilot Chat extension and restart.
+[[profiles.coding.model_families]]
+name = "glm"
+members = ["glm-4.6", "glm-4.7"]
+```
+
+Requests to `/v1/...` use `[defaults]`. Requests to `/coding/v1/...` use
+`[defaults]` plus `[profiles.coding]`.
+
+## Database
+
+When `[db].enabled` is true, the gateway writes local SQLite state under
+`~/.tokn/router/` unless paths are overridden:
+
+- `usage.db` stores aggregate request usage for `tokn-gateway usage`.
+- `sessions.db` stores session affinity and routing state.
+- `requests/` stores day-rotated request databases named like
+  `2026-06-09.db`.
+
+The request DBs are not a single `requests.db` file. They record request and
+response metadata, and can also persist request bodies when
+`record_request_bodies = true`. Use `body_max_bytes` to cap stored body size.
+
+Schema migrations are applied when the databases are opened. To inspect or
+apply them explicitly:
+
+```sh
+tokn-gateway migration
+tokn-gateway migration --commit
+```
+
+## Accounts
+
+Accounts are managed separately from `config.toml`.
+
+```sh
+tokn-gateway account add
+tokn-gateway account list
+tokn-gateway account status
+tokn-gateway account show personal
+tokn-gateway account refresh personal
+tokn-gateway account switch --only personal
+tokn-gateway account remove personal
+```
+
+Non-interactive imports support `env`, `string`, `file`, `stdin`, and
+provider-specific sources:
+
+```sh
+tokn-gateway account import --provider openai --from env --id openai
+tokn-gateway account import --provider deepseek --from env --id deepseek
+tokn-gateway account import --provider github-copilot --from gh --id personal
+tokn-gateway account import --provider github-copilot --from copilot-plugin --id personal
+```
+
+Default environment variable names are derived from the provider id and
+credential kind, for example `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
+`ZAI_API_KEY`, and `GITHUB_COPILOT_REFRESH_TOKEN`.
+
+## Providers
+
+| id | auth | primary endpoints |
+| --- | --- | --- |
+| `github-copilot` | GitHub OAuth refresh token | chat completions |
+| `openai` | API key | chat completions, responses |
+| `codex` | OpenAI refresh token or API key | responses |
+| `deepseek` | API key | chat completions, messages |
+| `llama-cpp` | API key | chat completions |
+| `zai`, `zai-coding-plan` | API key | chat completions |
+| `zhipuai`, `zhipuai-coding-plan` | API key | chat completions |
+
+Provider ids are canonical config values. Z.ai and Zhipu coding-plan ids use
+coding-plan upstream paths; the non-coding ids use the regular PAAS paths.
+
+Per-account `base_url` can override the provider default. Account records live
+in `auth.yaml`; the CLI normally writes them for you.
+
+```yaml
+version: 1
+accounts:
+  - id: local
+    provider: llama-cpp
+    enabled: true
+    tier: active
+    auth_type: bearer
+    api_key: unused
+    base_url: http://127.0.0.1:8080/v1
+```
 
 ## Commands
 
+```text
+tokn-gateway account add [--provider PROVIDER] [--id ID]
+tokn-gateway account login [--provider PROVIDER] [--id ID] [--no-proxy]
+tokn-gateway account import --provider PROVIDER --from env|string|file|stdin|gh|copilot-plugin [--id ID]
+tokn-gateway account list [--no-quota]
+tokn-gateway account status [ID]
+tokn-gateway account switch --only ID
+tokn-gateway headers [--account ID]
+tokn-gateway serve [--host HOST] [--port PORT] [--with-proxy] [--no-proxy]
+tokn-gateway proxy start [--host HOST] [--port PORT] [--route-mode MODE] [--passthrough]
+tokn-gateway proxy env [--shell sh|bash|zsh|fish|pwsh]
+tokn-gateway proxy shell [--shell /path/to/shell]
+tokn-gateway proxy codex|opencode|pi [--npx] [ARGS...]
+tokn-gateway proxy run [--npx] codex|opencode|pi [ARGS...]
+tokn-gateway proxy exec COMMAND [ARGS...]
+tokn-gateway proxy ca path|show|regenerate
+tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
+tokn-gateway config get|set|unset KEY [--account ID] [--add]
+tokn-gateway config list|edit|path|init
+tokn-gateway agent migrate --agent codex-cli|opencode --profile NAME [--yes]
+tokn-gateway agent rollback --agent codex-cli|opencode [--backup-id ID]
+tokn-gateway migration [--commit|--rollback]
+tokn-gateway update
+tokn-gateway smoke provider|model|send ...
 ```
-tokn-router login [--provider PROVIDER] [--no-proxy]
-tokn-router import --from gh|copilot-plugin|env [--provider PROVIDER] [--env-var NAME]
-tokn-router account list|remove ID|show ID
-tokn-router headers [--account ID]   # inspect resolved Copilot identity headers
-tokn-router serve [--port N] [--with-proxy] [--proxy-route-mode MODE] [--no-proxy] [--insecure-allow-remote]
-tokn-router proxy start [--port N] [--route-mode MODE] [--passthrough] [--no-proxy] [--insecure-allow-remote]
-tokn-router proxy env [--shell sh|fish|pwsh]
-tokn-router proxy shell [--shell /path/to/shell]
-tokn-router proxy run [--npx] codex|opencode|pi [ARGS...]
-tokn-router proxy exec COMMAND [ARGS...]
-tokn-router proxy ca path|show|regenerate
-tokn-router usage [--since 24h] [--account ID]
-tokn-router config get|set|unset KEY [--account ID] [--add]
-tokn-router config list | edit | path
-tokn-router agent migrate --agent codex-cli|opencode --profile NAME [--yes]
-tokn-router agent rollback --agent codex-cli|opencode [--backup-id ID]
-```
+
+Route modes are `passthrough`, `switch`, `exact`, `route`, and `fuzzy`.
 
 ## Proxy Mode
 
-`proxy` runs a local HTTP CONNECT forward proxy that MITMs a small allowlist of
-LLM API hosts and routes those requests through tokn-router's existing account
-pool.
-
-First run generates a local CA under `~/.config/tokn-router/ca/`:
+The proxy runs a local HTTP CONNECT forward proxy. Requests for recognized LLM
+API hosts are intercepted and routed through the same account pool; unrelated
+hosts are tunneled through untouched.
 
 ```sh
-tokn-router proxy start
-tokn-router proxy ca show
+tokn-gateway proxy start
+tokn-gateway proxy ca show
+eval "$(tokn-gateway proxy env)"
 ```
 
-Then trust the printed CA cert and inject proxy + CA env vars into your shell:
+The generated environment includes:
+
+- `HTTPS_PROXY` and `HTTP_PROXY`.
+- `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, and
+  `GIT_SSL_CAINFO` pointing at a merged system-root plus tokn CA bundle.
+- `NODE_EXTRA_CA_CERTS` pointing at the tokn CA certificate.
+- `NO_PROXY` for local loopback addresses.
+
+Useful wrappers:
 
 ```sh
-eval "$(tokn-router proxy env)"
+tokn-gateway proxy shell
+tokn-gateway proxy codex --help
+tokn-gateway proxy exec curl https://api.openai.com/v1/models
 ```
 
-Or spawn a subshell with those variables already set:
-
-```sh
-tokn-router proxy shell
-```
-
-`proxy shell` uses `SHELL` when available and falls back to `/bin/sh`. Pass
-`--shell /path/to/shell` to override detection.
-
-To run a coding agent with proxy + CA variables injected:
-
-```sh
-tokn-router proxy run --npx pi --mode json --print hello
-```
-
-To run any command with the same proxy environment:
-
-```sh
-tokn-router proxy exec curl https://api.openai.com/v1/models
-```
-
-The emitted env block sets:
-
-- `HTTPS_PROXY` / `HTTP_PROXY`
-- `SSL_CERT_FILE` (to a generated merged bundle containing system roots + the tokn-router CA)
-- `NODE_EXTRA_CA_CERTS`
-- `REQUESTS_CA_BUNDLE` (merged bundle)
-- `CURL_CA_BUNDLE` (merged bundle)
-- `GIT_SSL_CAINFO` (merged bundle)
-
-`NODE_EXTRA_CA_CERTS` still points at the local `ca.crt` because Node appends it to
-the built-in trust store. The other variables point at `ca-bundle.crt` so they do
-not drop system roots.
-
-Config:
+Proxy config:
 
 ```toml
 [proxy_mode]
@@ -205,83 +289,58 @@ host = "127.0.0.1"
 port = 4142
 route_mode = "route"
 
-# optionally default recognized providers to proxy-only modes
 [proxy_mode.provider_modes]
-# github-copilot = "passthrough"
 # openai = "switch"
+# github-copilot = "passthrough"
 
-# optional; defaults to ~/.config/tokn-router/ca
+# Optional; defaults to ~/.tokn/router/ca
 # ca_dir = "/some/path"
 
-# extend the built-in MITM allowlist
-# intercept_hosts = ["my-tokn-gateway.example.com"]
-
-# force selected hosts to pass through untouched
+# Extend or trim the interception set.
+# intercept_hosts = ["my-gateway.example.com"]
 # passthrough_hosts = ["api.githubcopilot.com"]
 ```
 
-Requests to hosts outside the allowlist are tunneled through untouched.
+`tokn-gateway serve --with-proxy` runs both the API listener and proxy in one
+process. API routes use `[defaults]` or a named profile; proxy interception uses
+`[proxy_mode].route_mode` unless overridden with `--proxy-route-mode`.
 
-When a request does not explicitly choose a route mode, proxy interception
-applies mode precedence in this order: request override, provider-specific
-`[proxy_mode.provider_modes]`, then global `[proxy_mode].route_mode`.
+## LAN Bootstrap
 
-`tokn-router serve --with-proxy` runs the OpenAI-compatible HTTP server and the
-MITM proxy together in one process. They share the same account pool and event
-pipeline. API requests use `[defaults]` or `/{profile}/v1/...`; the proxy keeps
-its own route mode through `[proxy_mode].route_mode` or `--proxy-route-mode`.
-
-For a trusted LAN central server, bind the API server and proxy to reachable
-interfaces explicitly:
+By default, listeners must bind to loopback. To expose a trusted LAN gateway,
+bind explicitly and opt into the risk:
 
 ```sh
-tokn-router serve --host 0.0.0.0 --with-proxy --insecure-allow-remote
+tokn-gateway serve --host 0.0.0.0 --with-proxy --insecure-allow-remote
 ```
 
-This also exposes LAN bootstrap helpers on the API listener:
+This exposes helper routes on the API listener:
 
-- `/-/lan/bootstrap.json` prints API/proxy URLs, CA fingerprint, and helper links.
-- `/-/lan/ca.crt` serves only the public proxy CA certificate.
-- `/-/lan/env?shell=sh|bash|zsh|fish|pwsh` prints client env setup that downloads
-  the CA and exports `OPENAI_BASE_URL`, proxy vars, and CA bundle vars.
+- `/-/lan/bootstrap.json`
+- `/-/lan/ca.crt`
+- `/-/lan/env?shell=sh|bash|zsh|fish|pwsh`
 
 The server prints the CA SHA-256 fingerprint at startup. Verify that fingerprint
 before trusting a CA fetched over the LAN. The private CA key is never served.
 
-## Providers
+## Development
 
-| id | auth | notes |
-|---|---|---|
-| `github-copilot` (default) | GitHub OAuth device flow → short-lived API token | identity headers; auto-classified `X-Initiator` |
-| `zai-coding-plan` / `zai` / `zhipuai-coding-plan` / `zhipuai` | static API key (`Authorization: Bearer ...`) | Four provider ids sharing one implementation; OpenAI-compatible upstream; auto-injects `thinking: { type: "enabled", clear_thinking: false }` for reasoning models |
-
-The four Z.ai provider ids share one backend implementation, but each id is
-registered independently. The default upstream is
-`https://api.z.ai/api/coding/paas/v4`; override per-account for the
-China-mainland endpoint:
-
-```toml
-[[accounts]]
-id = "coding-plan"
-provider = "zai-coding-plan"
-auth_type = "bearer"
-api_key = "sk-..."
-base_url = "https://open.bigmodel.cn/api/paas/v4"
-```
-
-Add a Z.ai account interactively (key is read with hidden input and verified
-against `/models`):
+This is a Rust workspace. The runtime entrypoint lives in
+`crates/gateway-cli`; `crates/router` owns the HTTP API/router/proxy wiring.
 
 ```sh
-tokn-router login --provider zai-coding-plan
-# or non-interactively from the environment
-ZAI_API_KEY=sk-... tokn-router import --from env --provider zai --id work
+cargo fmt --all
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
 ```
 
-`/v1/models` returns the upstream OpenAI-shape entries unchanged; each entry
-gains an `x_tokn_router` block with the resolved provider id, display name,
-auth kind, and (when known) static capabilities/cost/limit metadata.
+Schema snapshots track the active release line in `VERSION`. If `VERSION` is on
+`v0.2.x`, keep snapshot updates on the existing `v0.2.0.sql` files.
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0.
+MIT.
+
+## Inspiration
+
+Inspired by [`sub2api`](https://github.com/Wei-Shaw/sub2api).
