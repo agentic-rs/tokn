@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "docker": "bun docker/cli.ts"
+  }
+}

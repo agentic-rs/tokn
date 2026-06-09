@@ -252,6 +252,9 @@ fn urls_from_proxy_host(
   bootstrap_port: u16,
 ) -> Result<BootstrapUrls> {
   let raw = raw.ok_or_else(|| anyhow!("missing Host header"))?;
+  let host_port = explicit_port_from_host(raw)?;
+  let proxy_port = host_port.unwrap_or(proxy_port);
+  let bootstrap_port = host_port.unwrap_or(bootstrap_port);
   urls_from_host(raw, api_port, proxy_port, bootstrap_port)
 }
 
@@ -274,6 +277,15 @@ fn urls_from_host(raw: &str, api_port: Option<u16>, proxy_port: u16, bootstrap_p
     host_for_no_proxy: no_proxy_host(host),
     host_dir_name: host_dir_name(host),
   })
+}
+
+fn explicit_port_from_host(raw: &str) -> Result<Option<u16>> {
+  let raw = raw.trim();
+  if raw.is_empty() || raw.contains('@') {
+    return Err(anyhow!("invalid Host header"));
+  }
+  let authority: http::uri::Authority = raw.parse().context("invalid Host header authority")?;
+  Ok(authority.port_u16())
 }
 
 fn proxy_target_path_and_query(target: &str) -> Option<(String, Option<String>)> {
@@ -884,6 +896,27 @@ mod tests {
     assert_eq!(json["ca_cert_url"], "http://lan-router.local:4142/-/lan/ca.crt");
     assert_eq!(json["env_url"], "http://lan-router.local:4142/-/lan/env?shell=sh");
     assert_eq!(json["ca_sha256"], "abc123");
+  }
+
+  #[test]
+  fn proxy_handler_uses_host_port_for_proxy_bootstrap_urls() {
+    let handler = proxy_plain_http_handler(test_state());
+    let response = handler(ProxyPlainHttpRequest {
+      method: "GET".into(),
+      target: "/-/lan/env?shell=sh".into(),
+      host: Some("127.0.0.1:5152".into()),
+    })
+    .unwrap();
+
+    assert_eq!(response.status, "200 OK");
+    assert!(response
+      .body
+      .contains("export OPENAI_BASE_URL='http://127.0.0.1:4141/v1'"));
+    assert!(response.body.contains("export HTTP_PROXY='http://127.0.0.1:5152'"));
+    assert!(response.body.contains("export HTTPS_PROXY='http://127.0.0.1:5152'"));
+    assert!(response
+      .body
+      .contains("curl -fsSL 'http://127.0.0.1:5152/-/lan/ca.crt'"));
   }
 
   #[test]
