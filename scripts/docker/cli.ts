@@ -39,6 +39,8 @@ type HarnessNames = {
 };
 
 type UpArgs = {
+  copyLocal: "none" | "config" | "accounts";
+  forceCopyLocal: boolean;
   tag: string;
   port?: number;
   proxyPort?: number;
@@ -48,7 +50,7 @@ function usage(): never {
   console.error(`Usage:
   bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
-  bun --cwd scripts docker up [--tag <tag>] [--port <host-port>] [--proxy-port <host-port>]
+  bun --cwd scripts docker up [--tag <tag>] [--copy-local-config|--copy-local-accounts] [--force-copy-local] [--port <host-port>] [--proxy-port <host-port>]
   bun --cwd scripts docker agent [--tag <tag>] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down [--tag <tag>]
   bun --cwd scripts docker reset [--tag <tag>] --yes
@@ -156,6 +158,14 @@ function requirePort(raw: string, label: string): number {
   return port;
 }
 
+function localRouterHome(): string {
+  const home = process.env.HOME;
+  if (!home) {
+    throw new Error("HOME is not set; cannot resolve local ~/.tokn/router");
+  }
+  return join(home, ".tokn", "router");
+}
+
 function parseTaggedArgs(args: string[]): TaggedArgs {
   let tag = process.env.TOKN_TAG ?? defaultTag;
   const rest: string[] = [];
@@ -175,6 +185,8 @@ function parseTaggedArgs(args: string[]): TaggedArgs {
 
 function parseUpArgs(args: string[]): UpArgs {
   const tagged = parseTaggedArgs(args);
+  let copyLocal: UpArgs["copyLocal"] = "none";
+  let forceCopyLocal = false;
   let port: number | undefined;
   let proxyPort: number | undefined;
   for (let i = 0; i < tagged.rest.length; i += 1) {
@@ -189,11 +201,26 @@ function parseUpArgs(args: string[]): UpArgs {
       i += 1;
     } else if (arg.startsWith("--proxy-port=")) {
       proxyPort = requirePort(arg.slice("--proxy-port=".length), "--proxy-port");
+    } else if (arg === "--copy-local-config") {
+      if (copyLocal !== "none") {
+        throw new Error("--copy-local-config and --copy-local-accounts are mutually exclusive");
+      }
+      copyLocal = "config";
+    } else if (arg === "--copy-local-accounts") {
+      if (copyLocal !== "none") {
+        throw new Error("--copy-local-config and --copy-local-accounts are mutually exclusive");
+      }
+      copyLocal = "accounts";
+    } else if (arg === "--force-copy-local") {
+      forceCopyLocal = true;
     } else {
       throw new Error(`unknown up option: ${arg}`);
     }
   }
-  return { tag: tagged.tag, port, proxyPort };
+  if (forceCopyLocal && copyLocal === "none") {
+    throw new Error("--force-copy-local requires --copy-local-config or --copy-local-accounts");
+  }
+  return { copyLocal, forceCopyLocal, tag: tagged.tag, port, proxyPort };
 }
 
 function parseAgentArgs(args: string[]): ParsedAgentArgs {
@@ -337,6 +364,49 @@ function findFirstFile(root: string, predicate: (path: string) => boolean): stri
   return undefined;
 }
 
+function copyLocalRouterFiles(names: HarnessNames, parsed: UpArgs): void {
+  if (parsed.copyLocal === "none") {
+    return;
+  }
+  const localHome = localRouterHome();
+  const files = parsed.copyLocal === "config" ? ["config.toml", "auth.yaml"] : ["auth.yaml"];
+  const script = [
+    "set -eu",
+    "copied=0",
+    ...files.flatMap((file) => [
+      `if [ -f /src/${file} ]; then`,
+      `  if [ -e /dst/${file} ] && [ "${parsed.forceCopyLocal ? "1" : "0"}" != "1" ]; then`,
+      `    echo 'tokn-copy: target already exists: /dst/${file}' >&2`,
+      "    echo 'tokn-copy: rerun with --force-copy-local to overwrite selected files' >&2",
+      "    exit 1",
+      "  fi",
+      `  cp "/src/${file}" "/dst/${file}"`,
+      "  copied=$((copied + 1))",
+      `  echo 'tokn-copy: copied ${file}'`,
+      "else",
+      `  echo 'tokn-copy: skipped missing ${file}'`,
+      "fi",
+    ]),
+    "if [ \"$copied\" -eq 0 ]; then",
+    "  echo 'tokn-copy: no selected local files were found' >&2",
+    "  exit 1",
+    "fi",
+  ].join("\n");
+
+  container([
+    "run",
+    "--rm",
+    "-v",
+    `${localHome}:/src:ro`,
+    "-v",
+    `${names.routerStateVolume}:/dst`,
+    names.gatewayImage,
+    "sh",
+    "-c",
+    script,
+  ]);
+}
+
 function up(args: string[] = []): void {
   const parsed = parseUpArgs(args);
   const names = namesForTag(parsed.tag);
@@ -348,6 +418,7 @@ function up(args: string[] = []): void {
   if (resourceExists("container", names.gatewayContainer)) {
     container(["rm", "-f", names.gatewayContainer]);
   }
+  copyLocalRouterFiles(names, parsed);
   const portArgs: string[] = [];
   if (parsed.port !== undefined) {
     portArgs.push("-p", `127.0.0.1:${parsed.port}:4141`);

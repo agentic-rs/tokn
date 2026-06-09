@@ -27,6 +27,19 @@ bun --cwd scripts docker build-agent
 bun --cwd scripts docker up --tag pr-67
 ```
 
+To seed the tag-scoped gateway volume from local router state when the server is
+created:
+
+```sh
+bun --cwd scripts docker up --tag pr-67 --copy-local-config
+bun --cwd scripts docker up --tag pr-67 --copy-local-accounts
+```
+
+`--copy-local-config` copies `~/.tokn/router/config.toml` and `auth.yaml`.
+`--copy-local-accounts` copies only `auth.yaml`. Existing target files are not
+overwritten unless `--force-copy-local` is also passed. Runtime state such as
+`ca/`, cache, DBs, logs, and request records is never copied by these options.
+
 `up` does not expose host ports by default, so multiple PR gateways can run at
 the same time. Expose ports only when you want to call the gateway from the host:
 
