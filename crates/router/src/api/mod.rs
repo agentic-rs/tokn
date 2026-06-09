@@ -1587,6 +1587,97 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn models_falls_back_to_local_catalogue_when_remote_fails() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_url = format!("http://{addr}");
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let _ = stream.read(&mut buf).await.unwrap();
+      let body = br#"{"error":"upstream unavailable"}"#;
+      let resp = format!(
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+      stream.flush().await.unwrap();
+    });
+
+    let cfg = Config::default();
+    let accounts = vec![zai_account_with_id_and_base("local", Some(upstream_url))];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let ids = json["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect::<Vec<_>>();
+    assert!(ids.contains(&"glm-5.1"));
+    assert_eq!(json["data"][0]["x_tokn_router"]["provider"], "zai-coding-plan");
+
+    server.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn models_falls_back_to_local_catalogue_when_remote_is_empty() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_url = format!("http://{addr}");
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let _ = stream.read(&mut buf).await.unwrap();
+      let body = br#"{"object":"list","data":[]}"#;
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+      stream.flush().await.unwrap();
+    });
+
+    let cfg = Config::default();
+    let accounts = vec![zai_account_with_id_and_base("local", Some(upstream_url))];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let ids = json["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect::<Vec<_>>();
+    assert!(ids.contains(&"glm-5.1"));
+
+    server.await.unwrap();
+  }
+
+  #[tokio::test]
   async fn providers_uses_prefiltered_policy_pool() {
     let mut cfg = Config::default();
     cfg.profiles.insert(
