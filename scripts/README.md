@@ -27,6 +27,13 @@ bun --cwd scripts docker build-agent
 bun --cwd scripts docker up --tag pr-67
 ```
 
+`up` does not expose host ports by default, so multiple PR gateways can run at
+the same time. Expose ports only when you want to call the gateway from the host:
+
+```sh
+bun --cwd scripts docker up --tag pr-67 --port 5141 --proxy-port 5152
+```
+
 Run disposable agent containers against that gateway:
 
 ```sh

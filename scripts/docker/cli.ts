@@ -38,11 +38,17 @@ type HarnessNames = {
   routerStateVolume: string;
 };
 
+type UpArgs = {
+  tag: string;
+  port?: number;
+  proxyPort?: number;
+};
+
 function usage(): never {
   console.error(`Usage:
   bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
-  bun --cwd scripts docker up [--tag <tag>]
+  bun --cwd scripts docker up [--tag <tag>] [--port <host-port>] [--proxy-port <host-port>]
   bun --cwd scripts docker agent [--tag <tag>] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down [--tag <tag>]
   bun --cwd scripts docker reset [--tag <tag>] --yes
@@ -142,6 +148,14 @@ function requirePositiveInteger(raw: string, label: string): number {
   return Number(raw);
 }
 
+function requirePort(raw: string, label: string): number {
+  const port = requirePositiveInteger(raw, label);
+  if (port > 65535) {
+    throw new Error(`${label} must be between 1 and 65535`);
+  }
+  return port;
+}
+
 function parseTaggedArgs(args: string[]): TaggedArgs {
   let tag = process.env.TOKN_TAG ?? defaultTag;
   const rest: string[] = [];
@@ -157,6 +171,29 @@ function parseTaggedArgs(args: string[]): TaggedArgs {
     }
   }
   return { tag: requireTag(tag), rest };
+}
+
+function parseUpArgs(args: string[]): UpArgs {
+  const tagged = parseTaggedArgs(args);
+  let port: number | undefined;
+  let proxyPort: number | undefined;
+  for (let i = 0; i < tagged.rest.length; i += 1) {
+    const arg = tagged.rest[i];
+    if (arg === "--port") {
+      port = requirePort(requireValue(tagged.rest, i, "--port"), "--port");
+      i += 1;
+    } else if (arg.startsWith("--port=")) {
+      port = requirePort(arg.slice("--port=".length), "--port");
+    } else if (arg === "--proxy-port") {
+      proxyPort = requirePort(requireValue(tagged.rest, i, "--proxy-port"), "--proxy-port");
+      i += 1;
+    } else if (arg.startsWith("--proxy-port=")) {
+      proxyPort = requirePort(arg.slice("--proxy-port=".length), "--proxy-port");
+    } else {
+      throw new Error(`unknown up option: ${arg}`);
+    }
+  }
+  return { tag: tagged.tag, port, proxyPort };
 }
 
 function parseAgentArgs(args: string[]): ParsedAgentArgs {
@@ -301,16 +338,22 @@ function findFirstFile(root: string, predicate: (path: string) => boolean): stri
 }
 
 function up(args: string[] = []): void {
-  const tagged = parseTaggedArgs(args);
-  if (tagged.rest.length !== 0) usage();
-  const names = namesForTag(tagged.tag);
-  const loadHint = /^pr-[1-9][0-9]*$/.test(tagged.tag)
-    ? `run \`bun --cwd scripts docker load --pr ${tagged.tag.slice("pr-".length)}\` first`
-    : `run \`bun --cwd scripts docker load --tag ${tagged.tag} <image.tar>\` first`;
+  const parsed = parseUpArgs(args);
+  const names = namesForTag(parsed.tag);
+  const loadHint = /^pr-[1-9][0-9]*$/.test(parsed.tag)
+    ? `run \`bun --cwd scripts docker load --pr ${parsed.tag.slice("pr-".length)}\` first`
+    : `run \`bun --cwd scripts docker load --tag ${parsed.tag} <image.tar>\` first`;
   ensureImage(names.gatewayImage, loadHint);
   ensureNetwork(names);
   if (resourceExists("container", names.gatewayContainer)) {
     container(["rm", "-f", names.gatewayContainer]);
+  }
+  const portArgs: string[] = [];
+  if (parsed.port !== undefined) {
+    portArgs.push("-p", `127.0.0.1:${parsed.port}:4141`);
+  }
+  if (parsed.proxyPort !== undefined) {
+    portArgs.push("-p", `127.0.0.1:${parsed.proxyPort}:4142`);
   }
   container([
     "run",
@@ -319,10 +362,7 @@ function up(args: string[] = []): void {
     names.gatewayContainer,
     "--network",
     names.networkName,
-    "-p",
-    "127.0.0.1:4141:4141",
-    "-p",
-    "127.0.0.1:4142:4142",
+    ...portArgs,
     "-v",
     `${names.routerStateVolume}:/root/.tokn/router`,
     names.gatewayImage,
@@ -332,6 +372,12 @@ function up(args: string[] = []): void {
     "--with-proxy",
     "--insecure-allow-remote",
   ]);
+  if (parsed.port !== undefined) {
+    console.log(`API: http://127.0.0.1:${parsed.port}/v1`);
+  }
+  if (parsed.proxyPort !== undefined) {
+    console.log(`Proxy: http://127.0.0.1:${parsed.proxyPort}`);
+  }
 }
 
 function buildAgent(): void {
