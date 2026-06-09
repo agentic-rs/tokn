@@ -21,6 +21,7 @@ type RunOptions = {
 type ParsedAgentArgs = {
   agent: string;
   mode: string;
+  noTty: boolean;
   tag: string;
   forwarded: string[];
 };
@@ -51,7 +52,7 @@ function usage(): never {
   bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
   bun --cwd scripts docker up [--tag <tag>] [--copy-local-config|--copy-local-accounts] [--force-copy-local] [--port <host-port>] [--proxy-port <host-port>]
-  bun --cwd scripts docker agent [--tag <tag>] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
+  bun --cwd scripts docker agent [--tag <tag>] [--no-tty] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down [--tag <tag>]
   bun --cwd scripts docker reset [--tag <tag>] --yes
   bun --cwd scripts docker status [--tag <tag>]
@@ -229,6 +230,7 @@ function parseAgentArgs(args: string[]): ParsedAgentArgs {
   const tagged = parseTaggedArgs(rawOptionArgs);
   let agent = process.env.TOKN_AGENT ?? "codex";
   let mode = process.env.TOKN_MODE ?? "api-route";
+  let noTty = false;
   const optionArgs = tagged.rest;
   const forwarded = rawForwardedAt >= 0 ? args.slice(rawForwardedAt + 1) : [];
 
@@ -244,6 +246,8 @@ function parseAgentArgs(args: string[]): ParsedAgentArgs {
       i += 1;
     } else if (arg.startsWith("--mode=")) {
       mode = arg.slice("--mode=".length);
+    } else if (arg === "--no-tty") {
+      noTty = true;
     } else {
       throw new Error(`unknown agent option: ${arg}`);
     }
@@ -257,7 +261,7 @@ function parseAgentArgs(args: string[]): ParsedAgentArgs {
       `unsupported mode '${mode}' (expected api-route, proxy-switch, api-passthrough, or proxy-passthrough)`,
     );
   }
-  return { agent, mode, tag: tagged.tag, forwarded };
+  return { agent, mode, noTty, tag: tagged.tag, forwarded };
 }
 
 function imageRefFromDockerLoad(output: string): string {
@@ -464,10 +468,11 @@ function agent(args: string[]): void {
     throw new Error(`gateway is not running; run \`bun --cwd scripts docker up --tag ${parsed.tag}\` first`);
   }
   ensureNetwork(names);
+  const interactive = !parsed.noTty && process.stdin.isTTY === true && process.stdout.isTTY === true;
   run(engine, [
     "run",
     "--rm",
-    ...(process.stdin.isTTY && process.stdout.isTTY ? ["-it"] : []),
+    ...(interactive ? ["--interactive", "--tty"] : []),
     "--network",
     names.networkName,
     "-e",

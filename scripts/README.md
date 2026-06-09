@@ -60,6 +60,14 @@ Forward arguments to the selected agent after `--`:
 bun --cwd scripts docker agent --tag pr-67 --agent codex --mode api-route -- --help
 ```
 
+The CLI adds an interactive TTY only when stdin and stdout both look
+interactive. If Podman still warns about a non-TTY input device in a scripted
+run, disable TTY allocation explicitly:
+
+```sh
+bun --cwd scripts docker agent --tag pr-67 --no-tty --agent codex --mode api-route -- --help
+```
+
 Modes:
 
 - `api-route`: point the agent at `http://gateway:4141/v1`; gateway owns
