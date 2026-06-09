@@ -3,6 +3,7 @@ pub mod endpoints;
 pub mod error;
 pub mod identity;
 pub mod models;
+pub mod providers;
 pub mod response;
 
 use crate::api::identity::AccountIdentityResolver;
@@ -271,6 +272,7 @@ pub fn router_live(state: LiveAppState) -> Router {
 
   // Profile-prefixed routes: /{profile}/v1/...
   let profile_routes = Router::new()
+    .route("/{profile}/v1/providers", get(providers::list_providers_with_profile))
     .route("/{profile}/v1/models", get(models::list_models_with_profile))
     .route(
       "/{profile}/v1/chat/completions",
@@ -280,6 +282,7 @@ pub fn router_live(state: LiveAppState) -> Router {
     .route("/{profile}/v1/messages", post(endpoints::messages_with_profile));
 
   Router::new()
+    .route("/v1/providers", get(providers::list_providers))
     .route("/v1/models", get(models::list_models))
     .route("/v1/chat/completions", post(endpoints::chat_completions))
     .route("/v1/responses", post(endpoints::responses))
@@ -697,7 +700,7 @@ fn build_proxy_switch_pipeline(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::{Account as AccountCfg, Config, ProfileConfig};
+  use crate::config::{Account as AccountCfg, Config, ProfileConfig, RouteMode};
   use crate::util::secret::Secret;
   use axum::body::{to_bytes, Body};
   use axum::http::{Method, Request, StatusCode};
@@ -1289,6 +1292,93 @@ mod tests {
     let upstream_req = req_rx.await.unwrap();
     let upstream_req = String::from_utf8_lossy(&upstream_req);
     assert!(upstream_req.starts_with("GET /models "));
+    server.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn providers_uses_prefiltered_policy_pool() {
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "work".into(),
+      ProfileConfig {
+        accounts: Some(vec!["local".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![zai_account_with_id("local"), zai_account_with_id("excluded")];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/work/v1/providers")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["object"], "list");
+    assert_eq!(json["route_mode"], "route");
+    let providers = json["data"].as_array().unwrap();
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["id"], "zai-coding-plan");
+    assert_eq!(providers[0]["accounts"], 1);
+    assert!(providers[0]["endpoints"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .any(|endpoint| endpoint == "chat_completions"));
+  }
+
+  #[tokio::test]
+  async fn exact_mode_models_are_provider_prefixed() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let upstream_url = format!("http://{addr}");
+    let server = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let _ = stream.read(&mut buf).await.unwrap();
+      let body = br#"{"object":"list","data":[{"id":"glm-4.6","object":"model"}]}"#;
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body).await.unwrap();
+      stream.flush().await.unwrap();
+    });
+
+    let mut cfg = Config::default();
+    cfg.profiles.insert(
+      "exact".into(),
+      ProfileConfig {
+        mode: Some(RouteMode::Exact),
+        accounts: Some(vec!["local".into()]),
+        ..Default::default()
+      },
+    );
+    let accounts = vec![zai_account_with_id_and_base("local", Some(upstream_url))];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/exact/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["route_mode"], "exact");
+    assert_eq!(json["data"][0]["id"], "zai-coding-plan/glm-4.6");
+    assert_eq!(json["data"][0]["x_tokn_router"]["upstream_id"], "glm-4.6");
+    assert_eq!(json["data"][0]["x_tokn_router"]["model_id"], "zai-coding-plan/glm-4.6");
+
     server.await.unwrap();
   }
 

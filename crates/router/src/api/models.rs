@@ -6,6 +6,8 @@ use axum::Json;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokn_accounts::routing::route_mode_as_str;
+use tokn_config::RouteMode;
 use tracing::{debug, instrument};
 
 /// Union `data` arrays from every provider, dedup by `id`. For each entry,
@@ -46,11 +48,16 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
         }
         let before = out.len();
         for mut m in arr {
-          let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-          if id.is_empty() || !seen.insert(id.clone()) {
+          let upstream_id = m.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+          if upstream_id.is_empty() {
             continue;
           }
-          enrich(&mut m, &id, provider.as_ref());
+          let id = model_id_for_policy(policy.mode, provider.as_ref(), &upstream_id);
+          if !seen.insert(id.clone()) {
+            continue;
+          }
+          set_model_id(&mut m, &id);
+          enrich(&mut m, &upstream_id, &id, provider.as_ref());
           out.push(m);
         }
         debug!(account = %acct.id(), added = out.len() - before, "list_models: account models merged");
@@ -68,22 +75,42 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
     let msg = last_err.unwrap_or_else(|| "no models available".into());
     return Err(ApiError::upstream(StatusCode::BAD_GATEWAY, msg));
   }
-  Ok(Json(json!({ "object": "list", "data": out })))
+  Ok(Json(json!({
+    "object": "list",
+    "route_mode": route_mode_as_str(policy.mode),
+    "data": out,
+  })))
+}
+
+fn model_id_for_policy(mode: RouteMode, provider: &dyn crate::provider::Provider, upstream_id: &str) -> String {
+  if matches!(mode, RouteMode::Exact) {
+    format!("{}/{}", provider.info().id, upstream_id)
+  } else {
+    upstream_id.to_string()
+  }
+}
+
+fn set_model_id(entry: &mut Value, id: &str) {
+  if let Some(obj) = entry.as_object_mut() {
+    obj.insert("id".into(), Value::String(id.to_string()));
+  }
 }
 
 /// Attach an `x_tokn_router` block describing the provider and (when known)
 /// the model's static capability/cost/limit metadata.
-fn enrich(entry: &mut Value, id: &str, provider: &dyn crate::provider::Provider) {
+fn enrich(entry: &mut Value, upstream_id: &str, rendered_id: &str, provider: &dyn crate::provider::Provider) {
   let info = provider.info();
   let mut meta = Map::new();
   meta.insert("provider".into(), json!(info.id));
   meta.insert("provider_display_name".into(), json!(info.display_name));
+  meta.insert("upstream_id".into(), json!(upstream_id));
+  meta.insert("model_id".into(), json!(rendered_id));
   meta.insert(
     "auth_kind".into(),
     serde_json::to_value(info.auth_kind).unwrap_or(Value::Null),
   );
 
-  if let Some(mi) = provider.model_info(id) {
+  if let Some(mi) = provider.model_info(upstream_id) {
     meta.insert("name".into(), json!(mi.name));
     meta.insert(
       "capabilities".into(),
