@@ -87,6 +87,38 @@ function run(program: string, args: string[], options: RunOptions = {}): string 
   return stdout;
 }
 
+async function runAttached(program: string, args: string[], options: RunOptions = {}): Promise<void> {
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
+  const proc = Bun.spawn({
+    cmd: [program, ...args],
+    env,
+    stdin: options.stdin ?? "ignore",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  let forwardedSignalExitCode: number | undefined;
+  const forwardSigint = () => {
+    forwardedSignalExitCode = 130;
+    proc.kill("SIGINT");
+  };
+  const forwardSigterm = () => {
+    forwardedSignalExitCode = 143;
+    proc.kill("SIGTERM");
+  };
+  process.on("SIGINT", forwardSigint);
+  process.on("SIGTERM", forwardSigterm);
+  const exitCode = await proc.exited;
+  process.off("SIGINT", forwardSigint);
+  process.off("SIGTERM", forwardSigterm);
+  if (forwardedSignalExitCode !== undefined) {
+    process.exit(forwardedSignalExitCode);
+  }
+  if (exitCode !== 0) {
+    const rendered = [program, ...args].join(" ");
+    throw new Error(`command failed (${exitCode}): ${rendered}`);
+  }
+}
+
 function gh(args: string[], options: RunOptions = {}): string {
   return run("gh", args, options);
 }
@@ -462,7 +494,7 @@ function buildAgent(): void {
   container(["build", "-t", agentImage, "-f", resolve(scriptDir, "Dockerfile.agent"), scriptDir]);
 }
 
-function agent(args: string[]): void {
+async function agent(args: string[]): Promise<void> {
   const parsed = parseAgentArgs(args);
   const names = namesForTag(parsed.tag);
   ensureImage(agentImage, "run `bun --cwd scripts docker build-agent` first");
@@ -471,11 +503,12 @@ function agent(args: string[]): void {
   }
   ensureNetwork(names);
   const interactive = !parsed.noTty && process.stdin.isTTY === true && process.stdout.isTTY === true;
-  run(
+  await runAttached(
     engine,
     [
       "run",
       "--rm",
+      "--sig-proxy=true",
       ...(interactive ? ["--interactive", "--tty"] : []),
       "--network",
       names.networkName,
@@ -540,7 +573,7 @@ function logs(args: string[] = []): void {
   container(["logs", "-f", names.gatewayContainer]);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
   try {
     switch (cmd) {
@@ -551,7 +584,7 @@ function main(): void {
         up(args);
         break;
       case "agent":
-        agent(args);
+        await agent(args);
         break;
       case "down":
         down(args);
@@ -578,4 +611,4 @@ function main(): void {
   }
 }
 
-main();
+await main();

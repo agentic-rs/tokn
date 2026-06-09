@@ -6,7 +6,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
   rm -f /var/cache/apt/archives/lock /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend \
   && apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates curl git
+  && apt-get install -y --no-install-recommends ca-certificates curl fd-find git ripgrep \
+  && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
 RUN --mount=type=cache,target=/root/.npm \
   npm install -g @openai/codex opencode-ai @earendil-works/pi-coding-agent
