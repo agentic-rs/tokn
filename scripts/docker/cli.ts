@@ -16,6 +16,7 @@ const modes = new Set(["api-route", "proxy-switch", "api-passthrough", "proxy-pa
 type RunOptions = {
   capture?: boolean;
   env?: Record<string, string>;
+  stdin?: "inherit" | "ignore";
 };
 
 type ParsedAgentArgs = {
@@ -69,6 +70,7 @@ function run(program: string, args: string[], options: RunOptions = {}): string 
   const proc = Bun.spawnSync({
     cmd: [program, ...args],
     env,
+    stdin: options.stdin ?? "ignore",
     stdout: options.capture ? "pipe" : "inherit",
     stderr: options.capture ? "pipe" : "inherit",
   });
@@ -469,27 +471,31 @@ function agent(args: string[]): void {
   }
   ensureNetwork(names);
   const interactive = !parsed.noTty && process.stdin.isTTY === true && process.stdout.isTTY === true;
-  run(engine, [
-    "run",
-    "--rm",
-    ...(interactive ? ["--interactive", "--tty"] : []),
-    "--network",
-    names.networkName,
-    "-e",
-    `TOKN_AGENT=${parsed.agent}`,
-    "-e",
-    `TOKN_MODE=${parsed.mode}`,
-    "-e",
-    `TOKN_GATEWAY_API_URL=http://${names.gatewayContainer}:4141`,
-    "-e",
-    `TOKN_GATEWAY_PROXY_URL=http://${names.gatewayContainer}:4142`,
-    "-v",
-    `${repoRoot}:/workspace`,
-    "-w",
-    "/workspace",
-    agentImage,
-    ...parsed.forwarded,
-  ]);
+  run(
+    engine,
+    [
+      "run",
+      "--rm",
+      ...(interactive ? ["--interactive", "--tty"] : []),
+      "--network",
+      names.networkName,
+      "-e",
+      `TOKN_AGENT=${parsed.agent}`,
+      "-e",
+      `TOKN_MODE=${parsed.mode}`,
+      "-e",
+      `TOKN_GATEWAY_API_URL=http://${names.gatewayContainer}:4141`,
+      "-e",
+      `TOKN_GATEWAY_PROXY_URL=http://${names.gatewayContainer}:4142`,
+      "-v",
+      `${repoRoot}:/workspace`,
+      "-w",
+      "/workspace",
+      agentImage,
+      ...parsed.forwarded,
+    ],
+    { stdin: interactive ? "inherit" : "ignore" },
+  );
 }
 
 function down(args: string[] = []): void {
