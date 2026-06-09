@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokn_accounts::routing::route_mode_as_str;
 use tokn_config::RouteMode;
-use tracing::{debug, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Union `data` arrays from every provider, dedup by `id`. For each entry,
 /// overlay our static `ProviderInfo`/`ModelInfo` metadata under
@@ -33,40 +33,31 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
   for acct in accounts {
     let provider = acct.provider.clone();
     debug!(account = %acct.id(), provider = %provider.info().id, "list_models: querying account");
-    match provider.list_models(&s.http).await {
-      Ok(v) => {
-        let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
-        // Warm the provider's identity cache so `Provider::has_model` can
-        // answer accurately for ids that are advertised upstream but not
-        // tracked by the catalogue snapshot.
-        let cache_ids: HashSet<String> = arr
-          .iter()
-          .filter_map(|m| m.get("id").and_then(|x| x.as_str()).map(str::to_string))
-          .collect();
-        if !cache_ids.is_empty() {
-          provider.info().model_cache.set(cache_ids);
-        }
-        let before = out.len();
-        for mut m in arr {
-          let upstream_id = m.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-          if upstream_id.is_empty() {
-            continue;
-          }
-          let id = model_id_for_policy(policy.mode, provider.as_ref(), &upstream_id);
-          if !seen.insert(id.clone()) {
-            continue;
-          }
-          set_model_id(&mut m, &id);
-          enrich(&mut m, &upstream_id, &id, provider.as_ref());
-          out.push(m);
-        }
-        debug!(account = %acct.id(), added = out.len() - before, "list_models: account models merged");
+
+    let (arr, source) = match remote_models(provider.as_ref(), &s.http).await {
+      Ok(arr) if !arr.is_empty() => {
+        warm_model_cache(provider.as_ref(), &arr);
+        (arr, "remote")
+      }
+      Ok(_) => {
+        debug!(account = %acct.id(), provider = %provider.info().id, "remote models list was empty; using local catalogue");
+        (local_models(provider.as_ref()), "local")
       }
       Err(e) => {
-        tracing::warn!(account = %acct.id(), error = %e, "list_models failed");
+        warn!(account = %acct.id(), provider = %provider.info().id, error = %e, "remote models list failed; using local catalogue");
         last_err = Some(e.to_string());
+        (local_models(provider.as_ref()), "local")
       }
-    }
+    };
+
+    let before = out.len();
+    merge_models(&mut out, &mut seen, arr, policy.mode, provider.as_ref());
+    debug!(
+      account = %acct.id(),
+      source,
+      added = out.len() - before,
+      "list_models: account models merged"
+    );
   }
 
   span.record("models", out.len());
@@ -80,6 +71,65 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
     "route_mode": route_mode_as_str(policy.mode),
     "data": out,
   })))
+}
+
+async fn remote_models(
+  provider: &dyn crate::provider::Provider,
+  http: &reqwest::Client,
+) -> crate::provider::Result<Vec<Value>> {
+  let v = provider.list_models(http).await?;
+  Ok(v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default())
+}
+
+fn local_models(provider: &dyn crate::provider::Provider) -> Vec<Value> {
+  provider
+    .info()
+    .default_models
+    .iter()
+    .map(|model| {
+      json!({
+        "id": model.id,
+        "object": "model",
+      })
+    })
+    .collect()
+}
+
+fn warm_model_cache(provider: &dyn crate::provider::Provider, arr: &[Value]) {
+  // Warm the provider's identity cache so `Provider::has_model` can
+  // answer accurately for ids that are advertised upstream but not
+  // tracked by the catalogue snapshot. Local fallback must not warm the
+  // cache, because the cache represents upstream truth after a successful
+  // remote `/models` call.
+  let cache_ids: HashSet<String> = arr
+    .iter()
+    .filter_map(|m| m.get("id").and_then(|x| x.as_str()).map(str::to_string))
+    .collect();
+  if !cache_ids.is_empty() {
+    provider.info().model_cache.set(cache_ids);
+  }
+}
+
+fn merge_models(
+  out: &mut Vec<Value>,
+  seen: &mut HashSet<String>,
+  arr: Vec<Value>,
+  mode: RouteMode,
+  provider: &dyn crate::provider::Provider,
+) {
+  for mut m in arr {
+    let upstream_id = m.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+    if upstream_id.is_empty() {
+      continue;
+    }
+    let id = model_id_for_policy(mode, provider, &upstream_id);
+    if !seen.insert(id.clone()) {
+      continue;
+    }
+    set_model_id(&mut m, &id);
+    enrich(&mut m, &upstream_id, &id, provider);
+    out.push(m);
+  }
 }
 
 fn model_id_for_policy(mode: RouteMode, provider: &dyn crate::provider::Provider, upstream_id: &str) -> String {
