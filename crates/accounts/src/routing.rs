@@ -6,6 +6,7 @@ const ROUTE_MODE_HEADER: &str = "x-route-mode";
 #[derive(Clone, Debug)]
 pub struct RouteResolver {
   default_mode: RouteMode,
+  default_provider_id: Option<String>,
   families_by_name: HashMap<String, Vec<String>>,
   family_members: HashMap<String, Vec<String>>,
 }
@@ -28,6 +29,14 @@ pub enum RouteSelector {
 
 impl RouteResolver {
   pub fn new(default_mode: RouteMode, families: &[ModelFamily]) -> Self {
+    Self::with_default_provider(default_mode, None, families)
+  }
+
+  pub fn with_default_provider(
+    default_mode: RouteMode,
+    default_provider_id: Option<String>,
+    families: &[ModelFamily],
+  ) -> Self {
     let mut families_by_name = HashMap::new();
     let mut family_members = HashMap::new();
     for family in families {
@@ -39,6 +48,7 @@ impl RouteResolver {
     }
     Self {
       default_mode,
+      default_provider_id,
       families_by_name,
       family_members,
     }
@@ -62,13 +72,21 @@ impl RouteResolver {
         mode,
         requested_model: requested_model.to_string(),
         upstream_model: requested_model.to_string(),
-        selector: RouteSelector::Any,
+        selector: self
+          .default_provider_id
+          .clone()
+          .map(RouteSelector::Provider)
+          .unwrap_or(RouteSelector::Any),
       }),
       RouteMode::Switch => Ok(RouteResolution {
         mode,
         requested_model: requested_model.to_string(),
         upstream_model: requested_model.to_string(),
-        selector: RouteSelector::Any,
+        selector: self
+          .default_provider_id
+          .clone()
+          .map(RouteSelector::Provider)
+          .unwrap_or(RouteSelector::Any),
       }),
       RouteMode::Exact => {
         let (provider, model) = requested_model
@@ -190,5 +208,15 @@ mod tests {
     let resolved = resolver.resolve("gpt-4o", Some("switch")).unwrap();
     assert_eq!(resolved.mode, RouteMode::Switch);
     assert_eq!(resolved.upstream_model, "gpt-4o");
+  }
+
+  #[test]
+  fn passthrough_and_switch_use_default_provider_when_configured() {
+    let resolver = RouteResolver::with_default_provider(RouteMode::Passthrough, Some("openai".into()), &[]);
+    let resolved = resolver.resolve("gpt-4o", None).unwrap();
+    assert_eq!(resolved.selector, RouteSelector::Provider("openai".into()));
+
+    let resolved = resolver.resolve("gpt-4o", Some("switch")).unwrap();
+    assert_eq!(resolved.selector, RouteSelector::Provider("openai".into()));
   }
 }

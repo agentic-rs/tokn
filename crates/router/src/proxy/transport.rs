@@ -521,7 +521,7 @@ mod tests {
       .iter()
       .map(|(provider_id, mode)| ((*provider_id).to_string(), *mode))
       .collect::<BTreeMap<_, _>>();
-    crate::api::build_state(&cfg, &[], Arc::new(EventBus::new(8))).expect("state")
+    crate::api::build_proxy_state(&cfg, &[], Arc::new(EventBus::new(8))).expect("state")
   }
 
   #[test]

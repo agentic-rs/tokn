@@ -7,7 +7,7 @@ use common::{body_json, cfg_for, ctx, int, missing_or_null, text, RequestsHarnes
 use serde_json::{json, Map, Value};
 use tokn_config::RouteMode;
 use tokn_mock_server::{MockEndpoint, MockLlmConfig, MockLlmServer, MockResponse, MockRoute};
-use tokn_router::api::build_state;
+use tokn_router::api::build_proxy_state;
 use tokn_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
 
 #[derive(Clone, Copy)]
@@ -90,7 +90,7 @@ fn assert_proxy_row(row: &Map<String, Value>, case: ProxyCase, inbound_body: &By
 async fn proxy_passthrough_modes_return_expected_results_and_persist_request_rows() {
   let mut harness = RequestsHarness::new();
   let cfg = cfg_for(&harness.requests_dir, RouteMode::Passthrough);
-  let state = build_state(&cfg, &[], harness.events.clone()).unwrap();
+  let state = build_proxy_state(&cfg, &[], harness.events.clone()).unwrap();
 
   let cases = [
     ProxyCase {
@@ -170,7 +170,7 @@ async fn proxy_passthrough_modes_return_expected_results_and_persist_request_row
 async fn proxy_switch_failure_returns_bad_request_and_persists_error_row() {
   let mut harness = RequestsHarness::new();
   let cfg = cfg_for(&harness.requests_dir, RouteMode::Passthrough);
-  let state = build_state(&cfg, &[], harness.events.clone()).unwrap();
+  let state = build_proxy_state(&cfg, &[], harness.events.clone()).unwrap();
   let request_id = "proxy-switch-unrecognized";
   let req = Request::builder()
     .method(Method::POST)

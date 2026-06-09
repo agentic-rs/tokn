@@ -181,7 +181,7 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs) -> Result<()> {
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
-  let state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
+  let state = crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
   let n = state.pool.len();
   let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.insecure_allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;

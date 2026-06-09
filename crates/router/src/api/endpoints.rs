@@ -56,9 +56,6 @@ async fn handle(
       url: None,
     }),
   }));
-  if matches!(mode, Some(tokn_config::RouteMode::Switch)) {
-    return Err(ApiError::bad_request("switch mode only applies in proxy mode"));
-  }
   let mut decoded = super::codec::decode_json_request(&inbound, body)?;
   apply_endpoint_compat_defaults(parser.endpoint(), &inbound, &mut decoded)?;
   let raw = tokn_requests::RawInbound {
@@ -69,10 +66,10 @@ async fn handle(
     body_json: decoded.value.clone(),
     request_id: Some(SmolStr::new(&hx.request_id)),
   };
-  let pipeline = if matches!(mode, Some(tokn_config::RouteMode::Passthrough)) {
-    &policy.passthrough_pipeline
-  } else {
-    &policy.request_pipeline
+  let pipeline = match mode {
+    Some(tokn_config::RouteMode::Passthrough) => &policy.passthrough_pipeline,
+    Some(tokn_config::RouteMode::Switch) => &policy.switch_pipeline,
+    _ => &policy.request_pipeline,
   };
   let run_config = tokn_requests::RunConfig::builder()
     .with_agent_id_opt(policy.agent_id.clone())
