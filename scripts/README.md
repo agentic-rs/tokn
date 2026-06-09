@@ -52,12 +52,14 @@ Run disposable agent containers against that gateway:
 ```sh
 bun --cwd scripts docker agent --tag pr-67 --agent opencode --mode api-route
 bun --cwd scripts docker agent --tag pr-67 --agent codex --mode proxy-switch
+bun --cwd scripts docker agent --tag pr-67 --agent shell --mode api-route
 ```
 
 Forward arguments to the selected agent after `--`:
 
 ```sh
 bun --cwd scripts docker agent --tag pr-67 --agent codex --mode api-route -- --help
+bun --cwd scripts docker agent --tag pr-67 --agent shell --mode proxy-switch -- -lc 'env | sort'
 ```
 
 The CLI adds an interactive TTY only when stdin and stdout both look

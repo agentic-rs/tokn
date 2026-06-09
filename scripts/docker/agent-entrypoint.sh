@@ -19,8 +19,11 @@ case "$agent" in
   pi)
     agent_cmd="${TOKN_PI_CMD:-pi}"
     ;;
+  shell)
+    agent_cmd="${TOKN_SHELL_CMD:-sh}"
+    ;;
   *)
-    echo "tokn-agent: unsupported TOKN_AGENT '$agent' (expected codex, opencode, or pi)" >&2
+    echo "tokn-agent: unsupported TOKN_AGENT '$agent' (expected codex, opencode, pi, or shell)" >&2
     exit 64
     ;;
 esac

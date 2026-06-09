@@ -10,7 +10,7 @@ const gatewayImageRepo = "tokn-gateway-cli";
 const agentImage = "tokn-agent-runner:ci";
 const gatewayArtifactName = "tokn-gateway-cli-image";
 const repoRoot = resolve(scriptDir, "../..");
-const agents = new Set(["codex", "opencode", "pi"]);
+const agents = new Set(["codex", "opencode", "pi", "shell"]);
 const modes = new Set(["api-route", "proxy-switch", "api-passthrough", "proxy-passthrough"]);
 
 type RunOptions = {
@@ -53,7 +53,7 @@ function usage(): never {
   bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
   bun --cwd scripts docker up [--tag <tag>] [--copy-local-config|--copy-local-accounts] [--force-copy-local] [--port <host-port>] [--proxy-port <host-port>]
-  bun --cwd scripts docker agent [--tag <tag>] [--no-tty] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
+  bun --cwd scripts docker agent [--tag <tag>] [--no-tty] --agent codex|opencode|pi|shell --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down [--tag <tag>]
   bun --cwd scripts docker reset [--tag <tag>] --yes
   bun --cwd scripts docker status [--tag <tag>]
@@ -288,7 +288,7 @@ function parseAgentArgs(args: string[]): ParsedAgentArgs {
   }
 
   if (!agents.has(agent)) {
-    throw new Error(`unsupported agent '${agent}' (expected codex, opencode, or pi)`);
+    throw new Error(`unsupported agent '${agent}' (expected codex, opencode, pi, or shell)`);
   }
   if (!modes.has(mode)) {
     throw new Error(
