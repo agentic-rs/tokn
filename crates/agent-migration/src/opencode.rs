@@ -1,5 +1,5 @@
 use crate::agent::AgentKind;
-use crate::migration::{EditKind, MigrationPlan, PlannedEdit};
+use crate::migration::{annotate_imported_account, EditKind, MigrationPlan, PlannedEdit};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ pub(crate) fn plan(timestamp: &str, profile: &str, target_base_url: &str, home: 
   let imported_accounts = if auth_path.exists() {
     let raw = std::fs::read_to_string(&auth_path).with_context(|| format!("reading {}", auth_path.display()))?;
     let json = serde_json::from_str(&raw).with_context(|| format!("parsing {}", auth_path.display()))?;
-    accounts_from_auth_json(&json)
+    accounts_from_auth_json(&json, &auth_path, timestamp)
   } else {
     Vec::new()
   };
@@ -100,14 +100,24 @@ fn model_map(model_ids: &[String]) -> Value {
   Value::Object(models)
 }
 
-fn accounts_from_auth_json(json: &Value) -> Vec<Account> {
+fn accounts_from_auth_json(json: &Value, auth_path: &std::path::Path, timestamp: &str) -> Vec<Account> {
   let Some(providers) = json.as_object() else {
     return Vec::new();
   };
 
   providers
     .iter()
-    .filter_map(|(provider, auth)| account_from_provider_auth(provider, auth))
+    .filter_map(|(provider, auth)| {
+      account_from_provider_auth(provider, auth).map(|account| {
+        annotate_imported_account(
+          account,
+          AgentKind::Opencode,
+          auth_path,
+          &format!("auth.{provider}"),
+          timestamp,
+        )
+      })
+    })
     .collect()
 }
 
@@ -267,12 +277,23 @@ mod tests {
       }
     });
 
-    let accounts = accounts_from_auth_json(&json);
+    let auth_path = std::path::PathBuf::from("/tmp/opencode-auth.json");
+    let accounts = accounts_from_auth_json(&json, &auth_path, "20260604T153012Z");
 
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].id, "opencode-openai");
     assert_eq!(accounts[0].provider, tokn_core::provider::ID_OPENAI);
     assert_eq!(accounts[0].api_key.as_ref().unwrap().expose(), "sk-test");
+    assert!(accounts[0].tags.iter().any(|tag| tag == "source:opencode"));
+    assert_eq!(
+      accounts[0]
+        .settings
+        .get("import")
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("source_key"))
+        .and_then(toml::Value::as_str),
+      Some("auth.openai")
+    );
   }
 
   #[test]
@@ -293,7 +314,11 @@ mod tests {
       }
     });
 
-    let accounts = accounts_from_auth_json(&json);
+    let accounts = accounts_from_auth_json(
+      &json,
+      std::path::Path::new("/tmp/opencode-auth.json"),
+      "20260604T153012Z",
+    );
 
     assert_eq!(accounts.len(), 2);
     let copilot = accounts
@@ -327,7 +352,12 @@ mod tests {
       }
     });
 
-    assert!(accounts_from_auth_json(&json).is_empty());
+    assert!(accounts_from_auth_json(
+      &json,
+      std::path::Path::new("/tmp/opencode-auth.json"),
+      "20260604T153012Z",
+    )
+    .is_empty());
   }
 
   #[test]

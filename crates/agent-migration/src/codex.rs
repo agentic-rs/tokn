@@ -1,5 +1,5 @@
 use crate::agent::AgentKind;
-use crate::migration::{EditKind, MigrationPlan, PlannedEdit};
+use crate::migration::{annotate_imported_account, EditKind, MigrationPlan, PlannedEdit};
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -19,7 +19,13 @@ pub(crate) fn plan(timestamp: &str, profile: &str, target_base_url: &str, home: 
     let raw = std::fs::read_to_string(&auth_path).with_context(|| format!("reading {}", auth_path.display()))?;
     let mut json: Value = serde_json::from_str(&raw).with_context(|| format!("parsing {}", auth_path.display()))?;
     if let Some(account) = account_from_auth_json(&json) {
-      imported_accounts.push(account);
+      imported_accounts.push(annotate_imported_account(
+        account,
+        AgentKind::CodexCli,
+        &auth_path,
+        "auth.tokens",
+        timestamp,
+      ));
     }
     if let Some(obj) = json.as_object_mut() {
       obj.insert("auth_mode".into(), Value::String("api_key".into()));
