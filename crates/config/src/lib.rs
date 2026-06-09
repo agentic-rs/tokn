@@ -33,6 +33,8 @@ pub struct Config {
   #[serde(default)]
   pub defaults: DefaultsConfig,
   #[serde(default)]
+  pub agents: BTreeMap<String, AgentConfig>,
+  #[serde(default)]
   pub profiles: BTreeMap<String, ProfileConfig>,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
@@ -98,6 +100,16 @@ pub struct ProfileConfig {
   pub accounts: Option<Vec<String>>,
   #[serde(default)]
   pub model_families: Option<Vec<ModelFamily>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentConfig {
+  #[serde(default)]
+  pub mode: Option<RouteMode>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub profile: Option<String>,
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub sync: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -247,6 +259,10 @@ impl DbConfig {
 
 fn default_true() -> bool {
   true
+}
+
+fn is_false(value: &bool) -> bool {
+  !*value
 }
 
 fn default_body_max_bytes() -> usize {
@@ -429,6 +445,12 @@ impl Config {
     validate_model_families(&self.defaults.model_families)?;
     validate_providers("defaults.providers", self.defaults.providers.as_deref())?;
     validate_account_ids("defaults.accounts", self.defaults.accounts.as_deref())?;
+    for (name, agent) in &self.agents {
+      validate_profile_name(name)?;
+      if let Some(profile) = agent.profile.as_deref() {
+        validate_profile_name(profile)?;
+      }
+    }
     for (name, profile) in &self.profiles {
       validate_profile_name(name)?;
       if let Some(model_families) = profile.model_families.as_deref() {
@@ -721,6 +743,25 @@ mod tests {
     assert_eq!(work.agent_id, Some(AgentId::CodexCli));
     assert_eq!(work.providers.as_deref(), Some(&["codex".to_string()][..]));
     assert_eq!(work.model_families.as_ref().unwrap()[0].name, "glm");
+  }
+
+  #[test]
+  fn agents_deserialize_binding_policy() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [agents.opencode]
+        mode = "switch"
+        profile = "opencode"
+        sync = true
+      "#,
+    )
+    .expect("config should deserialize");
+
+    let agent = cfg.agents.get("opencode").expect("opencode agent");
+    assert_eq!(agent.mode, Some(RouteMode::Switch));
+    assert_eq!(agent.profile.as_deref(), Some("opencode"));
+    assert!(agent.sync);
+    cfg.validate().expect("agent config should validate");
   }
 
   #[test]

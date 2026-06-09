@@ -3,10 +3,11 @@ use crate::manifest::{self, FileBackup, MigrationManifest};
 use crate::{codex, opencode};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use tokn_auth::{default_auth_path, AuthStore};
-use tokn_config::{Account, Config};
+use tokn_config::{Account, Config, RouteMode};
 
 #[derive(Debug)]
 pub struct MigrateRequest {
@@ -114,6 +115,11 @@ pub fn apply_migration(plan: MigrationPlan) -> Result<ApplyReport> {
 
 fn apply_migration_to_manifest_path(plan: MigrationPlan, manifest_path: PathBuf) -> Result<ApplyReport> {
   let mut files = Vec::new();
+  let imported_account_ids = plan
+    .imported_accounts
+    .iter()
+    .map(|account| account.id.clone())
+    .collect::<BTreeSet<_>>();
 
   let gateway_auth_existed = plan.gateway_auth_path.exists();
   manifest::backup_path_for(&plan.gateway_auth_path, &plan.timestamp, &mut files)?;
@@ -145,12 +151,13 @@ fn apply_migration_to_manifest_path(plan: MigrationPlan, manifest_path: PathBuf)
   manifest::write_manifest(&manifest_path, &manifest.clone().in_progress())?;
 
   let mut store = AuthStore::load(Some(&plan.gateway_auth_path), Some(&plan.gateway_config_path))?;
+  disable_missing_source_accounts(&mut store, plan.agent, &imported_account_ids);
   for account in &plan.imported_accounts {
     store.upsert(account.clone());
   }
   store.save()?;
 
-  upsert_profile(
+  upsert_agent_and_profiles(
     &plan.gateway_config_path,
     &plan.profile,
     plan.agent,
@@ -167,6 +174,65 @@ fn apply_migration_to_manifest_path(plan: MigrationPlan, manifest_path: PathBuf)
     manifest_path,
     files: manifest.files,
   })
+}
+
+pub(crate) fn annotate_imported_account(
+  mut account: Account,
+  agent: AgentKind,
+  source_path: &Path,
+  source_key: &str,
+  imported_at: &str,
+) -> Account {
+  let source_tag = format!("source:{}", agent.slug());
+  for tag in ["imported", "agent-managed", agent.slug(), source_tag.as_str()] {
+    if !account.tags.iter().any(|existing| existing == tag) {
+      account.tags.push(tag.to_string());
+    }
+  }
+
+  let mut import = toml::Table::new();
+  import.insert("source_agent".into(), toml::Value::String(agent.slug().into()));
+  import.insert(
+    "source_path".into(),
+    toml::Value::String(source_path.display().to_string()),
+  );
+  import.insert("source_key".into(), toml::Value::String(source_key.into()));
+  import.insert("imported_at".into(), toml::Value::String(imported_at.into()));
+  import.insert("last_seen_at".into(), toml::Value::String(imported_at.into()));
+  import.insert("sync_managed".into(), toml::Value::Boolean(true));
+  import.insert("missing_from_source".into(), toml::Value::Boolean(false));
+  account.settings.insert("import".into(), toml::Value::Table(import));
+  account.enabled = true;
+  account
+}
+
+fn disable_missing_source_accounts(store: &mut AuthStore, agent: AgentKind, seen_ids: &BTreeSet<String>) {
+  for account in &mut store.accounts {
+    if seen_ids.contains(&account.id) || !is_source_managed_account(account, agent) {
+      continue;
+    }
+    account.enabled = false;
+    if !account.tags.iter().any(|tag| tag == "source:missing") {
+      account.tags.push("source:missing".into());
+    }
+    if let Some(import) = account.settings.get_mut("import").and_then(toml::Value::as_table_mut) {
+      import.insert("missing_from_source".into(), toml::Value::Boolean(true));
+    }
+  }
+}
+
+fn is_source_managed_account(account: &Account, agent: AgentKind) -> bool {
+  let source_agent = account
+    .settings
+    .get("import")
+    .and_then(toml::Value::as_table)
+    .and_then(|import| import.get("source_agent"))
+    .and_then(toml::Value::as_str);
+  if source_agent == Some(agent.slug()) {
+    return true;
+  }
+  let source_tag = format!("source:{}", agent.slug());
+  account.tags.iter().any(|tag| tag == &source_tag)
 }
 
 pub fn rollback_migration(request: RollbackRequest) -> Result<RollbackReport> {
@@ -239,30 +305,78 @@ fn write_edit(edit: &PlannedEdit) -> Result<()> {
   Ok(())
 }
 
-fn upsert_profile(path: &Path, profile: &str, agent: AgentKind, accounts: &[Account]) -> Result<()> {
+fn upsert_agent_and_profiles(path: &Path, profile: &str, agent: AgentKind, accounts: &[Account]) -> Result<()> {
   Ok(Config::edit_in_place(path, |doc| {
-    let account_ids = accounts.iter().map(|account| account.id.clone()).collect::<Vec<_>>();
-    let mut providers = accounts
-      .iter()
-      .map(|account| account.provider.clone())
-      .collect::<Vec<_>>();
-    if providers.is_empty() {
-      providers.push(agent.default_provider_id().to_string());
-    }
-    providers.sort();
-    providers.dedup();
-    let profiles = doc["profiles"].or_insert(toml_edit::table());
-    let profile_item = profiles[profile].or_insert(toml_edit::table());
-    profile_item["mode"] = toml_edit::value("route");
-    profile_item["agent_id"] = toml_edit::value(agent.agent_id());
-    profile_item["providers"] = array_value(&providers);
-    if accounts.is_empty() {
-      profile_item.as_table_mut().map(|table| table.remove("accounts"));
-    } else {
-      profile_item["accounts"] = array_value(&account_ids);
+    let agent_mode = upsert_agent(doc, profile, agent);
+    upsert_profile_item(doc, profile, agent, agent_mode, accounts);
+    if agent_mode == RouteMode::Switch {
+      upsert_switch_profiles(doc, profile, agent, accounts);
     }
     Ok(())
   })?)
+}
+
+fn upsert_agent(doc: &mut toml_edit::DocumentMut, profile: &str, agent: AgentKind) -> RouteMode {
+  let agents = doc["agents"].or_insert(toml_edit::table());
+  let agent_item = agents[agent.slug()].or_insert(toml_edit::table());
+  if agent_item.get("mode").is_none() {
+    agent_item["mode"] = toml_edit::value("route");
+  }
+  agent_item["profile"] = toml_edit::value(profile);
+  agent_item["sync"] = toml_edit::value(true);
+  agent_item
+    .get("mode")
+    .and_then(toml_edit::Item::as_str)
+    .and_then(parse_route_mode)
+    .unwrap_or(RouteMode::Route)
+}
+
+fn upsert_profile_item(
+  doc: &mut toml_edit::DocumentMut,
+  profile: &str,
+  agent: AgentKind,
+  mode: RouteMode,
+  accounts: &[Account],
+) {
+  let account_ids = accounts.iter().map(|account| account.id.clone()).collect::<Vec<_>>();
+  let mut providers = accounts
+    .iter()
+    .map(|account| account.provider.clone())
+    .collect::<Vec<_>>();
+  if providers.is_empty() {
+    providers.push(agent.default_provider_id().to_string());
+  }
+  providers.sort();
+  providers.dedup();
+  let profiles = doc["profiles"].or_insert(toml_edit::table());
+  let profile_item = profiles[profile].or_insert(toml_edit::table());
+  profile_item["mode"] = toml_edit::value(route_mode_as_str(mode));
+  profile_item["agent_id"] = toml_edit::value(agent.agent_id());
+  profile_item["providers"] = array_value(&providers);
+  if accounts.is_empty() {
+    profile_item.as_table_mut().map(|table| table.remove("accounts"));
+  } else {
+    profile_item["accounts"] = array_value(&account_ids);
+  }
+}
+
+fn upsert_switch_profiles(doc: &mut toml_edit::DocumentMut, profile: &str, agent: AgentKind, accounts: &[Account]) {
+  let mut by_provider: BTreeMap<String, Vec<String>> = BTreeMap::new();
+  for account in accounts {
+    by_provider
+      .entry(account.provider.clone())
+      .or_default()
+      .push(account.id.clone());
+  }
+  let profiles = doc["profiles"].or_insert(toml_edit::table());
+  for (provider, account_ids) in by_provider {
+    let synthetic_profile = format!("{profile}-{provider}");
+    let item = profiles[synthetic_profile.as_str()].or_insert(toml_edit::table());
+    item["mode"] = toml_edit::value("switch");
+    item["agent_id"] = toml_edit::value(agent.agent_id());
+    item["providers"] = array_value(std::slice::from_ref(&provider));
+    item["accounts"] = array_value(&account_ids);
+  }
 }
 
 fn array_value(values: &[String]) -> toml_edit::Item {
@@ -271,6 +385,27 @@ fn array_value(values: &[String]) -> toml_edit::Item {
     arr.push(value.as_str());
   }
   toml_edit::value(arr)
+}
+
+fn parse_route_mode(mode: &str) -> Option<RouteMode> {
+  match mode.trim() {
+    "passthrough" => Some(RouteMode::Passthrough),
+    "switch" => Some(RouteMode::Switch),
+    "exact" => Some(RouteMode::Exact),
+    "route" => Some(RouteMode::Route),
+    "fuzzy" => Some(RouteMode::Fuzzy),
+    _ => None,
+  }
+}
+
+fn route_mode_as_str(mode: RouteMode) -> &'static str {
+  match mode {
+    RouteMode::Passthrough => "passthrough",
+    RouteMode::Switch => "switch",
+    RouteMode::Exact => "exact",
+    RouteMode::Route => "route",
+    RouteMode::Fuzzy => "fuzzy",
+  }
 }
 
 fn validate_profile_name(profile: &str) -> Result<()> {
@@ -312,6 +447,32 @@ fn default_gateway_auth_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn sample_account(id: &str, provider: &str) -> Account {
+    Account {
+      id: id.into(),
+      provider: provider.into(),
+      enabled: true,
+      tier: tokn_core::account::AccountTier::Active,
+      tags: Vec::new(),
+      label: None,
+      base_url: None,
+      headers: Default::default(),
+      auth_type: None,
+      username: None,
+      api_key: None,
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: toml::Table::new(),
+    }
+  }
 
   #[test]
   fn default_gateway_auth_path_uses_auth_store_default() {
@@ -404,13 +565,17 @@ port = 4141
   }
 
   #[test]
-  fn upsert_profile_without_imported_accounts_scopes_to_agent_provider() {
+  fn upsert_agent_and_profiles_without_imported_accounts_scopes_to_agent_provider() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
 
-    upsert_profile(&path, "opencode", AgentKind::Opencode, &[]).unwrap();
+    upsert_agent_and_profiles(&path, "opencode", AgentKind::Opencode, &[]).unwrap();
 
     let (cfg, _) = Config::load(Some(&path)).unwrap();
+    let agent = cfg.agents.get("opencode").unwrap();
+    assert_eq!(agent.mode, Some(RouteMode::Route));
+    assert_eq!(agent.profile.as_deref(), Some("opencode"));
+    assert!(agent.sync);
     let profile = cfg.profiles.get("opencode").unwrap();
     assert_eq!(profile.agent_id, Some(tokn_core::AgentId::Opencode));
     assert_eq!(
@@ -421,7 +586,7 @@ port = 4141
   }
 
   #[test]
-  fn upsert_profile_with_imported_accounts_scopes_to_accounts_and_providers() {
+  fn upsert_agent_and_profiles_with_imported_accounts_scopes_to_accounts_and_providers() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     let accounts = vec![Account {
@@ -448,9 +613,11 @@ port = 4141
       settings: toml::Table::new(),
     }];
 
-    upsert_profile(&path, "codex", AgentKind::CodexCli, &accounts).unwrap();
+    upsert_agent_and_profiles(&path, "codex", AgentKind::CodexCli, &accounts).unwrap();
 
     let (cfg, _) = Config::load(Some(&path)).unwrap();
+    let agent = cfg.agents.get("codex-cli").unwrap();
+    assert_eq!(agent.profile.as_deref(), Some("codex"));
     let profile = cfg.profiles.get("codex").unwrap();
     assert_eq!(profile.agent_id, Some(tokn_core::AgentId::CodexCli));
     assert_eq!(
@@ -458,6 +625,62 @@ port = 4141
       Some(&[tokn_core::provider::ID_CODEX.to_string()][..])
     );
     assert_eq!(profile.accounts.as_deref(), Some(&["codex-cli-codex".to_string()][..]));
+  }
+
+  #[test]
+  fn upsert_agent_and_profiles_respects_switch_mode_with_synthetic_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+      &path,
+      r#"
+        [agents.opencode]
+        mode = "switch"
+      "#,
+    )
+    .unwrap();
+    let mut openai = sample_account("opencode-openai", tokn_core::provider::ID_OPENAI);
+    let mut codex = sample_account("opencode-codex", tokn_core::provider::ID_CODEX);
+    openai.tags.push("source:opencode".into());
+    codex.tags.push("source:opencode".into());
+
+    upsert_agent_and_profiles(&path, "opencode", AgentKind::Opencode, &[openai, codex]).unwrap();
+
+    let (cfg, _) = Config::load(Some(&path)).unwrap();
+    assert_eq!(cfg.agents["opencode"].mode, Some(RouteMode::Switch));
+    assert_eq!(cfg.profiles["opencode"].mode, Some(RouteMode::Switch));
+    assert_eq!(
+      cfg.profiles["opencode-openai"].accounts.as_deref(),
+      Some(&["opencode-openai".to_string()][..])
+    );
+    assert_eq!(
+      cfg.profiles["opencode-codex"].accounts.as_deref(),
+      Some(&["opencode-codex".to_string()][..])
+    );
+  }
+
+  #[test]
+  fn disable_missing_source_accounts_disables_previously_imported_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_path = dir.path().join("auth.yaml");
+    let mut store = AuthStore::load(Some(&auth_path), None).unwrap();
+    store.accounts = vec![
+      annotate_imported_account(
+        sample_account("opencode-openai", tokn_core::provider::ID_OPENAI),
+        AgentKind::Opencode,
+        Path::new("/tmp/opencode-auth.json"),
+        "auth.openai",
+        "20260604T153012Z",
+      ),
+      sample_account("manual-openai", tokn_core::provider::ID_OPENAI),
+    ];
+
+    disable_missing_source_accounts(&mut store, AgentKind::Opencode, &BTreeSet::new());
+
+    let imported = store.get("opencode-openai").unwrap();
+    assert!(!imported.enabled);
+    assert!(imported.tags.iter().any(|tag| tag == "source:missing"));
+    assert!(store.get("manual-openai").unwrap().enabled);
   }
 
   #[test]
