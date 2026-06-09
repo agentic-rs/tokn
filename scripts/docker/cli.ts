@@ -400,8 +400,9 @@ function copyLocalRouterFiles(names: HarnessNames, parsed: UpArgs): void {
     `${localHome}:/src:ro`,
     "-v",
     `${names.routerStateVolume}:/dst`,
-    names.gatewayImage,
+    "--entrypoint",
     "sh",
+    names.gatewayImage,
     "-c",
     script,
   ]);
