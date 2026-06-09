@@ -80,12 +80,15 @@ impl Registry {
     {
       return Some(descriptor.id);
     }
-    // Fall back to the lone host claimant only when the path is empty
-    // (i.e. caller passed a bare host, not a URL); requires path
-    // validation otherwise so that unrelated paths on a shared host
+    // Fall back to the lone host claimant for bare hosts and providers
+    // whose descriptor treats the host root as owned by that provider.
+    // Path-scoped descriptors (e.g. chatgpt.com/backend-api/codex) still
+    // require an explicit path match so unrelated paths on shared hosts
     // don't accidentally resolve.
     match host_matches.as_slice() {
-      [descriptor] if target.path.is_empty() || target.path == "/" => Some(descriptor.id),
+      [descriptor] if target.path.is_empty() || target.path == "/" || descriptor.matches_url(&target.host, "/") => {
+        Some(descriptor.id)
+      }
       _ => None,
     }
   }
@@ -201,6 +204,10 @@ mod tests {
     assert_eq!(registry.provider_id_for_url("api.deepseek.com"), Some(ID_DEEPSEEK));
     assert_eq!(registry.provider_id_for_url("localhost"), Some(ID_LLAMA_CPP));
     assert_eq!(registry.provider_id_for_url("127.0.0.1"), Some(ID_LLAMA_CPP));
+    assert_eq!(
+      registry.provider_id_for_url("http://127.0.0.1:8080/models"),
+      Some(ID_LLAMA_CPP)
+    );
     assert_eq!(registry.provider_id_for_url("api.openai.com"), Some(ID_OPENAI));
     assert_eq!(
       registry.provider_id_for_url("chatgpt.com/backend-api/codex/responses"),

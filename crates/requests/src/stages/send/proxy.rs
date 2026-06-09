@@ -31,6 +31,7 @@ use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
 use crate::stages::resolve::proxy::keys;
+use tokn_core::provider::Endpoint;
 
 fn proxy_send_error_hint(err_text: &str, has_inner_source: bool) -> &'static str {
   if err_text.contains("with no inner error")
@@ -120,21 +121,24 @@ impl SendStage for ProxySend {
       .unwrap_or(false);
     let mut outbound_headers = headers.headers.clone();
     if inject_auth {
-      let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
-        PipelineError::permanent(
-          Stage::Send,
-          RequestsError::MissingUpstreamEndpoint {
-            request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
-          },
-        )
-      })?;
+      let patch_endpoint = upstream_endpoint
+        .or_else(|| {
+          resolved
+            .account_handle
+            .provider
+            .info()
+            .default_endpoints
+            .first()
+            .copied()
+        })
+        .unwrap_or(Endpoint::ChatCompletions);
       resolved
         .account_handle
         .provider
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            endpoint: upstream_endpoint,
+            endpoint: patch_endpoint,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -447,6 +451,46 @@ mod tests {
     assert_eq!(sent.status, 200);
 
     let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
+    assert!(raw_req.contains("authorization: bearer router-token"));
+    assert!(!raw_req.contains("authorization: bearer client-token"));
+  }
+
+  #[tokio::test]
+  async fn injects_router_managed_auth_for_custom_paths() {
+    let (addr, rx) = one_shot_raw_http_server().await;
+
+    let ctx = ctx_with(
+      RunConfig::builder()
+        .with_str(keys::HOST, addr.to_string())
+        .with_str(send_keys::PATH, "/models")
+        .with_str(send_keys::METHOD, "GET")
+        .with_str(send_keys::SCHEME, "http")
+        .with(send_keys::INJECT_AUTH, true)
+        .build(),
+    );
+    let resolved = Resolved {
+      agent_id: None,
+      model: SmolStr::new("unknown"),
+      resolved_endpoint: None,
+      upstream_model: SmolStr::new("unknown"),
+      upstream_endpoint: None,
+      account_id: SmolStr::new("acct"),
+      provider_id: SmolStr::new("mock"),
+      account_handle: mock_handle_with_provider(
+        "acct",
+        MockProvider::new("mock").with_header("authorization", "Bearer router-token"),
+      ),
+    };
+
+    let send = ProxySend::new(reqwest::Client::new());
+    let sent = send
+      .send(&ctx, &fake_extracted(), &resolved, &fake_headers(), &fake_body())
+      .await
+      .unwrap();
+    assert_eq!(sent.status, 200);
+
+    let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
+    assert!(raw_req.starts_with("get /models "));
     assert!(raw_req.contains("authorization: bearer router-token"));
     assert!(!raw_req.contains("authorization: bearer client-token"));
   }

@@ -247,6 +247,39 @@ impl AccountPool {
     }
   }
 
+  pub fn acquire_provider(&self, session_id: Option<&str>, provider_id: &str) -> SessionAcquire {
+    if let Some(id) = session_id {
+      match self.affinity.lookup(id) {
+        Lookup::Hit(account_id) => {
+          if let Some(acct) = self.account_by_id(&account_id) {
+            if acct.provider.info().id == provider_id && acct.is_healthy() {
+              self.record_session(id, &acct.id());
+              return SessionAcquire::Account(acct);
+            }
+          }
+        }
+        Lookup::Expired => return SessionAcquire::SessionExpired,
+        Lookup::Unknown => {}
+      }
+    }
+
+    let Some(bucket) = self.buckets.get(provider_id) else {
+      return SessionAcquire::None;
+    };
+    let acct = bucket
+      .pick_healthy()
+      .or_else(|| bucket.pick_earliest_cooldown().map(|(acct, _)| acct));
+    match acct {
+      Some(acct) => {
+        if let Some(id) = session_id {
+          self.record_session(id, &acct.id());
+        }
+        SessionAcquire::Account(acct)
+      }
+      None => SessionAcquire::None,
+    }
+  }
+
   pub fn record_session(&self, session_id: &str, account_id: &str) {
     self.affinity.record(session_id, account_id);
   }

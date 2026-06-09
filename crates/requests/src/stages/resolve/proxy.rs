@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
-use tokn_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector};
+use tokn_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector, SessionAcquire};
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
@@ -78,14 +78,6 @@ impl ResolveStage for ProxyResolve {
 #[async_trait]
 impl ResolveStage for ProxyProviderResolve {
   async fn resolve(&self, ctx: &PipelineCtx, extracted: &Extracted) -> Result<Resolved, PipelineError> {
-    let request_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
-      PipelineError::permanent(
-        Stage::Resolve,
-        RequestsError::MissingResolvedEndpoint {
-          request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
-        },
-      )
-    })?;
     let provider_id = ctx.config.get_str(keys::PROVIDER_ID).ok_or_else(|| {
       PipelineError::permanent(
         Stage::Resolve,
@@ -94,6 +86,35 @@ impl ResolveStage for ProxyProviderResolve {
         },
       )
     })?;
+
+    let Some(request_endpoint) = ctx.request_endpoint.resolved() else {
+      return match self.pool.acquire_provider(extracted.session_id.as_deref(), provider_id) {
+        SessionAcquire::Account(acct) => Ok(Resolved {
+          agent_id: extracted.agent_id.clone(),
+          model: extracted.model.clone(),
+          resolved_endpoint: None,
+          upstream_model: extracted.model.clone(),
+          upstream_endpoint: None,
+          account_id: SmolStr::from(acct.id()),
+          provider_id: SmolStr::from(acct.provider.info().id.as_str()),
+          account_handle: acct,
+        }),
+        SessionAcquire::SessionExpired => Err(PipelineError::permanent(
+          Stage::Resolve,
+          RequestsError::SessionExpired {
+            session_id: extracted.session_id.clone().unwrap_or_default(),
+          },
+        )),
+        SessionAcquire::None => Err(PipelineError::permanent(
+          Stage::Resolve,
+          RequestsError::NoAccount {
+            endpoint: tokn_core::provider::Endpoint::ChatCompletions,
+            model: extracted.model.clone(),
+          },
+        )),
+      };
+    };
+
     let route = RouteResolution {
       mode: RouteMode::Switch,
       requested_model: extracted.model.to_string(),
