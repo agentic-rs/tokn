@@ -1,0 +1,3 @@
+{"table":"sessions","values":{"id":"sess-1","first_seen_ts":100,"last_seen_ts":120,"source":"header","account_id":"acct-1","provider_id":"prov-1","model":"model-1","message_count":1,"part_count":1}}
+{"table":"part_blobs","values":{"hash":"hash-1","part_type":"text","content":"hello"}}
+{"table":"session_parts","values":{"session_id":"sess-1","part_seq":0,"message_seq":0,"part_index":0,"ts":100,"endpoint":"responses","role":"user","status":200,"part_hash":"hash-1"}}

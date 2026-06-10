@@ -17,6 +17,7 @@ mod migration;
 mod onboarding;
 mod proxy;
 mod serve;
+mod sessions;
 mod smoke;
 mod update;
 mod usage;
@@ -50,6 +51,9 @@ pub enum Cmd {
   Proxy(proxy::ProxyArgs),
   /// Query usage statistics from the local SQLite log
   Usage(usage::UsageArgs),
+  /// Inspect and build semantic session views
+  #[command(subcommand)]
+  Sessions(sessions::SessionsCmd),
   /// Get/set/list config values (git-style); preserves comments
   Config(config_cmd::ConfigArgs),
   /// Refresh the on-disk models.dev catalogue cache
@@ -86,6 +90,7 @@ impl Cli {
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
+      Cmd::Sessions(c) => sessions::run(c).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
       Cmd::Migration(a) => migration::run(cfg_path, a).await,
@@ -117,7 +122,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Update(_) | Cmd::Migration(_) | Cmd::Agent(_) => RunMode::MutatingCli,
+    Cmd::Update(_) | Cmd::Migration(_) | Cmd::Agent(_) | Cmd::Sessions(_) => RunMode::MutatingCli,
     Cmd::Account(c) => match c {
       AccountCmd::List(_) | AccountCmd::Show { .. } | AccountCmd::Status { .. } => RunMode::ReadOnlyCli,
       AccountCmd::Add(_)

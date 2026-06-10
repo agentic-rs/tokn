@@ -223,9 +223,10 @@ impl SessionsDb {
       current = self
         .conn
         .query_row("SELECT parent_id FROM session_nodes WHERE id = ?1", params![id], |r| {
-          r.get(0)
+          r.get::<_, Option<String>>(0)
         })
-        .optional()?;
+        .optional()?
+        .flatten();
       out.push(id);
     }
     Ok(out)
