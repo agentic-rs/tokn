@@ -258,7 +258,7 @@ impl AccountPool {
             }
           }
         }
-        Lookup::Expired => return SessionAcquire::SessionExpired,
+        Lookup::Expired => {}
         Lookup::Unknown => {}
       }
     }
@@ -764,6 +764,25 @@ mod tests {
     let SessionAcquire::Account(third) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
     else {
       panic!("expected rebound session affinity");
+    };
+    assert_eq!(third.id(), second.id());
+  }
+
+  #[test]
+  fn expired_provider_session_rebinds_instead_of_failing() {
+    let p = pool_with_ttls(Duration::from_millis(60), Duration::from_millis(240));
+    let SessionAcquire::Account(first) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected provider account");
+    };
+
+    assert!(p.rewind_session_for_test("s1", Duration::from_millis(80)));
+    let SessionAcquire::Account(second) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected expired provider session to rebind");
+    };
+    assert_ne!(first.id(), second.id());
+
+    let SessionAcquire::Account(third) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected rebound provider session affinity");
     };
     assert_eq!(third.id(), second.id());
   }
