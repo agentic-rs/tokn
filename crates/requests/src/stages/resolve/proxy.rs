@@ -22,7 +22,7 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
-use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
+use crate::pipeline::stages::{Extracted, ResolveStage, Resolved, ResolvedRoute};
 use async_trait::async_trait;
 use serde_json::Value;
 use smol_str::SmolStr;
@@ -77,10 +77,11 @@ impl ResolveStage for ProxyResolve {
     Ok(Resolved {
       agent_id: extracted.agent_id.clone(),
       model: extracted.model.clone(),
-      resolved_endpoint: ctx.request_endpoint.resolved(),
       upstream_model: extracted.model.clone(),
-      upstream_endpoint: None,
-      provider_request_kind,
+      route: match ctx.request_endpoint.resolved() {
+        Some(endpoint) => ResolvedRoute::operation(endpoint, endpoint),
+        None => ResolvedRoute::provider_traffic(provider_request_kind),
+      },
       account_id: SmolStr::new(account_id),
       provider_id: SmolStr::new(provider_id),
       account_handle: stub_handle(account_id, provider_id),
@@ -110,10 +111,8 @@ impl ResolveStage for ProxyProviderResolve {
         SessionAcquire::Account(acct) => Ok(Resolved {
           agent_id: extracted.agent_id.clone(),
           model: extracted.model.clone(),
-          resolved_endpoint: None,
           upstream_model: extracted.model.clone(),
-          upstream_endpoint: None,
-          provider_request_kind,
+          route: ResolvedRoute::provider_traffic(provider_request_kind),
           account_id: SmolStr::from(acct.id()),
           provider_id: SmolStr::from(acct.provider.info().id.as_str()),
           account_handle: acct,
@@ -146,10 +145,8 @@ impl ResolveStage for ProxyProviderResolve {
       EndpointAcquire::Account { acct, endpoint } => Ok(Resolved {
         agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
-        resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model: SmolStr::from(route.upstream_model.as_str()),
-        upstream_endpoint: Some(endpoint),
-        provider_request_kind: ProviderRequestKind::Operation(endpoint),
+        route: ResolvedRoute::operation(request_endpoint, endpoint),
         account_id: SmolStr::from(acct.id()),
         provider_id: SmolStr::from(acct.provider.info().id.as_str()),
         account_handle: acct,
@@ -298,7 +295,7 @@ mod tests {
     assert_eq!(res.account_id, "proxy");
     assert_eq!(res.provider_id, "api.openai.com");
     assert_eq!(res.upstream_model, "gpt-4");
-    assert_eq!(res.upstream_endpoint, None);
+    assert_eq!(res.route.upstream_endpoint(), Some(Endpoint::ChatCompletions));
   }
 
   #[tokio::test]

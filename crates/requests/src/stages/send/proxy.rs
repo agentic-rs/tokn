@@ -21,7 +21,8 @@ use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{
-  resolved_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse,
+  provider_request_kind, resolved_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage,
+  SentResponse,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -83,7 +84,7 @@ impl SendStage for ProxySend {
   #[instrument(name = "proxy_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint,
+    endpoint = ?resolved.route.upstream_endpoint(),
     stream = extracted.stream,
   ))]
   async fn send(
@@ -126,7 +127,7 @@ impl SendStage for ProxySend {
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            request_kind: resolved.provider_request_kind,
+            request_kind: provider_request_kind(ctx, resolved, Stage::Send)?,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -263,7 +264,7 @@ mod tests {
   use crate::event::EventBus;
   use crate::pipeline::config::RunConfig;
   use crate::pipeline::stages::ResolveStage;
-  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
+  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, ResolvedRoute};
   use crate::stages::resolve::proxy::ProxyResolve;
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
@@ -371,10 +372,8 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
-      provider_request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
+      route: ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("proxy"),
       provider_id: SmolStr::new("none"),
       account_handle: crate::stages::resolve::proxy::stub_handle("proxy", "none"),
@@ -421,10 +420,8 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("gpt-4"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("gpt-4"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
-      provider_request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
+      route: ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(
@@ -461,10 +458,8 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("unknown"),
-      resolved_endpoint: None,
       upstream_model: SmolStr::new("unknown"),
-      upstream_endpoint: None,
-      provider_request_kind: ProviderRequestKind::Models,
+      route: ResolvedRoute::provider_traffic(ProviderRequestKind::Models),
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(

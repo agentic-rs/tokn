@@ -8,7 +8,7 @@ use tokn_core::provider::{Endpoint, HeaderPatchCtx, ProviderRequestKind};
 use tokn_core::AgentId;
 use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer};
 use tokn_requests::event::{EventPayload, StageEvent};
-use tokn_requests::stage_traits::{BuildHeadersStage, ExtractStage, Resolved};
+use tokn_requests::stage_traits::{BuildHeadersStage, ExtractStage, Resolved, ResolvedRoute};
 use tokn_requests::stages::{
   AccountSelector, DefaultBuildHeaders, DefaultConvertRequest, DefaultConvertResponse, DefaultExtract, DefaultSend,
   PoolResolve, SelectorOutcome,
@@ -202,10 +202,8 @@ async fn provider_headers_patch_from_fixtures() {
     let resolved = Resolved {
       agent_id: Some(scenario.agent_id.clone()),
       model: extracted.model.clone(),
-      resolved_endpoint: Some(scenario.endpoint),
       upstream_model: SmolStr::new(scenario.model),
-      upstream_endpoint: Some(scenario.endpoint),
-      provider_request_kind: ProviderRequestKind::Operation(scenario.endpoint),
+      route: ResolvedRoute::operation(scenario.endpoint, scenario.endpoint),
       account_id: SmolStr::new(provider.handle.config.load().id.clone()),
       provider_id: SmolStr::new(scenario.provider_id),
       account_handle: provider.handle.clone(),

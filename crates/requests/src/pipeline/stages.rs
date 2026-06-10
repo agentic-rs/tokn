@@ -232,10 +232,8 @@ pub struct Extracted {
 pub struct Resolved {
   pub agent_id: Option<AgentId>,
   pub model: SmolStr,
-  pub resolved_endpoint: Option<Endpoint>,
   pub upstream_model: SmolStr,
-  pub upstream_endpoint: Option<Endpoint>,
-  pub provider_request_kind: ProviderRequestKind,
+  pub route: ResolvedRoute,
   pub account_id: SmolStr,
   pub provider_id: SmolStr,
   /// Typed handle to the selected account. Holding the [`AccountHandle`]
@@ -244,15 +242,58 @@ pub struct Resolved {
   pub account_handle: std::sync::Arc<AccountHandle>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedRoute {
+  Operation {
+    resolved_endpoint: Endpoint,
+    upstream_endpoint: Endpoint,
+  },
+  ProviderTraffic {
+    request_kind: ProviderRequestKind,
+  },
+}
+
+impl ResolvedRoute {
+  pub fn operation(resolved_endpoint: Endpoint, upstream_endpoint: Endpoint) -> Self {
+    Self::Operation {
+      resolved_endpoint,
+      upstream_endpoint,
+    }
+  }
+
+  pub fn provider_traffic(request_kind: ProviderRequestKind) -> Self {
+    Self::ProviderTraffic { request_kind }
+  }
+
+  pub fn resolved_endpoint(self) -> Option<Endpoint> {
+    match self {
+      Self::Operation { resolved_endpoint, .. } => Some(resolved_endpoint),
+      Self::ProviderTraffic { .. } => None,
+    }
+  }
+
+  pub fn upstream_endpoint(self) -> Option<Endpoint> {
+    match self {
+      Self::Operation { upstream_endpoint, .. } => Some(upstream_endpoint),
+      Self::ProviderTraffic { .. } => None,
+    }
+  }
+
+  pub fn provider_request_kind(self) -> ProviderRequestKind {
+    match self {
+      Self::Operation { upstream_endpoint, .. } => ProviderRequestKind::Operation(upstream_endpoint),
+      Self::ProviderTraffic { request_kind } => request_kind,
+    }
+  }
+}
+
 impl std::fmt::Debug for Resolved {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("Resolved")
       .field("agent_id", &self.agent_id)
       .field("model", &self.model)
-      .field("resolved_endpoint", &self.resolved_endpoint)
       .field("upstream_model", &self.upstream_model)
-      .field("upstream_endpoint", &self.upstream_endpoint)
-      .field("provider_request_kind", &self.provider_request_kind)
+      .field("route", &self.route)
       .field("account_id", &self.account_id)
       .field("provider_id", &self.provider_id)
       .field("account_handle", &"<opaque>")
@@ -356,12 +397,7 @@ pub fn resolved_upstream_endpoint(
   resolved: &Resolved,
   stage: crate::event::Stage,
 ) -> Result<Option<Endpoint>, PipelineError> {
-  Ok(
-    resolved
-      .upstream_endpoint
-      .or(configured_upstream_endpoint(ctx, stage)?)
-      .or(resolved.resolved_endpoint),
-  )
+  Ok(configured_upstream_endpoint(ctx, stage)?.or(resolved.route.upstream_endpoint()))
 }
 
 pub fn require_resolved_endpoint(
@@ -369,7 +405,7 @@ pub fn require_resolved_endpoint(
   resolved: &Resolved,
   stage: crate::event::Stage,
 ) -> Result<Endpoint, PipelineError> {
-  resolved.resolved_endpoint.ok_or_else(|| {
+  resolved.route.resolved_endpoint().ok_or_else(|| {
     PipelineError::permanent(
       stage,
       RequestsError::MissingResolvedEndpoint {
@@ -377,6 +413,19 @@ pub fn require_resolved_endpoint(
       },
     )
   })
+}
+
+pub fn provider_request_kind(
+  ctx: &PipelineCtx,
+  resolved: &Resolved,
+  stage: crate::event::Stage,
+) -> Result<ProviderRequestKind, PipelineError> {
+  match resolved.route {
+    ResolvedRoute::Operation { upstream_endpoint, .. } => Ok(ProviderRequestKind::Operation(
+      configured_upstream_endpoint(ctx, stage)?.unwrap_or(upstream_endpoint),
+    )),
+    ResolvedRoute::ProviderTraffic { request_kind } => Ok(request_kind),
+  }
 }
 
 pub fn require_upstream_endpoint(

@@ -43,7 +43,7 @@ impl SendStage for DefaultSend {
   #[instrument(name = "default_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint,
+    endpoint = ?resolved.route.upstream_endpoint(),
     stream = extracted.stream,
   ))]
   async fn send(
@@ -213,7 +213,7 @@ mod tests {
   use crate::event::EventBus;
   use crate::event::EventPayload;
   use crate::pipeline::config::RunConfig;
-  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
+  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, ResolvedRoute};
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
   use serde_json::Value;
@@ -260,10 +260,8 @@ mod tests {
     Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
-      provider_request_kind: tokn_core::provider::ProviderRequestKind::Operation(Endpoint::ChatCompletions),
+      route: ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct-1"),
       provider_id: SmolStr::from(handle.provider.id()),
       account_handle: handle,
@@ -430,8 +428,7 @@ mod tests {
         .with_str(crate::pipeline::stages::RUN_UPSTREAM_ENDPOINT_KEY, "responses")
         .build(),
     );
-    let mut resolved = resolved(handle);
-    resolved.upstream_endpoint = None;
+    let resolved = resolved(handle);
 
     let out = send
       .send(&ctx, &extracted(), &resolved, &BuiltHeaders::default(), &body())
@@ -448,8 +445,7 @@ mod tests {
     let handle = mock_handle_with_provider("acct", provider);
     let send = DefaultSend::new(reqwest::Client::new());
     let mut resolved = resolved(handle);
-    resolved.resolved_endpoint = None;
-    resolved.upstream_endpoint = None;
+    resolved.route = ResolvedRoute::provider_traffic(tokn_core::provider::ProviderRequestKind::Opaque);
     let ctx = PipelineCtx::new(
       "req-send-missing",
       tokn_core::request_event::RequestEndpoint::custom("/v1/experimental/agents"),
