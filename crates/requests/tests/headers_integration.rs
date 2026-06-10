@@ -4,7 +4,7 @@ use smol_str::SmolStr;
 use std::sync::Arc;
 use support::*;
 use tokn_accounts::AccountHandle;
-use tokn_core::provider::{Endpoint, HeaderPatchCtx};
+use tokn_core::provider::{Endpoint, HeaderPatchCtx, ProviderRequestKind};
 use tokn_core::AgentId;
 use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer};
 use tokn_requests::event::{EventPayload, StageEvent};
@@ -220,7 +220,7 @@ async fn provider_headers_patch_from_fixtures() {
       .patch_headers(
         &mut headers,
         &HeaderPatchCtx {
-          endpoint: scenario.endpoint,
+          request_kind: ProviderRequestKind::Operation(scenario.endpoint),
           body: extracted.body_json.as_ref(),
           bearer_token: provider.bearer_token,
           content_encoding: extracted.content_encoding.map(|encoding| encoding.as_str()),

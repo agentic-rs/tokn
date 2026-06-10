@@ -26,12 +26,11 @@ use crate::pipeline::stages::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use smol_str::SmolStr;
-use tokn_core::provider::HeaderPatchCtx;
+use tokn_core::provider::{HeaderPatchCtx, ProviderRequestKind};
 use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
 use crate::stages::resolve::proxy::keys;
-use tokn_core::provider::Endpoint;
 
 fn proxy_send_error_hint(err_text: &str, has_inner_source: bool) -> &'static str {
   if err_text.contains("with no inner error")
@@ -121,24 +120,16 @@ impl SendStage for ProxySend {
       .unwrap_or(false);
     let mut outbound_headers = headers.headers.clone();
     if inject_auth {
-      let patch_endpoint = upstream_endpoint
-        .or_else(|| {
-          resolved
-            .account_handle
-            .provider
-            .info()
-            .default_endpoints
-            .first()
-            .copied()
-        })
-        .unwrap_or(Endpoint::ChatCompletions);
+      let patch_kind = upstream_endpoint
+        .map(ProviderRequestKind::Operation)
+        .unwrap_or_else(|| provider_request_kind_for_path(path));
       resolved
         .account_handle
         .provider
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            endpoint: patch_endpoint,
+            request_kind: patch_kind,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -249,6 +240,15 @@ impl SendStage for ProxySend {
       upstream_endpoint,
       response: resp,
     })
+  }
+}
+
+fn provider_request_kind_for_path(path: &str) -> ProviderRequestKind {
+  let path_only = path.split('?').next().unwrap_or(path).trim_end_matches('/');
+  if path_only.ends_with("/models") {
+    ProviderRequestKind::Models
+  } else {
+    ProviderRequestKind::Opaque
   }
 }
 
@@ -493,6 +493,19 @@ mod tests {
     assert!(raw_req.starts_with("get /models "));
     assert!(raw_req.contains("authorization: bearer router-token"));
     assert!(!raw_req.contains("authorization: bearer client-token"));
+  }
+
+  #[test]
+  fn classifies_provider_traffic_paths_for_header_patching() {
+    assert_eq!(provider_request_kind_for_path("/models"), ProviderRequestKind::Models);
+    assert_eq!(
+      provider_request_kind_for_path("/v1/models?client_version=test"),
+      ProviderRequestKind::Models
+    );
+    assert_eq!(
+      provider_request_kind_for_path("/v1/experimental/agents"),
+      ProviderRequestKind::Opaque
+    );
   }
 
   #[tokio::test]

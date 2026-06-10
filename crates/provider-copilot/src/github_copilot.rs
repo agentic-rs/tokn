@@ -17,8 +17,8 @@ use tokn_headers::{HeaderMap, HeaderName, HeaderValue};
 use tracing::{debug, instrument};
 
 use crate::{
-  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result,
-  ID_GITHUB_COPILOT,
+  error, AuthKind, Endpoint, EndpointRule, HeaderPatchCtx, Provider, ProviderInfo, ProviderRequestKind, RequestCtx,
+  Result, ID_GITHUB_COPILOT,
 };
 
 #[allow(dead_code)]
@@ -299,7 +299,7 @@ impl CopilotProvider {
     self.patch_headers(
       &mut h,
       &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
+        request_kind: ProviderRequestKind::Operation(ctx.endpoint),
         body: ctx.body,
         bearer_token: Some(token.expose()),
         content_encoding: ctx.content_encoding,
@@ -395,7 +395,7 @@ mod tests {
     content_encoding: Option<&'static str>,
   ) -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
-      endpoint,
+      request_kind: ProviderRequestKind::Operation(endpoint),
       body: Box::leak(Box::new(Value::Null)),
       bearer_token: Some("api-tok-fixture"),
       content_encoding,
@@ -470,7 +470,7 @@ mod tests {
     let p = provider();
     let mut h = HeaderMap::new();
     let ctx = HeaderPatchCtx {
-      endpoint: Endpoint::ChatCompletions,
+      request_kind: ProviderRequestKind::Models,
       body: &Value::Null,
       bearer_token: None,
       content_encoding: None,

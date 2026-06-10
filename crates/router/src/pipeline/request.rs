@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tokn_accounts::{AccountHandle, EndpointAcquire};
 use tokn_config::RouteMode;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
-use tokn_core::provider::TemplateVars;
+use tokn_core::provider::{ProviderRequestKind, TemplateVars};
 use tokn_core::AgentId;
 use tokn_headers::agent::build_agent_headers;
 use tokn_headers::inbound::build_template_vars;
@@ -217,7 +217,7 @@ pub fn dry_run_request(
     .patch_headers(
       &mut headers,
       &crate::provider::HeaderPatchCtx {
-        endpoint: prepared.meta.upstream_endpoint,
+        request_kind: ProviderRequestKind::Operation(prepared.meta.upstream_endpoint),
         body: &prepared.upstream_body,
         bearer_token: None,
         content_encoding: prepared.content_encoding.map(|encoding| encoding.as_str()),

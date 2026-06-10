@@ -9,7 +9,8 @@ use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
 use crate::{
-  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_CODEX,
+  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result,
+  TemplateVars, ID_CODEX,
 };
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
@@ -63,7 +64,7 @@ impl CodexProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
+        request_kind: ProviderRequestKind::Operation(ctx.endpoint),
         body: ctx.body,
         bearer_token: None,
         content_encoding: ctx.content_encoding,
@@ -243,7 +244,7 @@ impl CodexProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: Endpoint::Responses,
+        request_kind: ProviderRequestKind::Operation(Endpoint::Responses),
         body: &Value::Null,
         bearer_token: None,
         content_encoding: None,
@@ -332,7 +333,7 @@ mod tests {
 
   fn patch_ctx() -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
-      endpoint: Endpoint::Responses,
+      request_kind: ProviderRequestKind::Operation(Endpoint::Responses),
       body: &Value::Null,
       bearer_token: None,
       content_encoding: None,
