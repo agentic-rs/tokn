@@ -1,6 +1,3 @@
--- Squashed sessions migrations from snapshot v0.1.1 to snapshot v0.2.0.
--- Covers schema versions 0001 through 0002.
-
 CREATE TABLE session_nodes (
   id                     TEXT PRIMARY KEY,
   session_id             TEXT    NOT NULL REFERENCES sessions(id),
