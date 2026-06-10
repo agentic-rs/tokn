@@ -1,15 +1,15 @@
-//! Agent migration helpers for local tools that should route through
+//! Agent binding helpers for local tools that should route through
 //! `tokn-router` profiles.
 
-mod agent;
-mod codex;
+mod adapter;
+mod adapters;
 mod manifest;
-mod migration;
-mod opencode;
+mod reconcile;
+mod status;
 
-pub use agent::AgentKind;
 pub use manifest::FileBackup;
-pub use migration::{
-  apply_migration, plan_migration, rollback_migration, ApplyReport, FileAction, MigrateRequest, MigrationPlan,
-  PlannedEdit, RollbackReport, RollbackRequest,
+pub use reconcile::{
+  apply_reconcile, import_accounts, plan_reconcile, unlink, ApplyReport, FileAction, ImportReport, ImportRequest,
+  PlannedEdit, ReconcilePlan, ReconcileRequest, UnlinkReport, UnlinkRequest,
 };
+pub use status::{list_agents, show_agent, AgentBindingStatus, AgentStatus};
