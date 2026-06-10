@@ -205,6 +205,7 @@ async fn provider_headers_patch_from_fixtures() {
       resolved_endpoint: Some(scenario.endpoint),
       upstream_model: SmolStr::new(scenario.model),
       upstream_endpoint: Some(scenario.endpoint),
+      provider_request_kind: ProviderRequestKind::Operation(scenario.endpoint),
       account_id: SmolStr::new(provider.handle.config.load().id.clone()),
       provider_id: SmolStr::new(scenario.provider_id),
       account_handle: provider.handle.clone(),

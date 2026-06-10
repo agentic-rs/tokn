@@ -158,6 +158,7 @@ mod tests {
       resolved_endpoint: Some(resolved_endpoint),
       upstream_model: smol_str::SmolStr::new(upstream_model),
       upstream_endpoint: Some(upstream_endpoint),
+      provider_request_kind: tokn_core::provider::ProviderRequestKind::Operation(upstream_endpoint),
       account_id: smol_str::SmolStr::new("acct-1"),
       provider_id: smol_str::SmolStr::from(handle.provider.id()),
       account_handle: handle,

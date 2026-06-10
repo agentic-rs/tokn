@@ -321,6 +321,15 @@ impl ProviderRequestKind {
       Self::Models | Self::Opaque => None,
     }
   }
+
+  pub fn from_provider_path(path: &str) -> Self {
+    let path_only = path.split('?').next().unwrap_or(path).trim_end_matches('/');
+    if path_only.ends_with("/models") {
+      Self::Models
+    } else {
+      Self::Opaque
+    }
+  }
 }
 
 pub struct HeaderPatchCtx<'a> {

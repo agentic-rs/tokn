@@ -26,7 +26,7 @@ use crate::pipeline::stages::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use smol_str::SmolStr;
-use tokn_core::provider::{HeaderPatchCtx, ProviderRequestKind};
+use tokn_core::provider::HeaderPatchCtx;
 use tokn_headers::HeaderMap;
 use tracing::{debug, instrument, warn};
 
@@ -120,16 +120,13 @@ impl SendStage for ProxySend {
       .unwrap_or(false);
     let mut outbound_headers = headers.headers.clone();
     if inject_auth {
-      let patch_kind = upstream_endpoint
-        .map(ProviderRequestKind::Operation)
-        .unwrap_or_else(|| provider_request_kind_for_path(path));
       resolved
         .account_handle
         .provider
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            request_kind: patch_kind,
+            request_kind: resolved.provider_request_kind,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -243,15 +240,6 @@ impl SendStage for ProxySend {
   }
 }
 
-fn provider_request_kind_for_path(path: &str) -> ProviderRequestKind {
-  let path_only = path.split('?').next().unwrap_or(path).trim_end_matches('/');
-  if path_only.ends_with("/models") {
-    ProviderRequestKind::Models
-  } else {
-    ProviderRequestKind::Opaque
-  }
-}
-
 fn missing_config(key: &str) -> PipelineError {
   PipelineError::permanent(
     Stage::Send,
@@ -282,7 +270,7 @@ mod tests {
   use serde_json::Value;
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
-  use tokn_core::provider::Endpoint;
+  use tokn_core::provider::{Endpoint, ProviderRequestKind};
   use tokn_headers::{HeaderName, HeaderValue};
 
   #[test]
@@ -386,6 +374,7 @@ mod tests {
       resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
+      provider_request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
       account_id: SmolStr::new("proxy"),
       provider_id: SmolStr::new("none"),
       account_handle: crate::stages::resolve::proxy::stub_handle("proxy", "none"),
@@ -435,6 +424,7 @@ mod tests {
       resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("gpt-4"),
       upstream_endpoint: Some(Endpoint::ChatCompletions),
+      provider_request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(
@@ -474,6 +464,7 @@ mod tests {
       resolved_endpoint: None,
       upstream_model: SmolStr::new("unknown"),
       upstream_endpoint: None,
+      provider_request_kind: ProviderRequestKind::Models,
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(
@@ -497,13 +488,16 @@ mod tests {
 
   #[test]
   fn classifies_provider_traffic_paths_for_header_patching() {
-    assert_eq!(provider_request_kind_for_path("/models"), ProviderRequestKind::Models);
     assert_eq!(
-      provider_request_kind_for_path("/v1/models?client_version=test"),
+      ProviderRequestKind::from_provider_path("/models"),
       ProviderRequestKind::Models
     );
     assert_eq!(
-      provider_request_kind_for_path("/v1/experimental/agents"),
+      ProviderRequestKind::from_provider_path("/v1/models?client_version=test"),
+      ProviderRequestKind::Models
+    );
+    assert_eq!(
+      ProviderRequestKind::from_provider_path("/v1/experimental/agents"),
       ProviderRequestKind::Opaque
     );
   }

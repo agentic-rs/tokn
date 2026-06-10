@@ -17,6 +17,7 @@ use smol_str::SmolStr;
 use std::sync::Arc;
 use tokn_accounts::AccountHandle;
 use tokn_core::provider::Endpoint;
+use tokn_core::provider::ProviderRequestKind;
 
 /// Outcome of consulting an account pool for a given extracted request.
 pub enum SelectorOutcome {
@@ -68,6 +69,10 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
         resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model,
         upstream_endpoint,
+        provider_request_kind: upstream_endpoint
+          .or_else(|| ctx.request_endpoint.resolved())
+          .map(ProviderRequestKind::Operation)
+          .unwrap_or(ProviderRequestKind::Opaque),
         account_id,
         provider_id,
         account_handle,

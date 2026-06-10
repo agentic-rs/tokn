@@ -24,7 +24,7 @@ use smol_str::SmolStr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokn_accounts::AccountHandle;
-use tokn_core::provider::Endpoint;
+use tokn_core::provider::{Endpoint, ProviderRequestKind};
 use tokn_core::request_event::RequestEndpoint;
 use tokn_core::AgentId;
 use tokn_headers::{HeaderMap, TemplateVars};
@@ -235,6 +235,7 @@ pub struct Resolved {
   pub resolved_endpoint: Option<Endpoint>,
   pub upstream_model: SmolStr,
   pub upstream_endpoint: Option<Endpoint>,
+  pub provider_request_kind: ProviderRequestKind,
   pub account_id: SmolStr,
   pub provider_id: SmolStr,
   /// Typed handle to the selected account. Holding the [`AccountHandle`]
@@ -251,6 +252,7 @@ impl std::fmt::Debug for Resolved {
       .field("resolved_endpoint", &self.resolved_endpoint)
       .field("upstream_model", &self.upstream_model)
       .field("upstream_endpoint", &self.upstream_endpoint)
+      .field("provider_request_kind", &self.provider_request_kind)
       .field("account_id", &self.account_id)
       .field("provider_id", &self.provider_id)
       .field("account_handle", &"<opaque>")

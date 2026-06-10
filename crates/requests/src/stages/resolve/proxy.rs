@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokn_accounts::{AccountHandle, AccountPool, EndpointAcquire, RouteResolution, RouteSelector, SessionAcquire};
 use tokn_config::RouteMode;
 use tokn_core::account::AccountConfig;
-use tokn_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo};
+use tokn_core::provider::{AuthKind, ModelCache, Provider, ProviderInfo, ProviderRequestKind};
 
 /// Config keys consumed by [`ProxyResolve`]. The proxy transport layer
 /// is responsible for populating these before calling
@@ -39,6 +39,7 @@ pub mod keys {
   pub const HOST: &str = "proxy.host";
   pub const PROVIDER_ID: &str = "proxy.provider_id";
   pub const ACCOUNT_ID: &str = "proxy.account_id";
+  pub const PATH: &str = "proxy.path";
 }
 
 pub struct ProxyResolve;
@@ -62,12 +63,24 @@ impl ResolveStage for ProxyResolve {
     })?;
     let provider_id = ctx.config.get_str(keys::PROVIDER_ID).unwrap_or(host);
     let account_id = ctx.config.get_str(keys::ACCOUNT_ID).unwrap_or("proxy");
+    let provider_request_kind = ctx
+      .request_endpoint
+      .resolved()
+      .map(ProviderRequestKind::Operation)
+      .or_else(|| {
+        ctx
+          .config
+          .get_str(keys::PATH)
+          .map(ProviderRequestKind::from_provider_path)
+      })
+      .unwrap_or(ProviderRequestKind::Opaque);
     Ok(Resolved {
       agent_id: extracted.agent_id.clone(),
       model: extracted.model.clone(),
       resolved_endpoint: ctx.request_endpoint.resolved(),
       upstream_model: extracted.model.clone(),
       upstream_endpoint: None,
+      provider_request_kind,
       account_id: SmolStr::new(account_id),
       provider_id: SmolStr::new(provider_id),
       account_handle: stub_handle(account_id, provider_id),
@@ -88,6 +101,11 @@ impl ResolveStage for ProxyProviderResolve {
     })?;
 
     let Some(request_endpoint) = ctx.request_endpoint.resolved() else {
+      let provider_request_kind = ctx
+        .config
+        .get_str(keys::PATH)
+        .map(ProviderRequestKind::from_provider_path)
+        .unwrap_or(ProviderRequestKind::Opaque);
       return match self.pool.acquire_provider(extracted.session_id.as_deref(), provider_id) {
         SessionAcquire::Account(acct) => Ok(Resolved {
           agent_id: extracted.agent_id.clone(),
@@ -95,6 +113,7 @@ impl ResolveStage for ProxyProviderResolve {
           resolved_endpoint: None,
           upstream_model: extracted.model.clone(),
           upstream_endpoint: None,
+          provider_request_kind,
           account_id: SmolStr::from(acct.id()),
           provider_id: SmolStr::from(acct.provider.info().id.as_str()),
           account_handle: acct,
@@ -107,9 +126,8 @@ impl ResolveStage for ProxyProviderResolve {
         )),
         SessionAcquire::None => Err(PipelineError::permanent(
           Stage::Resolve,
-          RequestsError::NoAccount {
-            endpoint: tokn_core::provider::Endpoint::ChatCompletions,
-            model: extracted.model.clone(),
+          RequestsError::NoProviderAccount {
+            provider_id: SmolStr::new(provider_id),
           },
         )),
       };
@@ -131,6 +149,7 @@ impl ResolveStage for ProxyProviderResolve {
         resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model: SmolStr::from(route.upstream_model.as_str()),
         upstream_endpoint: Some(endpoint),
+        provider_request_kind: ProviderRequestKind::Operation(endpoint),
         account_id: SmolStr::from(acct.id()),
         provider_id: SmolStr::from(acct.provider.info().id.as_str()),
         account_handle: acct,

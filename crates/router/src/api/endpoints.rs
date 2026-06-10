@@ -90,6 +90,7 @@ fn pipeline_error_to_api_error(err: tokn_requests::PipelineError) -> ApiError {
     } => ApiError::bad_request(err.message().into_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
     RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
+    RequestsError::NoProviderAccount { provider_id } => ApiError::not_implemented("provider", provider_id.to_string()),
     RequestsError::UpstreamStatus { status, body } => match StatusCode::from_u16(*status) {
       Ok(status) => ApiError::upstream(status, body.clone()),
       Err(_) => ApiError::bad_gateway(body.clone()),
