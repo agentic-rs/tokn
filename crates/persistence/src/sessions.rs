@@ -581,14 +581,19 @@ fn decode_request_body(headers: &Value, body: &[u8]) -> std::result::Result<Vec<
     "gzip" => {
       let mut decoder = GzDecoder::new(body);
       let mut out = Vec::new();
-      decoder
-        .read_to_end(&mut out)
-        .map_err(|e| format!("gzip decode failed: {e}"))?;
+      if let Err(e) = decoder.read_to_end(&mut out) {
+        return decode_raw_json_body(body).ok_or_else(|| format!("gzip decode failed: {e}"));
+      }
       Ok(out)
     }
-    "zstd" => zstd::stream::decode_all(body).map_err(|e| format!("zstd decode failed: {e}")),
+    "zstd" => zstd::stream::decode_all(body)
+      .or_else(|e| decode_raw_json_body(body).ok_or_else(|| format!("zstd decode failed: {e}"))),
     other => Err(format!("unsupported content-encoding: {other}")),
   }
+}
+
+fn decode_raw_json_body(body: &[u8]) -> Option<Vec<u8>> {
+  parse_json_bytes(body).map(|_| body.to_vec())
 }
 
 fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
@@ -1091,6 +1096,31 @@ mod tests {
     assert_eq!(head, "req-1");
   }
 
+  #[test]
+  fn playback_requests_accepts_raw_json_when_encoding_header_is_stale() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    insert_request_row_with_raw_body(
+      &conn,
+      100,
+      "req-1",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("ok"),
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 1);
+    assert_eq!(report.rows_recorded, 1);
+    assert_eq!(report.decode_errors, 0);
+    assert!(report.latest_mismatches.is_empty());
+  }
+
   fn msg(role: &str, text: &str) -> MessageRecord {
     MessageRecord {
       role: role.into(),
@@ -1136,6 +1166,39 @@ mod tests {
         "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
          VALUES (?1, ?2, ?3, ?4)",
         params![request_id, headers, encoded_body, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn insert_request_row_with_raw_body(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let raw_body = serde_json::to_vec(body).unwrap();
+    let headers = serde_json::to_vec(&json!({ "Content-Encoding": "zstd" })).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_connection (request_id, ts, ver, endpoint, status)
+         VALUES (?1, ?2, 'test', 'responses', 200)",
+        params![request_id, ts],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_metadata (request_id, session_id, account_id, provider_id, model)
+         VALUES (?1, ?2, 'acct', 'prov', 'model')",
+        params![request_id, session_id],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![request_id, headers, raw_body, response_body.as_ref()],
       )
       .unwrap();
   }
