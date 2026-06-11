@@ -396,7 +396,7 @@ pub fn playback_requests_source_into_sessions(
   let mut expected_latest = HashMap::new();
   for requests_db in request_dbs {
     let requests = Connection::open_with_flags(&requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    playback_request_connection(&requests, &mut sessions, options, &mut report)?;
+    playback_request_connection(&requests_db, &requests, &mut sessions, options, &mut report)?;
     collect_latest_heads(&requests, &mut expected_latest)?;
   }
   report.latest_mismatches = check_latest_heads(&expected_latest, &sessions.conn)?;
@@ -404,6 +404,7 @@ pub fn playback_requests_source_into_sessions(
 }
 
 fn playback_request_connection(
+  requests_db: &Path,
   requests: &Connection,
   sessions: &mut SessionsDb,
   options: PlaybackOptions,
@@ -425,11 +426,17 @@ fn playback_request_connection(
     let body = row.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default();
     let response_body = row.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default();
     let header_json = parse_json_bytes(&headers).unwrap_or(Value::Null);
+    let request_id: String = row.get(2)?;
     let endpoint: String = row.get(3)?;
     let decoded = match decode_request_body(&header_json, &body) {
       Ok(decoded) => decoded,
       Err(e) => {
-        tracing::warn!(error = %e, "request playback decode failed");
+        tracing::warn!(
+          requests_db = %requests_db.display(),
+          request_id = %request_id,
+          error = %e,
+          "request playback decode failed"
+        );
         report.decode_errors += 1;
         report.rows_skipped += 1;
         continue;
@@ -438,7 +445,12 @@ fn playback_request_connection(
     let body_json = match serde_json::from_slice::<Value>(&decoded) {
       Ok(value) => value,
       Err(e) => {
-        tracing::warn!(error = %e, "request playback json parse failed");
+        tracing::warn!(
+          requests_db = %requests_db.display(),
+          request_id = %request_id,
+          error = %e,
+          "request playback json parse failed"
+        );
         report.decode_errors += 1;
         report.rows_skipped += 1;
         continue;
@@ -454,7 +466,7 @@ fn playback_request_connection(
       ts: row.get(0)?,
       session_id: row.get(1)?,
       parent_session_id: header_str(&header_json, "x-parent-session-id").map(str::to_string),
-      request_id: row.get(2)?,
+      request_id,
       endpoint,
       status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
       account_id: row.get(4)?,
