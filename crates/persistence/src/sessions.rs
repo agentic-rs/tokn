@@ -772,6 +772,8 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
 mod tests {
   use super::*;
   use bytes::Bytes;
+  use rusqlite::params;
+  use serde_json::json;
   use tokn_core::provider::Endpoint;
 
   fn rec(parts: Vec<(String, Bytes)>) -> Vec<MessageRecord> {
@@ -890,6 +892,228 @@ mod tests {
       .unwrap();
     assert_eq!(mc, 2);
     assert_eq!(pc, 3);
+  }
+
+  #[test]
+  fn record_tree_reduces_against_head_without_splitting_boundaries() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let first = vec![msg("system", "instructions"), msg("user", "hello")];
+    let second = vec![
+      msg("system", "instructions"),
+      msg("user", "hello"),
+      msg("user", "again"),
+    ];
+    let conflict = vec![msg("system", "changed"), msg("user", "branch")];
+
+    db.record_tree(&TreeRequestRecord {
+      ts: 100,
+      session_id: "sess-1".into(),
+      parent_session_id: Some("parent-sess".into()),
+      request_id: "req-1".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: first,
+      response_messages: vec![msg("assistant", "hi")],
+    })
+    .unwrap();
+    db.record_tree(&TreeRequestRecord {
+      ts: 110,
+      session_id: "sess-1".into(),
+      parent_session_id: None,
+      request_id: "req-2".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: second,
+      response_messages: vec![msg("assistant", "again")],
+    })
+    .unwrap();
+    db.record_tree(&TreeRequestRecord {
+      ts: 120,
+      session_id: "sess-1".into(),
+      parent_session_id: None,
+      request_id: "req-3".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: conflict,
+      response_messages: Vec::new(),
+    })
+    .unwrap();
+
+    let rows = db
+      .conn
+      .prepare(
+        "SELECT request_id, parent_id, reduction_kind, common_prefix_messages, request_message_count
+         FROM session_nodes
+         ORDER BY ts",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, Option<String>>(1)?,
+          r.get::<_, String>(2)?,
+          r.get::<_, i64>(3)?,
+          r.get::<_, i64>(4)?,
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(rows[0], ("req-1".into(), None, "root_snapshot".into(), 0, 2));
+    assert_eq!(
+      rows[1],
+      ("req-2".into(), Some("req-1".into()), "suffix_append".into(), 2, 1)
+    );
+    assert_eq!(
+      rows[2],
+      ("req-3".into(), Some("req-2".into()), "conflict_snapshot".into(), 0, 2)
+    );
+    let head: String = db
+      .conn
+      .query_row(
+        "SELECT node_id FROM session_heads WHERE session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-3");
+    let relation_count: i64 = db
+      .conn
+      .query_row("SELECT COUNT(*) FROM session_relations", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(relation_count, 1);
+  }
+
+  #[test]
+  fn playback_requests_decodes_zstd_reduces_and_verifies_latest_head() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    insert_request_row(
+      &conn,
+      100,
+      "req-1",
+      "sess-1",
+      &json!({
+        "instructions": "be useful",
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("hi"),
+    );
+    insert_request_row(
+      &conn,
+      110,
+      "req-2",
+      "sess-1",
+      &json!({
+        "instructions": "be useful",
+        "input": [
+          {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+          {"role": "user", "content": [{"type": "input_text", "text": "again"}]}
+        ]
+      }),
+      "event: response.output_text.delta\ndata: {\"delta\":\"partial\"}\n\n",
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 2);
+    assert_eq!(report.rows_recorded, 2);
+    assert_eq!(report.decode_errors, 0);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let reduction: String = sessions
+      .query_row(
+        "SELECT reduction_kind FROM session_nodes WHERE request_id = 'req-2'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(reduction, "suffix_append");
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-2");
+    let response_messages: i64 = sessions
+      .query_row(
+        "SELECT COUNT(*) FROM node_messages WHERE side = 'response' AND role = 'assistant'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(response_messages, 2);
+  }
+
+  fn msg(role: &str, text: &str) -> MessageRecord {
+    MessageRecord {
+      role: role.into(),
+      status: None,
+      parts: vec![PartRecord {
+        part_type: "text".into(),
+        content: Bytes::from(text.to_string()),
+      }],
+    }
+  }
+
+  fn insert_request_row(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let raw_body = serde_json::to_vec(body).unwrap();
+    let encoded_body = zstd::stream::encode_all(raw_body.as_slice(), 0).unwrap();
+    let headers = serde_json::to_vec(&json!({
+      "content-encoding": "zstd",
+      "x-parent-session-id": "parent-session"
+    }))
+    .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_connection (request_id, ts, ver, endpoint, status)
+         VALUES (?1, ?2, 'test', 'responses', 200)",
+        params![request_id, ts],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_metadata (request_id, session_id, account_id, provider_id, model)
+         VALUES (?1, ?2, 'acct', 'prov', 'model')",
+        params![request_id, session_id],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![request_id, headers, encoded_body, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn sse_completed(text: &str) -> String {
+    format!(
+      "event: response.completed\ndata: {{\"response\":{{\"output\":[{{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"output_text\",\"text\":\"{text}\"}}]}}]}}}}\n\n"
+    )
   }
 
   fn tempdir() -> std::path::PathBuf {

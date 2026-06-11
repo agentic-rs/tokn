@@ -307,8 +307,33 @@ pub fn new_outbound_capture() -> OutboundCapture {
   Arc::new(OnceLock::new())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderRequestKind {
+  Operation(Endpoint),
+  Models,
+  Opaque,
+}
+
+impl ProviderRequestKind {
+  pub fn endpoint(self) -> Option<Endpoint> {
+    match self {
+      Self::Operation(endpoint) => Some(endpoint),
+      Self::Models | Self::Opaque => None,
+    }
+  }
+
+  pub fn from_provider_path(path: &str) -> Self {
+    let path_only = path.split('?').next().unwrap_or(path).trim_end_matches('/');
+    if path_only.ends_with("/models") {
+      Self::Models
+    } else {
+      Self::Opaque
+    }
+  }
+}
+
 pub struct HeaderPatchCtx<'a> {
-  pub endpoint: Endpoint,
+  pub request_kind: ProviderRequestKind,
   pub body: &'a Value,
   pub bearer_token: Option<&'a str>,
   pub content_encoding: Option<&'a str>,
@@ -317,6 +342,18 @@ pub struct HeaderPatchCtx<'a> {
   pub inbound_headers: &'a HeaderMap,
   pub vars: &'a TemplateVars,
   pub agent_id: &'a AgentId,
+}
+
+impl HeaderPatchCtx<'_> {
+  pub fn endpoint(&self) -> Option<Endpoint> {
+    self.request_kind.endpoint()
+  }
+
+  pub fn operation_endpoint(&self) -> Endpoint {
+    self
+      .endpoint()
+      .expect("generation endpoint required for operation header patching")
+  }
 }
 
 #[async_trait]

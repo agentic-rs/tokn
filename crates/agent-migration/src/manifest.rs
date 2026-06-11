@@ -1,16 +1,16 @@
-use crate::agent::AgentKind;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use tokn_core::AgentId;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MigrationManifest {
   pub version: u32,
   #[serde(default = "default_completed")]
   pub completed: bool,
-  pub agent: AgentKind,
+  pub agent: AgentId,
   pub timestamp: String,
-  pub profile: String,
+  pub profile: Option<String>,
   pub target_base_url: String,
   pub imported_account_ids: Vec<String>,
   pub files: Vec<FileBackup>,
@@ -36,11 +36,11 @@ impl MigrationManifest {
   }
 }
 
-pub(crate) fn manifest_path(timestamp: &str, agent: AgentKind) -> Result<PathBuf> {
-  Ok(manifest_dir()?.join(format!("{timestamp}-{}.json", agent.slug())))
+pub(crate) fn manifest_path(timestamp: &str, agent: &AgentId) -> Result<PathBuf> {
+  Ok(manifest_dir()?.join(format!("{timestamp}-{}.json", agent.as_str())))
 }
 
-pub(crate) fn resolve_manifest(agent: AgentKind, backup_id: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn resolve_manifest(agent: &AgentId, backup_id: Option<&str>) -> Result<PathBuf> {
   if let Some(id) = backup_id {
     let path = PathBuf::from(id);
     if path.exists() {
@@ -49,7 +49,7 @@ pub(crate) fn resolve_manifest(agent: AgentKind, backup_id: Option<&str>) -> Res
     let candidate = manifest_dir()?.join(if id.ends_with(".json") {
       id.to_string()
     } else {
-      format!("{id}-{}.json", agent.slug())
+      format!("{id}-{}.json", agent.as_str())
     });
     if candidate.exists() {
       return Ok(candidate);
@@ -58,7 +58,7 @@ pub(crate) fn resolve_manifest(agent: AgentKind, backup_id: Option<&str>) -> Res
   }
 
   let dir = manifest_dir()?;
-  let suffix = format!("-{}.json", agent.slug());
+  let suffix = format!("-{}.json", agent.as_str());
   let mut candidates = Vec::new();
   if dir.exists() {
     for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))? {
@@ -77,7 +77,7 @@ pub(crate) fn resolve_manifest(agent: AgentKind, backup_id: Option<&str>) -> Res
   candidates.sort();
   candidates
     .pop()
-    .ok_or_else(|| anyhow!("no migration manifest found for {}", agent.slug()))
+    .ok_or_else(|| anyhow!("no migration manifest found for {}", agent.as_str()))
 }
 
 pub(crate) fn backup_path_for(path: &Path, timestamp: &str, files: &mut Vec<FileBackup>) -> Result<()> {
@@ -210,10 +210,10 @@ mod tests {
     std::fs::write(&manifest, "{}").unwrap();
 
     assert_eq!(
-      resolve_manifest(AgentKind::CodexCli, Some(manifest.to_str().unwrap())).unwrap(),
+      resolve_manifest(&AgentId::CodexCli, Some(manifest.to_str().unwrap())).unwrap(),
       manifest
     );
-    assert!(resolve_manifest(AgentKind::CodexCli, Some("does-not-exist")).is_err());
+    assert!(resolve_manifest(&AgentId::CodexCli, Some("does-not-exist")).is_err());
   }
 
   #[test]

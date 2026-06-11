@@ -173,9 +173,8 @@ mod tests {
     Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      route: crate::pipeline::stages::ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct-1"),
       provider_id: SmolStr::new(provider_id),
       account_handle: crate::test_support::mock_handle("acct-1", provider_id),

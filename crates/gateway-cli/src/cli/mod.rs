@@ -40,7 +40,7 @@ pub enum Cmd {
   /// Manage stored accounts (add / login / import / list / switch / refresh / status / show / remove)
   #[command(subcommand)]
   Account(account::AccountCmd),
-  /// Migrate local agent credentials/config to gateway profiles
+  /// Manage agent account imports and gateway bindings
   #[command(subcommand)]
   Agent(agent::AgentCmd),
   /// Show the Copilot identity headers that will be sent upstream
@@ -122,7 +122,14 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Update(_) | Cmd::Migration(_) | Cmd::Agent(_) | Cmd::Sessions(_) => RunMode::MutatingCli,
+    Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
+    Cmd::Sessions(_) => RunMode::MutatingCli,
+    Cmd::Agent(c) => match c {
+      agent::AgentCmd::List | agent::AgentCmd::Show(_) => RunMode::ReadOnlyCli,
+      agent::AgentCmd::Import(_) | agent::AgentCmd::Link(_) | agent::AgentCmd::Sync(_) | agent::AgentCmd::Unlink(_) => {
+        RunMode::MutatingCli
+      }
+    },
     Cmd::Account(c) => match c {
       AccountCmd::List(_) | AccountCmd::Show { .. } | AccountCmd::Status { .. } => RunMode::ReadOnlyCli,
       AccountCmd::Add(_)

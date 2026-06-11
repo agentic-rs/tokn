@@ -9,7 +9,10 @@ use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_DEEPSEEK};
+use crate::{
+  error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result, TemplateVars,
+  ID_DEEPSEEK,
+};
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 
@@ -80,7 +83,7 @@ impl DeepSeekProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
+        request_kind: ProviderRequestKind::Operation(ctx.endpoint),
         body: ctx.body,
         bearer_token: None,
         content_encoding: ctx.content_encoding,
@@ -155,7 +158,7 @@ impl Provider for DeepSeekProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: crate::Endpoint::ChatCompletions,
+        request_kind: ProviderRequestKind::Models,
         body: &Value::Null,
         bearer_token: None,
         content_encoding: None,
@@ -368,7 +371,7 @@ mod tests {
 
   fn patch_ctx(endpoint: Endpoint, stream: bool, content_encoding: Option<&'static str>) -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
-      endpoint,
+      request_kind: ProviderRequestKind::Operation(endpoint),
       body: &Value::Null,
       bearer_token: None,
       content_encoding,
