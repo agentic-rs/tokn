@@ -409,13 +409,14 @@ fn playback_request_connection(
   options: PlaybackOptions,
   report: &mut PlaybackReport,
 ) -> Result<()> {
-  let mut stmt = requests.prepare(
+  let order_index = request_order_index(requests)?;
+  let mut stmt = requests.prepare(&format!(
     "SELECT ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
             inbound_req_headers, inbound_req_body, inbound_resp_body
      FROM requests
      WHERE session_id IS NOT NULL
-     ORDER BY ts, idx",
-  )?;
+     ORDER BY ts, {order_index}",
+  ))?;
   let mut rows = stmt.query([])?;
   while let Some(row) = rows.next()? {
     report.rows_seen += 1;
@@ -500,12 +501,13 @@ fn request_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn collect_latest_heads(requests: &Connection, out: &mut HashMap<String, (i64, i64, String)>) -> Result<()> {
-  let mut stmt = requests.prepare(
-    "SELECT session_id, request_id, ts, idx
+  let order_index = request_order_index(requests)?;
+  let mut stmt = requests.prepare(&format!(
+    "SELECT session_id, request_id, ts, {order_index}
      FROM requests
      WHERE session_id IS NOT NULL
-     ORDER BY session_id, ts, idx",
-  )?;
+     ORDER BY session_id, ts, {order_index}",
+  ))?;
   let rows = stmt
     .query_map([], |r| {
       Ok((
@@ -526,6 +528,22 @@ fn collect_latest_heads(requests: &Connection, out: &mut HashMap<String, (i64, i
     }
   }
   Ok(())
+}
+
+fn request_order_index(requests: &Connection) -> Result<&'static str> {
+  if requests_column_exists(requests, "idx")? {
+    Ok("idx")
+  } else {
+    Ok("rowid")
+  }
+}
+
+fn requests_column_exists(requests: &Connection, name: &str) -> Result<bool> {
+  Ok(
+    requests
+      .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")?
+      .exists(params![name])?,
+  )
 }
 
 fn check_latest_heads(
@@ -1039,6 +1057,40 @@ mod tests {
     assert_eq!(parent.as_deref(), Some("req-old"));
   }
 
+  #[test]
+  fn playback_requests_accepts_legacy_requests_table_without_idx() {
+    let dir = tempdir();
+    let requests_path = dir.join("legacy.db");
+    let sessions_path = dir.join("sessions.db");
+    let conn = Connection::open(&requests_path).unwrap();
+    create_legacy_requests_table(&conn);
+    insert_legacy_request_row(
+      &conn,
+      100,
+      "req-1",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("old"),
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 1);
+    assert_eq!(report.rows_recorded, 1);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-1");
+  }
+
   fn msg(role: &str, text: &str) -> MessageRecord {
     MessageRecord {
       role: role.into(),
@@ -1084,6 +1136,49 @@ mod tests {
         "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
          VALUES (?1, ?2, ?3, ?4)",
         params![request_id, headers, encoded_body, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn create_legacy_requests_table(conn: &Connection) {
+    conn
+      .execute_batch(
+        "CREATE TABLE requests (
+          id INTEGER PRIMARY KEY,
+          ts INTEGER NOT NULL,
+          session_id TEXT,
+          request_id TEXT,
+          endpoint TEXT NOT NULL,
+          account_id TEXT,
+          provider_id TEXT,
+          model TEXT,
+          status INTEGER,
+          inbound_req_headers BLOB,
+          inbound_req_body BLOB,
+          inbound_resp_body BLOB
+        );",
+      )
+      .unwrap();
+  }
+
+  fn insert_legacy_request_row(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let body = serde_json::to_vec(body).unwrap();
+    let headers = serde_json::to_vec(&json!({})).unwrap();
+    conn
+      .execute(
+        "INSERT INTO requests (
+          ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
+          inbound_req_headers, inbound_req_body, inbound_resp_body
+         )
+         VALUES (?1, ?2, ?3, 'responses', 'acct', 'prov', 'model', 200, ?4, ?5, ?6)",
+        params![ts, session_id, request_id, headers, body, response_body.as_ref()],
       )
       .unwrap();
   }
