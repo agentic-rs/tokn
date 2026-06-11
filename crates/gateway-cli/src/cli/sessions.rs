@@ -36,14 +36,15 @@ pub async fn run(cmd: SessionsCmd) -> Result<()> {
 }
 
 async fn playback(args: PlaybackArgs) -> Result<()> {
-  let requests_dir = args
-    .requests_dir
-    .map(Ok)
-    .unwrap_or_else(crate::config::paths::default_requests_dir)?;
   let sessions_db = args.sessions_db.map(Ok).unwrap_or_else(default_playback_sessions_db)?;
   let source = match args.requests_db {
     Some(path) => crate::db::sessions::PlaybackSource::File(path),
-    None => crate::db::sessions::PlaybackSource::Dir(requests_dir),
+    None => crate::db::sessions::PlaybackSource::Dir(
+      args
+        .requests_dir
+        .map(Ok)
+        .unwrap_or_else(crate::config::paths::default_requests_dir)?,
+    ),
   };
   let mut progress = PlaybackProgressDisplay::new(std::io::stdout().is_terminal());
   let report = crate::db::sessions::playback_requests_source_into_sessions_with_progress(
