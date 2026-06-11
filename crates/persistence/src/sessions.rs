@@ -585,9 +585,9 @@ fn decode_request_body(headers: &Value, body: &[u8]) -> std::result::Result<Vec<
 fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
   headers
     .as_object()?
-    .get(name)
-    .or_else(|| headers.as_object()?.get(&name.to_ascii_lowercase()))?
-    .as_str()
+    .iter()
+    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+    .and_then(|(_, value)| value.as_str())
 }
 
 fn parse_json_bytes(bytes: &[u8]) -> Option<Value> {
@@ -1083,8 +1083,8 @@ mod tests {
     let raw_body = serde_json::to_vec(body).unwrap();
     let encoded_body = zstd::stream::encode_all(raw_body.as_slice(), 0).unwrap();
     let headers = serde_json::to_vec(&json!({
-      "content-encoding": "zstd",
-      "x-parent-session-id": "parent-session"
+      "Content-Encoding": "zstd",
+      "X-Parent-Session-Id": "parent-session"
     }))
     .unwrap();
     conn
