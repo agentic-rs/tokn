@@ -21,7 +21,8 @@ use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, ProviderError, RequestsError};
 use crate::pipeline::stages::{
-  resolved_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage, SentResponse,
+  provider_request_kind, resolved_upstream_endpoint, BuiltHeaders, ConvertedRequest, Extracted, Resolved, SendStage,
+  SentResponse,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -83,7 +84,7 @@ impl SendStage for ProxySend {
   #[instrument(name = "proxy_send", skip_all, fields(
     account = %resolved.account_id,
     provider = %resolved.provider_id,
-    endpoint = ?resolved.upstream_endpoint,
+    endpoint = ?resolved.route.upstream_endpoint(),
     stream = extracted.stream,
   ))]
   async fn send(
@@ -120,21 +121,13 @@ impl SendStage for ProxySend {
       .unwrap_or(false);
     let mut outbound_headers = headers.headers.clone();
     if inject_auth {
-      let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
-        PipelineError::permanent(
-          Stage::Send,
-          RequestsError::MissingUpstreamEndpoint {
-            request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
-          },
-        )
-      })?;
       resolved
         .account_handle
         .provider
         .patch_headers(
           &mut outbound_headers,
           &HeaderPatchCtx {
-            endpoint: upstream_endpoint,
+            request_kind: provider_request_kind(ctx, resolved, Stage::Send)?,
             body: body.upstream_body.as_ref(),
             bearer_token: None,
             content_encoding: body.content_encoding.map(|e| e.as_str()),
@@ -271,14 +264,14 @@ mod tests {
   use crate::event::EventBus;
   use crate::pipeline::config::RunConfig;
   use crate::pipeline::stages::ResolveStage;
-  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved};
+  use crate::pipeline::stages::{BuiltHeaders, ConvertedRequest, Extracted, Resolved, ResolvedRoute};
   use crate::stages::resolve::proxy::ProxyResolve;
   use crate::test_support::{mock_handle_with_provider, MockProvider};
   use bytes::Bytes;
   use serde_json::Value;
   use std::sync::Arc;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
-  use tokn_core::provider::Endpoint;
+  use tokn_core::provider::{Endpoint, ProviderRequestKind};
   use tokn_headers::{HeaderName, HeaderValue};
 
   #[test]
@@ -379,9 +372,8 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("m"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("m"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      route: ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("proxy"),
       provider_id: SmolStr::new("none"),
       account_handle: crate::stages::resolve::proxy::stub_handle("proxy", "none"),
@@ -428,9 +420,8 @@ mod tests {
     let resolved = Resolved {
       agent_id: None,
       model: SmolStr::new("gpt-4"),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: SmolStr::new("gpt-4"),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      route: ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: SmolStr::new("acct"),
       provider_id: SmolStr::new("mock"),
       account_handle: mock_handle_with_provider(
@@ -449,6 +440,61 @@ mod tests {
     let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
     assert!(raw_req.contains("authorization: bearer router-token"));
     assert!(!raw_req.contains("authorization: bearer client-token"));
+  }
+
+  #[tokio::test]
+  async fn injects_router_managed_auth_for_custom_paths() {
+    let (addr, rx) = one_shot_raw_http_server().await;
+
+    let ctx = ctx_with(
+      RunConfig::builder()
+        .with_str(keys::HOST, addr.to_string())
+        .with_str(send_keys::PATH, "/models")
+        .with_str(send_keys::METHOD, "GET")
+        .with_str(send_keys::SCHEME, "http")
+        .with(send_keys::INJECT_AUTH, true)
+        .build(),
+    );
+    let resolved = Resolved {
+      agent_id: None,
+      model: SmolStr::new("unknown"),
+      upstream_model: SmolStr::new("unknown"),
+      route: ResolvedRoute::provider_traffic(ProviderRequestKind::Models),
+      account_id: SmolStr::new("acct"),
+      provider_id: SmolStr::new("mock"),
+      account_handle: mock_handle_with_provider(
+        "acct",
+        MockProvider::new("mock").with_header("authorization", "Bearer router-token"),
+      ),
+    };
+
+    let send = ProxySend::new(reqwest::Client::new());
+    let sent = send
+      .send(&ctx, &fake_extracted(), &resolved, &fake_headers(), &fake_body())
+      .await
+      .unwrap();
+    assert_eq!(sent.status, 200);
+
+    let raw_req = String::from_utf8_lossy(&rx.await.unwrap()).to_ascii_lowercase();
+    assert!(raw_req.starts_with("get /models "));
+    assert!(raw_req.contains("authorization: bearer router-token"));
+    assert!(!raw_req.contains("authorization: bearer client-token"));
+  }
+
+  #[test]
+  fn classifies_provider_traffic_paths_for_header_patching() {
+    assert_eq!(
+      ProviderRequestKind::from_provider_path("/models"),
+      ProviderRequestKind::Models
+    );
+    assert_eq!(
+      ProviderRequestKind::from_provider_path("/v1/models?client_version=test"),
+      ProviderRequestKind::Models
+    );
+    assert_eq!(
+      ProviderRequestKind::from_provider_path("/v1/experimental/agents"),
+      ProviderRequestKind::Opaque
+    );
   }
 
   #[tokio::test]

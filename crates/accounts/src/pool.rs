@@ -247,6 +247,39 @@ impl AccountPool {
     }
   }
 
+  pub fn acquire_provider(&self, session_id: Option<&str>, provider_id: &str) -> SessionAcquire {
+    if let Some(id) = session_id {
+      match self.affinity.lookup(id) {
+        Lookup::Hit(account_id) => {
+          if let Some(acct) = self.account_by_id(&account_id) {
+            if acct.provider.info().id == provider_id && acct.is_healthy() {
+              self.record_session(id, &acct.id());
+              return SessionAcquire::Account(acct);
+            }
+          }
+        }
+        Lookup::Expired => {}
+        Lookup::Unknown => {}
+      }
+    }
+
+    let Some(bucket) = self.buckets.get(provider_id) else {
+      return SessionAcquire::None;
+    };
+    let acct = bucket
+      .pick_healthy()
+      .or_else(|| bucket.pick_earliest_cooldown().map(|(acct, _)| acct));
+    match acct {
+      Some(acct) => {
+        if let Some(id) = session_id {
+          self.record_session(id, &acct.id());
+        }
+        SessionAcquire::Account(acct)
+      }
+      None => SessionAcquire::None,
+    }
+  }
+
   pub fn record_session(&self, session_id: &str, account_id: &str) {
     self.affinity.record(session_id, account_id);
   }
@@ -731,6 +764,25 @@ mod tests {
     let SessionAcquire::Account(third) = p.acquire_for_session(Some("s1"), Some("model-a"), Endpoint::ChatCompletions)
     else {
       panic!("expected rebound session affinity");
+    };
+    assert_eq!(third.id(), second.id());
+  }
+
+  #[test]
+  fn expired_provider_session_rebinds_instead_of_failing() {
+    let p = pool_with_ttls(Duration::from_millis(60), Duration::from_millis(240));
+    let SessionAcquire::Account(first) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected provider account");
+    };
+
+    assert!(p.rewind_session_for_test("s1", Duration::from_millis(80)));
+    let SessionAcquire::Account(second) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected expired provider session to rebind");
+    };
+    assert_ne!(first.id(), second.id());
+
+    let SessionAcquire::Account(third) = p.acquire_provider(Some("s1"), "provider-a") else {
+      panic!("expected rebound provider session affinity");
     };
     assert_eq!(third.id(), second.id());
   }

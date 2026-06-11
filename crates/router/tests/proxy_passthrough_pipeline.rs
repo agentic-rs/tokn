@@ -55,6 +55,32 @@ fn openai_account() -> tokn_router::config::Account {
   }
 }
 
+fn llama_cpp_account() -> tokn_router::config::Account {
+  tokn_router::config::Account {
+    id: "llama-acct".into(),
+    provider: "llama-cpp".into(),
+    enabled: true,
+    tier: AccountTier::Active,
+    tags: Vec::new(),
+    label: None,
+    base_url: None,
+    headers: Default::default(),
+    auth_type: Some(AuthType::Bearer),
+    username: None,
+    api_key: Some(Secret::new("sk-router".into())),
+    api_key_expires_at: None,
+    access_token: None,
+    access_token_expires_at: None,
+    id_token: None,
+    refresh_token: None,
+    provider_account_id: None,
+    extra: Default::default(),
+    refresh_url: None,
+    last_refresh: None,
+    settings: Default::default(),
+  }
+}
+
 #[tokio::test]
 async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth() {
   use tokn_core::event::Event as CoreEvent;
@@ -864,4 +890,58 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
   let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
   let body = String::from_utf8_lossy(&body);
   assert!(body.contains("recognized provider URL"), "unexpected body: {body}");
+}
+
+#[tokio::test]
+async fn proxy_switch_forwards_custom_path_with_router_auth() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (req_tx, req_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+  let server = tokio::spawn(async move {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut buf = vec![0_u8; 8192];
+    let n = stream.read(&mut buf).await.unwrap();
+    buf.truncate(n);
+    let body = br#"{"object":"list","data":[]}"#;
+    let resp = format!(
+      "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+      body.len()
+    );
+    stream.write_all(resp.as_bytes()).await.unwrap();
+    stream.write_all(body).await.unwrap();
+    stream.flush().await.unwrap();
+    let _ = req_tx.send(buf);
+  });
+
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Switch;
+  let events = Arc::new(EventBus::noop());
+  let state = build_proxy_state(&cfg, &[llama_cpp_account()], events).unwrap();
+
+  let req = Request::builder()
+    .method(Method::GET)
+    .uri("/models")
+    .header("authorization", "Bearer client-secret-must-not-leak")
+    .body(())
+    .unwrap();
+  let (parts, ()) = req.into_parts();
+
+  let resp = proxy_switch_via_pipeline_inner(
+    &state,
+    &addr.ip().to_string(),
+    addr.port(),
+    "http",
+    None,
+    None,
+    parts,
+    Bytes::new(),
+  )
+  .await;
+
+  assert_eq!(resp.status(), StatusCode::OK);
+  server.await.unwrap();
+  let raw_req = String::from_utf8_lossy(&req_rx.await.unwrap()).to_ascii_lowercase();
+  assert!(raw_req.starts_with("get /models "), "unexpected request:\n{raw_req}");
+  assert!(raw_req.contains("authorization: bearer sk-router"));
+  assert!(!raw_req.contains("client-secret-must-not-leak"));
 }

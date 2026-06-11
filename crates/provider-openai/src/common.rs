@@ -196,6 +196,7 @@ fn is_codex_user_agent(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::ProviderRequestKind;
   use tokn_headers::TemplateVars;
 
   #[test]
@@ -274,7 +275,7 @@ mod tests {
   #[test]
   fn codex_normalizer_selects_shape_from_turn_metadata() {
     let ctx = HeaderPatchCtx {
-      endpoint: crate::Endpoint::Responses,
+      request_kind: ProviderRequestKind::Operation(crate::Endpoint::Responses),
       body: &serde_json::Value::Null,
       bearer_token: None,
       content_encoding: None,

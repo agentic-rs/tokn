@@ -242,6 +242,7 @@ async fn proxy_via_pipeline_inner(
 
   let mut cfg_builder = tokn_requests::RunConfig::builder()
     .with_str(tokn_requests::stages::resolve::proxy::keys::HOST, &host_with_port)
+    .with_str(tokn_requests::stages::resolve::proxy::keys::PATH, &path_and_query)
     .with_str(tokn_requests::stages::send::proxy::send_keys::PATH, &path_and_query)
     .with_str(tokn_requests::stages::send::proxy::send_keys::METHOD, method.as_str())
     .with_str(tokn_requests::stages::send::proxy::send_keys::SCHEME, scheme);
@@ -414,6 +415,9 @@ fn proxy_pipeline_error_to_api_error(err: &tokn_requests::PipelineError, host_wi
     } => ApiError::bad_request(err.message().into_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
     RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
+    RequestsError::NoProviderAccount { provider_id } => ApiError::bad_request(format!(
+      "switch mode requires a recognized provider URL with a configured account, got provider '{provider_id}'"
+    )),
     RequestsError::UpstreamStatus { status, body } => match http::StatusCode::from_u16(*status) {
       Ok(status) => ApiError::upstream(status, body.clone()),
       Err(_) => ApiError::bad_gateway(body.clone()),

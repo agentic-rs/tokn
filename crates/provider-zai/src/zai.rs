@@ -26,7 +26,10 @@ use tokn_headers::keys::{ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE};
 use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
 
-use crate::{error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, RequestCtx, Result, ZAI_PROVIDERS};
+use crate::{
+  error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result,
+  ZAI_PROVIDERS,
+};
 
 /// Default upstream for the coding plan. Override per-account via
 /// `[accounts.<id>.zai] base_url = "..."`.
@@ -233,7 +236,7 @@ impl Provider for ZaiProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
+        request_kind: ProviderRequestKind::Operation(ctx.endpoint),
         body: ctx.body,
         bearer_token: None,
         content_encoding: ctx.content_encoding,
@@ -430,7 +433,7 @@ mod tests {
 
   fn patch_ctx(stream: bool, content_encoding: Option<&'static str>) -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
-      endpoint: Endpoint::ChatCompletions,
+      request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
       body: &Value::Null,
       bearer_token: None,
       content_encoding,

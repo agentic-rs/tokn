@@ -164,9 +164,8 @@ mod tests {
     Resolved {
       agent_id: None,
       model: "gpt-4o".into(),
-      resolved_endpoint: Some(Endpoint::ChatCompletions),
       upstream_model: "gpt-4o".into(),
-      upstream_endpoint: Some(Endpoint::ChatCompletions),
+      route: crate::pipeline::stages::ResolvedRoute::operation(Endpoint::ChatCompletions, Endpoint::ChatCompletions),
       account_id: "acct-1".into(),
       provider_id: provider_id.into(),
       account_handle: crate::test_support::mock_handle("acct-1", provider_id),

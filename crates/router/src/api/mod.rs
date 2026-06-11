@@ -854,6 +854,32 @@ mod tests {
     }
   }
 
+  fn openai_account_with_id_and_base(id: &str, base_url: Option<String>) -> AccountCfg {
+    AccountCfg {
+      id: id.into(),
+      provider: "openai".into(),
+      enabled: true,
+      tier: tokn_core::account::AccountTier::Active,
+      tags: Vec::new(),
+      label: None,
+      base_url,
+      headers: Default::default(),
+      auth_type: Some(tokn_core::account::AuthType::Bearer),
+      username: None,
+      api_key: Some(Secret::new("sk-openai-test".into())),
+      api_key_expires_at: None,
+      access_token: None,
+      access_token_expires_at: None,
+      id_token: None,
+      refresh_token: None,
+      provider_account_id: None,
+      extra: Default::default(),
+      refresh_url: None,
+      last_refresh: None,
+      settings: Default::default(),
+    }
+  }
+
   fn core_account(cfg: AccountCfg) -> AccountConfig {
     let s = toml::to_string(&cfg).expect("serialize account");
     toml::from_str(&s).expect("parse core account")
@@ -972,6 +998,35 @@ mod tests {
         br#"{"model":"glm-4.7","messages":[{"role":"user","content":"hi"}],"stream":false}"#,
       )))
       .unwrap()
+  }
+
+  async fn one_shot_models_upstream(
+    model_id: &'static str,
+  ) -> (
+    String,
+    tokio::sync::oneshot::Receiver<Vec<u8>>,
+    tokio::task::JoinHandle<()>,
+  ) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://{addr}");
+    let (req_tx, req_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
+    let task = tokio::spawn(async move {
+      let (mut stream, _) = listener.accept().await.unwrap();
+      let mut buf = vec![0_u8; 4096];
+      let n = stream.read(&mut buf).await.unwrap();
+      buf.truncate(n);
+      let body = format!(r#"{{"object":"list","data":[{{"id":"{model_id}","object":"model"}}]}}"#);
+      let resp = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+        body.len()
+      );
+      stream.write_all(resp.as_bytes()).await.unwrap();
+      stream.write_all(body.as_bytes()).await.unwrap();
+      stream.flush().await.unwrap();
+      let _ = req_tx.send(buf);
+    });
+    (base_url, req_rx, task)
   }
 
   /// Build the same layer stack the real router uses, around a stub handler.
@@ -1481,6 +1536,54 @@ mod tests {
     let upstream_req = String::from_utf8_lossy(&upstream_req);
     assert!(upstream_req.starts_with("GET /models "));
     server.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn api_switch_models_uses_default_provider_only() {
+    let (default_base, default_req, default_task) = one_shot_models_upstream("default-provider-model").await;
+    let (other_base, other_req, other_task) = one_shot_models_upstream("other-provider-model").await;
+
+    let mut cfg = Config::default();
+    cfg.defaults.mode = RouteMode::Switch;
+    cfg.defaults.default_provider_id = Some("zai-coding-plan".into());
+    let accounts = vec![
+      zai_account_with_id_and_base("default", Some(default_base)),
+      openai_account_with_id_and_base("other", Some(other_base)),
+    ];
+    let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
+    let app = router(state);
+
+    let req = Request::builder()
+      .method("GET")
+      .uri("/v1/models")
+      .body(Body::empty())
+      .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let ids = json["data"]
+      .as_array()
+      .unwrap()
+      .iter()
+      .filter_map(|model| model["id"].as_str())
+      .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["default-provider-model"]);
+    assert_eq!(json["route_mode"], "switch");
+
+    let default_upstream_req = String::from_utf8_lossy(&default_req.await.unwrap()).to_ascii_lowercase();
+    assert!(default_upstream_req.starts_with("get /models "));
+    assert!(default_upstream_req.contains("authorization: bearer sk-test"));
+    default_task.await.unwrap();
+
+    assert!(
+      tokio::time::timeout(std::time::Duration::from_millis(100), other_req)
+        .await
+        .is_err(),
+      "switch /v1/models should not query non-default provider"
+    );
+    other_task.abort();
   }
 
   #[tokio::test]

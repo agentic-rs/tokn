@@ -11,7 +11,7 @@
 use crate::event::Stage;
 use crate::pipeline::ctx::PipelineCtx;
 use crate::pipeline::error::{PipelineError, RequestsError};
-use crate::pipeline::stages::{Extracted, ResolveStage, Resolved};
+use crate::pipeline::stages::{Extracted, ResolveStage, Resolved, ResolvedRoute};
 use async_trait::async_trait;
 use smol_str::SmolStr;
 use std::sync::Arc;
@@ -65,9 +65,18 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
       } => Ok(Resolved {
         agent_id: extracted.agent_id.clone(),
         model: extracted.model.clone(),
-        resolved_endpoint: ctx.request_endpoint.resolved(),
         upstream_model,
-        upstream_endpoint,
+        route: {
+          let resolved_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+            PipelineError::permanent(
+              Stage::Resolve,
+              RequestsError::MissingResolvedEndpoint {
+                request_endpoint: SmolStr::new(ctx.request_endpoint.as_str()),
+              },
+            )
+          })?;
+          ResolvedRoute::operation(resolved_endpoint, upstream_endpoint.unwrap_or(resolved_endpoint))
+        },
         account_id,
         provider_id,
         account_handle,

@@ -26,7 +26,7 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
   let mut seen: HashSet<String> = HashSet::new();
   let mut last_err: Option<String> = None;
 
-  let accounts = policy.pool.all();
+  let accounts = model_accounts(policy.as_ref());
   let span = tracing::Span::current();
   span.record("accounts", accounts.len());
 
@@ -71,6 +71,22 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
     "route_mode": route_mode_as_str(policy.mode),
     "data": out,
   })))
+}
+
+fn model_accounts(policy: &RequestPolicyRuntime) -> Vec<std::sync::Arc<tokn_accounts::AccountHandle>> {
+  let default_provider_id = policy.default_provider_id.as_deref();
+  policy
+    .pool
+    .all()
+    .iter()
+    .filter(|acct| match policy.mode {
+      RouteMode::Passthrough | RouteMode::Switch => default_provider_id
+        .map(|provider_id| acct.provider.info().id == provider_id)
+        .unwrap_or(true),
+      _ => true,
+    })
+    .cloned()
+    .collect()
 }
 
 async fn remote_models(

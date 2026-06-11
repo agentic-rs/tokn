@@ -103,7 +103,7 @@ mod tests {
   use crate::event::EventBus;
   use crate::pipeline::config::RunConfig;
   use crate::pipeline::ctx::PipelineCtx;
-  use crate::pipeline::stages::{Extracted, Resolved};
+  use crate::pipeline::stages::{Extracted, Resolved, ResolvedRoute};
   use crate::test_support::{mock_handle, mock_handle_with_provider, MockProvider};
   use crate::utils::codec::{decode_body_bytes, encode_body_bytes, ContentEncodingKind};
   use std::sync::Arc;
@@ -155,9 +155,8 @@ mod tests {
     Resolved {
       agent_id: None,
       model: smol_str::SmolStr::new("input-model"),
-      resolved_endpoint: Some(resolved_endpoint),
       upstream_model: smol_str::SmolStr::new(upstream_model),
-      upstream_endpoint: Some(upstream_endpoint),
+      route: ResolvedRoute::operation(resolved_endpoint, upstream_endpoint),
       account_id: smol_str::SmolStr::new("acct-1"),
       provider_id: smol_str::SmolStr::from(handle.provider.id()),
       account_handle: handle,
@@ -331,13 +330,12 @@ mod tests {
     });
     let raw = Bytes::from(serde_json::to_vec(&body).unwrap());
     let ex = extracted_with(body.clone(), None, raw, None);
-    let mut res = resolved_with(
+    let res = resolved_with(
       mock_handle("acct", "mock"),
       Endpoint::Responses,
       Endpoint::Responses,
       "input-model",
     );
-    res.upstream_endpoint = None;
     let ctx = ctx_with_config(
       Endpoint::Responses,
       RunConfig::builder()
@@ -365,8 +363,7 @@ mod tests {
       Endpoint::ChatCompletions,
       "input-model",
     );
-    res.resolved_endpoint = None;
-    res.upstream_endpoint = None;
+    res.route = ResolvedRoute::provider_traffic(tokn_core::provider::ProviderRequestKind::Opaque);
     let ctx = PipelineCtx::new(
       "req-cr-missing",
       tokn_core::request_event::RequestEndpoint::custom("/v1/experimental/agents"),

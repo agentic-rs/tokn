@@ -9,7 +9,8 @@ use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
 
 use crate::{
-  error, AuthKind, Endpoint, HeaderPatchCtx, Provider, ProviderInfo, RequestCtx, Result, TemplateVars, ID_LLAMA_CPP,
+  error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result, TemplateVars,
+  ID_LLAMA_CPP,
 };
 
 pub const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
@@ -122,7 +123,7 @@ impl Provider for LlamaCppProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: Endpoint::ChatCompletions,
+        request_kind: ProviderRequestKind::Models,
         body: &Value::Null,
         bearer_token: None,
         content_encoding: None,
@@ -147,7 +148,7 @@ impl Provider for LlamaCppProvider {
     self.patch_headers(
       &mut headers,
       &HeaderPatchCtx {
-        endpoint: ctx.endpoint,
+        request_kind: ProviderRequestKind::Operation(ctx.endpoint),
         body: ctx.body,
         bearer_token: None,
         content_encoding: ctx.content_encoding,
@@ -179,6 +180,7 @@ impl Provider for LlamaCppProvider {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::Endpoint;
   use tokn_core::account::AccountTier;
   use tokn_mock_server::{HeaderExpectation, MockAuthConfig, MockLlmConfig, MockLlmServer, MockRoute};
 
@@ -210,7 +212,7 @@ mod tests {
 
   fn patch_ctx() -> HeaderPatchCtx<'static> {
     HeaderPatchCtx {
-      endpoint: Endpoint::ChatCompletions,
+      request_kind: ProviderRequestKind::Operation(Endpoint::ChatCompletions),
       body: &Value::Null,
       bearer_token: None,
       content_encoding: None,

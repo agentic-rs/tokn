@@ -37,6 +37,9 @@ pub enum RequestsError {
   #[snafu(display("no account supports endpoint {endpoint} for model {model}"))]
   NoAccount { endpoint: Endpoint, model: SmolStr },
 
+  #[snafu(display("no account configured for provider {provider_id}"))]
+  NoProviderAccount { provider_id: SmolStr },
+
   #[snafu(display("invalid `{key}` endpoint `{value}`"))]
   InvalidConfiguredEndpoint { key: &'static str, value: SmolStr },
 
