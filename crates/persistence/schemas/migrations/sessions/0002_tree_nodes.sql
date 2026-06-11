@@ -1,33 +1,24 @@
--- Canonical current schema for sessions.db.
--- Regenerated whenever a new NNN_*.sql migration is added so that fresh
--- installs can jump straight here instead of replaying history.
--- Must remain equivalent to the cumulative effect of 001..002.
---
--- Mental model: a session is a tree of observed request/response nodes.
--- `session_heads` chooses the current default view into that tree; message
--- and part ordering is local to each node's request/response delta.
+DROP INDEX IF EXISTS idx_sessions_last;
+DROP INDEX IF EXISTS idx_session_parts_msg;
+DROP INDEX IF EXISTS idx_session_parts_hash;
+DROP TABLE IF EXISTS session_parts;
+ALTER TABLE sessions RENAME TO sessions_legacy;
 
 CREATE TABLE sessions (
   id            TEXT PRIMARY KEY,
   first_seen_ts INTEGER NOT NULL,
   last_seen_ts  INTEGER NOT NULL,
-  source        TEXT    NOT NULL,        -- 'header' | 'auto'
+  source        TEXT    NOT NULL,
   account_id    TEXT,
   provider_id   TEXT,
   model         TEXT
 );
+INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
+SELECT id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model
+FROM sessions_legacy;
+DROP TABLE sessions_legacy;
 CREATE INDEX idx_sessions_last ON sessions(last_seen_ts);
 
--- Content-addressed part store; identical parts dedupe across the whole DB.
-CREATE TABLE part_blobs (
-  hash      TEXT PRIMARY KEY,            -- sha256(part_type || 0x00 || content)
-  part_type TEXT NOT NULL,               -- 'text' | 'image_url' | 'tool_use' | ...
-  content   BLOB NOT NULL
-);
-
--- Tree-shaped semantic session store. Each node maps to one observed
--- request/response boundary; reducers may store only the suffix relative to
--- the chosen parent, but they never create synthetic intermediate nodes.
 CREATE TABLE session_nodes (
   id                     TEXT PRIMARY KEY,
   session_id             TEXT    NOT NULL REFERENCES sessions(id),
@@ -52,8 +43,8 @@ CREATE INDEX idx_session_nodes_session_ts ON session_nodes(session_id, ts);
 CREATE TABLE node_messages (
   id          TEXT PRIMARY KEY,
   node_id     TEXT    NOT NULL REFERENCES session_nodes(id),
-  side        TEXT    NOT NULL,           -- 'request' | 'response'
-  message_seq INTEGER NOT NULL,           -- order within this node's delta
+  side        TEXT    NOT NULL,
+  message_seq INTEGER NOT NULL,
   role        TEXT    NOT NULL,
   status      INTEGER,
   UNIQUE(node_id, side, message_seq)
@@ -74,8 +65,6 @@ CREATE TABLE session_heads (
   updated_ts INTEGER NOT NULL
 );
 
--- Subagent/session topology metadata. This is deliberately separate from
--- session_nodes.parent_id, which is the conversation-tree edge.
 CREATE TABLE session_relations (
   parent_session_id TEXT    NOT NULL,
   child_session_id  TEXT    NOT NULL,
