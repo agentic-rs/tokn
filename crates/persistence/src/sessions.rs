@@ -22,6 +22,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "tree_nodes",
     sql: include_str!("../schemas/migrations/sessions/0002_tree_nodes.sql"),
   },
+  migrate::Migration {
+    version: 3,
+    name: "session_views",
+    sql: include_str!("../schemas/migrations/sessions/0003_session_views.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -1215,6 +1220,121 @@ mod tests {
       )
       .unwrap();
     assert_eq!(response_messages, 2);
+  }
+
+  #[test]
+  fn session_views_expose_current_head_and_message_parts() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    db.record_tree(&TreeRequestRecord {
+      ts: 100,
+      session_id: "sess-1".into(),
+      parent_session_id: None,
+      request_id: "req-1".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: vec![msg("user", "hello")],
+      response_messages: vec![msg("assistant", "hi")],
+    })
+    .unwrap();
+
+    let current = db
+      .conn
+      .query_row(
+        "SELECT session_id, head_request_id, head_endpoint, head_status, account_id, provider_id, model,
+                head_reduction_kind, head_request_message_count, head_response_message_count
+         FROM session_current",
+        [],
+        |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?,
+            r.get::<_, String>(7)?,
+            r.get::<_, i64>(8)?,
+            r.get::<_, i64>(9)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(
+      current,
+      (
+        "sess-1".into(),
+        "req-1".into(),
+        "responses".into(),
+        200,
+        "acct".into(),
+        "prov".into(),
+        "model".into(),
+        "root_snapshot".into(),
+        1,
+        1,
+      )
+    );
+
+    let messages = db
+      .conn
+      .prepare(
+        "SELECT session_id, node_id, request_id, is_head, side, message_seq, role, part_index, part_type, content
+         FROM session_messages
+         ORDER BY node_ts, side, message_seq, part_index",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, String>(1)?,
+          r.get::<_, String>(2)?,
+          r.get::<_, bool>(3)?,
+          r.get::<_, String>(4)?,
+          r.get::<_, i64>(5)?,
+          r.get::<_, String>(6)?,
+          r.get::<_, i64>(7)?,
+          r.get::<_, String>(8)?,
+          String::from_utf8(r.get::<_, Vec<u8>>(9)?).unwrap(),
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      messages,
+      vec![
+        (
+          "sess-1".into(),
+          "req-1".into(),
+          "req-1".into(),
+          true,
+          "request".into(),
+          0,
+          "user".into(),
+          0,
+          "text".into(),
+          "hello".into(),
+        ),
+        (
+          "sess-1".into(),
+          "req-1".into(),
+          "req-1".into(),
+          true,
+          "response".into(),
+          0,
+          "assistant".into(),
+          0,
+          "text".into(),
+          "hi".into(),
+        ),
+      ]
+    );
   }
 
   #[test]
