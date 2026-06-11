@@ -4,8 +4,9 @@ use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokn_core::db::SessionSource;
 use tracing::debug;
 
@@ -59,8 +60,72 @@ pub struct PlaybackReport {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct PlaybackStats {
+  pub rows_seen: u64,
+  pub rows_with_session: u64,
+  pub rows_recorded: u64,
+  pub rows_existing: u64,
+  pub rows_skipped: u64,
+  pub decode_errors: u64,
+  pub reduction_mismatches: u64,
+}
+
+impl PlaybackStats {
+  fn from_report(report: &PlaybackReport) -> Self {
+    Self {
+      rows_seen: report.rows_seen,
+      rows_with_session: report.rows_with_session,
+      rows_recorded: report.rows_recorded,
+      rows_existing: report.rows_existing,
+      rows_skipped: report.rows_skipped,
+      decode_errors: report.decode_errors,
+      reduction_mismatches: report.reduction_mismatches,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PlaybackOptions {
   pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackProgressEvent {
+  Started {
+    files_total: usize,
+    rows_total: u64,
+  },
+  FileStarted {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    rows_total: u64,
+  },
+  RowProcessed {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    rows_seen: u64,
+    rows_total: u64,
+    file_stats: PlaybackStats,
+    global_stats: PlaybackStats,
+  },
+  FileFinished {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    file_stats: PlaybackStats,
+    global_stats: PlaybackStats,
+  },
+  Finished {
+    global_stats: PlaybackStats,
+  },
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackSource {
+  File(PathBuf),
+  Dir(PathBuf),
 }
 
 #[derive(Debug)]
@@ -372,54 +437,177 @@ pub fn playback_requests_into_sessions_with_options(
   sessions_db: &Path,
   options: PlaybackOptions,
 ) -> Result<PlaybackReport> {
-  let requests = Connection::open_with_flags(requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+  playback_requests_source_into_sessions(PlaybackSource::File(requests_db.to_path_buf()), sessions_db, options)
+}
+
+pub fn playback_requests_source_into_sessions(
+  source: PlaybackSource,
+  sessions_db: &Path,
+  options: PlaybackOptions,
+) -> Result<PlaybackReport> {
+  playback_requests_source_into_sessions_with_progress(source, sessions_db, options, |_| {})
+}
+
+pub fn playback_requests_source_into_sessions_with_progress(
+  source: PlaybackSource,
+  sessions_db: &Path,
+  options: PlaybackOptions,
+  mut progress: impl FnMut(PlaybackProgressEvent),
+) -> Result<PlaybackReport> {
+  let request_dbs = match source {
+    PlaybackSource::File(path) => vec![path],
+    PlaybackSource::Dir(dir) => request_db_files(&dir)?,
+  };
+  let files_total = request_dbs.len();
+  let rows_total = count_request_rows(&request_dbs)?;
   let mut sessions = SessionsDb::open(sessions_db)?;
   let mut report = PlaybackReport::default();
-  let mut stmt = requests.prepare(
+  let mut expected_latest = HashMap::new();
+  progress(PlaybackProgressEvent::Started {
+    files_total,
+    rows_total,
+  });
+  for (file_index, requests_db) in request_dbs.into_iter().enumerate() {
+    let requests = Connection::open_with_flags(&requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let file_rows_total = count_request_rows_in_connection(&requests)?;
+    progress(PlaybackProgressEvent::FileStarted {
+      path: requests_db.clone(),
+      file_index,
+      files_total,
+      rows_total: file_rows_total,
+    });
+    let file_start = PlaybackStats::from_report(&report);
+    playback_request_connection(
+      &requests,
+      &mut sessions,
+      options,
+      &mut report,
+      &mut expected_latest,
+      PlaybackFileContext {
+        requests_db: &requests_db,
+        file_start,
+        rows_total: file_rows_total,
+        file_index,
+        files_total,
+      },
+      &mut progress,
+    )?;
+    let file_stats = subtract_stats(PlaybackStats::from_report(&report), file_start);
+    progress(PlaybackProgressEvent::FileFinished {
+      path: requests_db,
+      file_index,
+      files_total,
+      file_stats,
+      global_stats: PlaybackStats::from_report(&report),
+    });
+  }
+  report.latest_mismatches = check_latest_heads(&expected_latest, &sessions.conn)?;
+  progress(PlaybackProgressEvent::Finished {
+    global_stats: PlaybackStats::from_report(&report),
+  });
+  Ok(report)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlaybackFileContext<'a> {
+  requests_db: &'a Path,
+  file_start: PlaybackStats,
+  rows_total: u64,
+  file_index: usize,
+  files_total: usize,
+}
+
+fn playback_request_connection(
+  requests: &Connection,
+  sessions: &mut SessionsDb,
+  options: PlaybackOptions,
+  report: &mut PlaybackReport,
+  expected_latest: &mut HashMap<String, (i64, i64, String)>,
+  ctx: PlaybackFileContext<'_>,
+  progress: &mut impl FnMut(PlaybackProgressEvent),
+) -> Result<()> {
+  let order_index = request_order_index(requests)?;
+  let mut stmt = requests.prepare(&format!(
     "SELECT ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
-            inbound_req_headers, inbound_req_body, inbound_resp_body
+            {order_index}
      FROM requests
      WHERE session_id IS NOT NULL
-     ORDER BY ts, idx",
-  )?;
+     ORDER BY ts, {order_index}",
+  ))?;
   let mut rows = stmt.query([])?;
   while let Some(row) = rows.next()? {
     report.rows_seen += 1;
     report.rows_with_session += 1;
-    let headers = row.get::<_, Option<Vec<u8>>>(8)?.unwrap_or_default();
-    let body = row.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default();
-    let response_body = row.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default();
-    let header_json = parse_json_bytes(&headers).unwrap_or(Value::Null);
+    let ts: i64 = row.get(0)?;
+    let session_id: String = row.get(1)?;
+    let request_id: String = row.get(2)?;
     let endpoint: String = row.get(3)?;
-    let decoded = match decode_request_body(&header_json, &body) {
-      Ok(decoded) => decoded,
-      Err(e) => {
-        tracing::warn!(error = %e, "request playback decode failed");
+    let request_order: i64 = row.get(8)?;
+    if !options.force && sessions.node_exists(&session_id, &request_id)? {
+      report.rows_existing += 1;
+      update_expected_latest(expected_latest, &session_id, &request_id, ts, request_order);
+      emit_playback_row_progress(progress, ctx, report);
+      continue;
+    }
+    let (headers, body, response_body) = select_playback_payload(requests, &request_id)?;
+    let header_json = parse_json_bytes(&headers).unwrap_or(Value::Null);
+    let body_json = if body.is_empty() {
+      if headers_expect_body(&header_json) {
+        tracing::warn!(
+          requests_db = %ctx.requests_db.display(),
+          request_id = %request_id,
+          "request playback body missing"
+        );
         report.decode_errors += 1;
         report.rows_skipped += 1;
+        emit_playback_row_progress(progress, ctx, report);
         continue;
       }
-    };
-    let body_json = match serde_json::from_slice::<Value>(&decoded) {
-      Ok(value) => value,
-      Err(e) => {
-        tracing::warn!(error = %e, "request playback json parse failed");
-        report.decode_errors += 1;
-        report.rows_skipped += 1;
-        continue;
+      Value::Null
+    } else {
+      let decoded = match decode_request_body(&header_json, &body) {
+        Ok(decoded) => decoded,
+        Err(e) => {
+          tracing::warn!(
+            requests_db = %ctx.requests_db.display(),
+            request_id = %request_id,
+            error = %e,
+            "request playback decode failed"
+          );
+          report.decode_errors += 1;
+          report.rows_skipped += 1;
+          emit_playback_row_progress(progress, ctx, report);
+          continue;
+        }
+      };
+      match serde_json::from_slice::<Value>(&decoded) {
+        Ok(value) => value,
+        Err(e) => {
+          tracing::warn!(
+            requests_db = %ctx.requests_db.display(),
+            request_id = %request_id,
+            error = %e,
+            "request playback json parse failed"
+          );
+          report.decode_errors += 1;
+          report.rows_skipped += 1;
+          emit_playback_row_progress(progress, ctx, report);
+          continue;
+        }
       }
     };
     let request_messages = request_messages_from_json(&endpoint, &body_json);
     let response_messages = response_messages_from_body(&response_body);
     if request_messages.is_empty() && response_messages.is_empty() {
       report.rows_skipped += 1;
+      emit_playback_row_progress(progress, ctx, report);
       continue;
     }
     let record = TreeRequestRecord {
-      ts: row.get(0)?,
-      session_id: row.get(1)?,
+      ts,
+      session_id,
       parent_session_id: header_str(&header_json, "x-parent-session-id").map(str::to_string),
-      request_id: row.get(2)?,
+      request_id,
       endpoint,
       status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
       account_id: row.get(4)?,
@@ -428,10 +616,6 @@ pub fn playback_requests_into_sessions_with_options(
       request_messages,
       response_messages,
     };
-    if !options.force && sessions.node_exists(&record.session_id, &record.request_id)? {
-      report.rows_existing += 1;
-      continue;
-    }
     let parent = sessions.head_for_session(&record.session_id)?;
     sessions.record_tree(&record)?;
     if parent.is_some() {
@@ -448,27 +632,135 @@ pub fn playback_requests_into_sessions_with_options(
       }
     }
     report.rows_recorded += 1;
+    update_expected_latest(
+      expected_latest,
+      &record.session_id,
+      &record.request_id,
+      record.ts,
+      request_order,
+    );
+    emit_playback_row_progress(progress, ctx, report);
   }
-  report.latest_mismatches = check_latest_heads(&requests, &sessions.conn)?;
-  Ok(report)
+  Ok(())
 }
 
-fn check_latest_heads(requests: &Connection, sessions: &Connection) -> Result<Vec<LatestMismatch>> {
-  let mut stmt = requests.prepare(
-    "SELECT session_id, request_id
-     FROM (
-       SELECT session_id, request_id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC, idx DESC) AS rn
+fn request_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
+  let mut files = Vec::new();
+  for entry in std::fs::read_dir(dir)? {
+    let entry = entry?;
+    let path = entry.path();
+    if path.extension().and_then(|value| value.to_str()) == Some("db") {
+      files.push(path);
+    }
+  }
+  files.sort();
+  Ok(files)
+}
+
+fn select_playback_payload(requests: &Connection, request_id: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+  requests
+    .query_row(
+      "SELECT inbound_req_headers, inbound_req_body, inbound_resp_body
        FROM requests
-       WHERE session_id IS NOT NULL
-     )
-     WHERE rn = 1
-     ORDER BY session_id",
-  )?;
-  let rows = stmt
-    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-    .collect::<rusqlite::Result<Vec<_>>>()?;
+       WHERE request_id = ?1",
+      params![request_id],
+      |r| {
+        Ok((
+          r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
+          r.get::<_, Option<Vec<u8>>>(1)?.unwrap_or_default(),
+          r.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+        ))
+      },
+    )
+    .map_err(Into::into)
+}
+
+fn count_request_rows(paths: &[PathBuf]) -> Result<u64> {
+  let mut total = 0;
+  for path in paths {
+    let requests = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    total += count_request_rows_in_connection(&requests)?;
+  }
+  Ok(total)
+}
+
+fn count_request_rows_in_connection(requests: &Connection) -> Result<u64> {
+  let count = requests.query_row("SELECT COUNT(*) FROM requests WHERE session_id IS NOT NULL", [], |r| {
+    r.get::<_, i64>(0)
+  })?;
+  Ok(count.max(0) as u64)
+}
+
+fn emit_playback_row_progress(
+  progress: &mut impl FnMut(PlaybackProgressEvent),
+  ctx: PlaybackFileContext<'_>,
+  report: &PlaybackReport,
+) {
+  let global_stats = PlaybackStats::from_report(report);
+  let file_stats = subtract_stats(global_stats, ctx.file_start);
+  progress(PlaybackProgressEvent::RowProcessed {
+    path: ctx.requests_db.to_path_buf(),
+    file_index: ctx.file_index,
+    files_total: ctx.files_total,
+    rows_seen: file_stats.rows_seen,
+    rows_total: ctx.rows_total,
+    file_stats,
+    global_stats,
+  });
+}
+
+fn subtract_stats(after: PlaybackStats, before: PlaybackStats) -> PlaybackStats {
+  PlaybackStats {
+    rows_seen: after.rows_seen.saturating_sub(before.rows_seen),
+    rows_with_session: after.rows_with_session.saturating_sub(before.rows_with_session),
+    rows_recorded: after.rows_recorded.saturating_sub(before.rows_recorded),
+    rows_existing: after.rows_existing.saturating_sub(before.rows_existing),
+    rows_skipped: after.rows_skipped.saturating_sub(before.rows_skipped),
+    decode_errors: after.decode_errors.saturating_sub(before.decode_errors),
+    reduction_mismatches: after.reduction_mismatches.saturating_sub(before.reduction_mismatches),
+  }
+}
+
+fn update_expected_latest(
+  out: &mut HashMap<String, (i64, i64, String)>,
+  session_id: &str,
+  request_id: &str,
+  ts: i64,
+  idx: i64,
+) {
+  let update = out
+    .get(session_id)
+    .map(|(existing_ts, existing_idx, _)| (ts, idx) >= (*existing_ts, *existing_idx))
+    .unwrap_or(true);
+  if update {
+    out.insert(session_id.to_string(), (ts, idx, request_id.to_string()));
+  }
+}
+
+fn request_order_index(requests: &Connection) -> Result<&'static str> {
+  if requests_column_exists(requests, "idx")? {
+    Ok("idx")
+  } else {
+    Ok("rowid")
+  }
+}
+
+fn requests_column_exists(requests: &Connection, name: &str) -> Result<bool> {
+  Ok(
+    requests
+      .prepare("SELECT 1 FROM pragma_table_info('requests') WHERE name = ?1")?
+      .exists(params![name])?,
+  )
+}
+
+fn check_latest_heads(
+  expected: &HashMap<String, (i64, i64, String)>,
+  sessions: &Connection,
+) -> Result<Vec<LatestMismatch>> {
   let mut out = Vec::new();
-  for (session_id, expected_request_id) in rows {
+  let mut expected: Vec<_> = expected.iter().collect();
+  expected.sort_by(|a, b| a.0.cmp(b.0));
+  for (session_id, (_, _, expected_request_id)) in expected {
     let actual_request_id = sessions
       .query_row(
         "SELECT n.request_id
@@ -481,8 +773,8 @@ fn check_latest_heads(requests: &Connection, sessions: &Connection) -> Result<Ve
       .optional()?;
     if actual_request_id.as_deref() != Some(expected_request_id.as_str()) {
       out.push(LatestMismatch {
-        session_id,
-        expected_request_id,
+        session_id: session_id.clone(),
+        expected_request_id: expected_request_id.clone(),
         actual_request_id,
       });
     }
@@ -496,14 +788,33 @@ fn decode_request_body(headers: &Value, body: &[u8]) -> std::result::Result<Vec<
     "gzip" => {
       let mut decoder = GzDecoder::new(body);
       let mut out = Vec::new();
-      decoder
-        .read_to_end(&mut out)
-        .map_err(|e| format!("gzip decode failed: {e}"))?;
+      if let Err(e) = decoder.read_to_end(&mut out) {
+        return decode_raw_json_body(body).ok_or_else(|| format!("gzip decode failed: {e}"));
+      }
       Ok(out)
     }
-    "zstd" => zstd::stream::decode_all(body).map_err(|e| format!("zstd decode failed: {e}")),
+    "zstd" => zstd::stream::decode_all(body)
+      .or_else(|e| decode_raw_json_body(body).ok_or_else(|| format!("zstd decode failed: {e}"))),
     other => Err(format!("unsupported content-encoding: {other}")),
   }
+}
+
+fn headers_expect_body(headers: &Value) -> bool {
+  let has_encoding = header_str(headers, "content-encoding")
+    .map(|value| {
+      let value = value.trim();
+      !value.is_empty() && !value.eq_ignore_ascii_case("identity")
+    })
+    .unwrap_or(false);
+  let has_content_length = header_str(headers, "content-length")
+    .and_then(|value| value.parse::<u64>().ok())
+    .map(|value| value > 0)
+    .unwrap_or(false);
+  has_encoding || has_content_length
+}
+
+fn decode_raw_json_body(body: &[u8]) -> Option<Vec<u8>> {
+  parse_json_bytes(body).map(|_| body.to_vec())
 }
 
 fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
@@ -906,6 +1217,194 @@ mod tests {
     assert_eq!(response_messages, 2);
   }
 
+  #[test]
+  fn playback_requests_dir_sorts_files_and_verifies_latest_across_all_days() {
+    let dir = tempdir();
+    let requests_dir = dir.join("requests");
+    std::fs::create_dir_all(&requests_dir).unwrap();
+    let first_day = requests_dir.join("2026-05-21.db");
+    let second_day = requests_dir.join("2026-05-22.db");
+    std::fs::write(requests_dir.join("2026-05-23.db.bak"), b"not sqlite").unwrap();
+    crate::requests::open_day_db(&second_day).unwrap();
+    crate::requests::open_day_db(&first_day).unwrap();
+    let first_conn = Connection::open(&first_day).unwrap();
+    let second_conn = Connection::open(&second_day).unwrap();
+    insert_request_row(
+      &second_conn,
+      200,
+      "req-new",
+      "sess-1",
+      &json!({
+        "input": [
+          {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+          {"role": "user", "content": [{"type": "input_text", "text": "new"}]}
+        ]
+      }),
+      sse_completed("new"),
+    );
+    insert_request_row(
+      &first_conn,
+      100,
+      "req-old",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("old"),
+    );
+
+    let sessions_path = dir.join("sessions.db");
+    let report = playback_requests_source_into_sessions(
+      PlaybackSource::Dir(requests_dir),
+      &sessions_path,
+      PlaybackOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(report.rows_seen, 2);
+    assert_eq!(report.rows_recorded, 2);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-new");
+    let parent: Option<String> = sessions
+      .query_row(
+        "SELECT parent_id FROM session_nodes WHERE request_id = 'req-new'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(parent.as_deref(), Some("req-old"));
+  }
+
+  #[test]
+  fn playback_requests_accepts_legacy_requests_table_without_idx() {
+    let dir = tempdir();
+    let requests_path = dir.join("legacy.db");
+    let sessions_path = dir.join("sessions.db");
+    let conn = Connection::open(&requests_path).unwrap();
+    create_legacy_requests_table(&conn);
+    insert_legacy_request_row(
+      &conn,
+      100,
+      "req-1",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("old"),
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 1);
+    assert_eq!(report.rows_recorded, 1);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-1");
+  }
+
+  #[test]
+  fn playback_requests_accepts_raw_json_when_encoding_header_is_stale() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    insert_request_row_with_raw_body(
+      &conn,
+      100,
+      "req-1",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("ok"),
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 1);
+    assert_eq!(report.rows_recorded, 1);
+    assert_eq!(report.decode_errors, 0);
+    assert!(report.latest_mismatches.is_empty());
+  }
+
+  #[test]
+  fn playback_requests_rejects_missing_request_body_with_encoded_header() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    insert_request_row_with_missing_encoded_body(&conn, 100, "req-1", "sess-1", sse_completed("ok"));
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 1);
+    assert_eq!(report.rows_recorded, 0);
+    assert_eq!(report.rows_skipped, 1);
+    assert_eq!(report.decode_errors, 1);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let node_count: i64 = sessions
+      .query_row(
+        "SELECT COUNT(*) FROM session_nodes WHERE request_id = 'req-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(node_count, 0);
+  }
+
+  #[test]
+  fn playback_latest_head_ignores_rows_without_messages() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    insert_request_row(
+      &conn,
+      100,
+      "req-recorded",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("ok"),
+    );
+    insert_request_row_with_empty_identity_body_and_status(&conn, 110, "req-empty", "sess-1", 400, "");
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_seen, 2);
+    assert_eq!(report.rows_recorded, 1);
+    assert_eq!(report.rows_skipped, 1);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-recorded");
+  }
+
   fn msg(role: &str, text: &str) -> MessageRecord {
     MessageRecord {
       role: role.into(),
@@ -951,6 +1450,140 @@ mod tests {
         "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
          VALUES (?1, ?2, ?3, ?4)",
         params![request_id, headers, encoded_body, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn insert_request_row_with_missing_encoded_body(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let headers = json!({
+      "Content-Encoding": "zstd",
+      "Content-Length": "81104"
+    });
+    insert_request_row_with_empty_body_and_status(conn, ts, request_id, session_id, 200, &headers, response_body);
+  }
+
+  fn insert_request_row_with_empty_identity_body_and_status(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    status: u16,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    insert_request_row_with_empty_body_and_status(conn, ts, request_id, session_id, status, &json!({}), response_body);
+  }
+
+  fn insert_request_row_with_empty_body_and_status(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    status: u16,
+    headers: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let headers = serde_json::to_vec(headers).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_connection (request_id, ts, ver, endpoint, status)
+         VALUES (?1, ?2, 'test', 'responses', ?3)",
+        params![request_id, ts, status],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_metadata (request_id, session_id, account_id, provider_id, model)
+         VALUES (?1, ?2, 'acct', 'prov', 'model')",
+        params![request_id, session_id],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
+         VALUES (?1, ?2, X'', ?3)",
+        params![request_id, headers, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn insert_request_row_with_raw_body(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let raw_body = serde_json::to_vec(body).unwrap();
+    let headers = serde_json::to_vec(&json!({ "Content-Encoding": "zstd" })).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_connection (request_id, ts, ver, endpoint, status)
+         VALUES (?1, ?2, 'test', 'responses', 200)",
+        params![request_id, ts],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_metadata (request_id, session_id, account_id, provider_id, model)
+         VALUES (?1, ?2, 'acct', 'prov', 'model')",
+        params![request_id, session_id],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_downstream (request_id, inbound_req_headers, inbound_req_body, inbound_resp_body)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![request_id, headers, raw_body, response_body.as_ref()],
+      )
+      .unwrap();
+  }
+
+  fn create_legacy_requests_table(conn: &Connection) {
+    conn
+      .execute_batch(
+        "CREATE TABLE requests (
+          id INTEGER PRIMARY KEY,
+          ts INTEGER NOT NULL,
+          session_id TEXT,
+          request_id TEXT,
+          endpoint TEXT NOT NULL,
+          account_id TEXT,
+          provider_id TEXT,
+          model TEXT,
+          status INTEGER,
+          inbound_req_headers BLOB,
+          inbound_req_body BLOB,
+          inbound_resp_body BLOB
+        );",
+      )
+      .unwrap();
+  }
+
+  fn insert_legacy_request_row(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
+    let body = serde_json::to_vec(body).unwrap();
+    let headers = serde_json::to_vec(&json!({})).unwrap();
+    conn
+      .execute(
+        "INSERT INTO requests (
+          ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
+          inbound_req_headers, inbound_req_body, inbound_resp_body
+         )
+         VALUES (?1, ?2, ?3, 'responses', 'acct', 'prov', 'model', 200, ?4, ?5, ?6)",
+        params![ts, session_id, request_id, headers, body, response_body.as_ref()],
       )
       .unwrap();
   }
