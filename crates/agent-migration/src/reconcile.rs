@@ -602,7 +602,7 @@ mod tests {
     let gateway_config_path = dir.path().join("config.toml");
     let agent_home = dir.path().join("agent-home");
     let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
-    let opencode_config_path = agent_home.join(".config/opencode/opencode.json");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.jsonc");
     std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
     std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -625,7 +625,7 @@ port = 4141
       .to_string(),
     )
     .unwrap();
-    std::fs::write(&opencode_config_path, serde_json::json!({"mcp": {}}).to_string()).unwrap();
+    std::fs::write(&opencode_config_path, "{\n  // user config\n  \"mcp\": {},\n}\n").unwrap();
 
     let plan = plan_reconcile(ReconcileRequest {
       agent: AgentId::Opencode,
@@ -641,6 +641,7 @@ port = 4141
     assert_eq!(plan.target_base_url, "http://127.0.0.1:4141/opencode/v1");
     assert_eq!(plan.binding_profile.as_deref(), Some("opencode"));
     assert_eq!(plan.imported_accounts.len(), 1);
+    assert_eq!(plan.edits[0].path, opencode_config_path);
   }
 
   #[test]

@@ -3,6 +3,7 @@
 
 mod adapter;
 mod adapters;
+mod jsonc;
 mod manifest;
 mod reconcile;
 mod status;

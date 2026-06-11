@@ -1,4 +1,5 @@
 use crate::adapter::AgentAdapter;
+use crate::jsonc::read_json_or_jsonc;
 use crate::reconcile::{annotate_imported_account, EditKind, PlannedEdit};
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -10,6 +11,9 @@ use tokn_core::AgentId;
 
 pub(crate) struct OpencodeAdapter;
 
+const OPENCODE_CONFIG_JSON: &str = ".config/opencode/opencode.json";
+const OPENCODE_CONFIG_JSONC: &str = ".config/opencode/opencode.jsonc";
+
 impl AgentAdapter for OpencodeAdapter {
   fn default_provider_id(&self) -> &'static str {
     tokn_core::provider::ID_OPENAI
@@ -20,7 +24,7 @@ impl AgentAdapter for OpencodeAdapter {
   }
 
   fn config_path(&self, home: &Path) -> PathBuf {
-    home.join(".config/opencode/opencode.json")
+    opencode_config_path(home)
   }
 
   fn discover_accounts(&self, home: &Path, timestamp: &str) -> Result<Vec<Account>> {
@@ -36,8 +40,7 @@ impl AgentAdapter for OpencodeAdapter {
   fn rewrite_config(&self, home: &Path, base_url: &str) -> Result<Vec<PlannedEdit>> {
     let config_path = self.config_path(home);
     let mut json = if config_path.exists() {
-      let raw = std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?;
-      serde_json::from_str(&raw).with_context(|| format!("parsing {}", config_path.display()))?
+      read_json_or_jsonc(&config_path)?
     } else {
       Value::Object(serde_json::Map::new())
     };
@@ -47,6 +50,14 @@ impl AgentAdapter for OpencodeAdapter {
       kind: EditKind::Json(json),
     }])
   }
+}
+
+fn opencode_config_path(home: &Path) -> PathBuf {
+  let jsonc = home.join(OPENCODE_CONFIG_JSONC);
+  if jsonc.exists() {
+    return jsonc;
+  }
+  home.join(OPENCODE_CONFIG_JSON)
 }
 
 fn rewrite_config(json: &mut Value, target_base_url: &str) {
@@ -405,6 +416,32 @@ mod tests {
       .unwrap();
 
     assert_eq!(accounts.len(), 1);
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0].path, config_path);
+  }
+
+  #[test]
+  fn adapter_prefers_existing_jsonc_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let adapter = OpencodeAdapter;
+    let config_path = dir.path().join(OPENCODE_CONFIG_JSONC);
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+      &config_path,
+      r#"
+{
+  // opencode accepts JSONC here.
+  "model": "openai/gpt-5",
+}
+"#,
+    )
+    .unwrap();
+
+    let edits = adapter
+      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1")
+      .unwrap();
+
+    assert_eq!(adapter.config_path(dir.path()), config_path);
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0].path, config_path);
   }

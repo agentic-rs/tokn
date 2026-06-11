@@ -1,4 +1,5 @@
 use crate::adapter::{adapter_for, supported_agents};
+use crate::jsonc::read_json_or_jsonc;
 use crate::reconcile::imported_account_ids;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -99,9 +100,8 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -
     None => default_base,
   };
   match agent {
-    AgentId::Opencode => std::fs::read_to_string(config_path)
+    AgentId::Opencode => read_json_or_jsonc(config_path)
       .ok()
-      .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
       .and_then(|json| {
         json
           .get("provider")?
@@ -193,20 +193,22 @@ providers = ["openai"]
 "#,
     )
     .unwrap();
-    let opencode_config = home.join(".config/opencode/opencode.json");
+    let opencode_config = home.join(".config/opencode/opencode.jsonc");
     std::fs::create_dir_all(opencode_config.parent().unwrap()).unwrap();
     std::fs::write(
       &opencode_config,
-      serde_json::json!({
-        "provider": {
-          "tokn-router": {
-            "options": {
-              "baseURL": "http://127.0.0.1:4141/work/v1"
-            }
-          }
-        }
-      })
-      .to_string(),
+      r#"
+{
+  // opencode may store this as JSONC.
+  "provider": {
+    "tokn-router": {
+      "options": {
+        "baseURL": "http://127.0.0.1:4141/work/v1",
+      },
+    },
+  },
+}
+"#,
     )
     .unwrap();
     let mut store = AuthStore::load(Some(&auth_path), Some(&config_path)).unwrap();
@@ -224,6 +226,8 @@ providers = ["openai"]
       .find(|status| status.agent == AgentId::Opencode)
       .unwrap();
     assert!(opencode.detected);
+    assert_eq!(opencode.config_path, opencode_config);
+    assert!(opencode.drifted);
     assert_eq!(opencode.binding.as_ref().unwrap().profile.as_deref(), Some("work"));
     assert_eq!(opencode.imported_account_ids, vec!["opencode-openai"]);
   }
