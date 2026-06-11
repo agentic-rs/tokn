@@ -52,16 +52,12 @@
       ]
     },
     {
-      "table": "session_parts",
-      "columns": ["session_id", "part_seq", "message_seq", "part_index", "ts", "endpoint", "role", "status", "part_hash"]
-    },
-    {
       "table": "session_relations",
       "columns": ["parent_session_id", "child_session_id", "relation_kind", "first_seen_ts", "last_seen_ts", "source"]
     },
     {
       "table": "sessions",
-      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model", "message_count", "part_count"]
+      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model"]
     }
   ]
 }

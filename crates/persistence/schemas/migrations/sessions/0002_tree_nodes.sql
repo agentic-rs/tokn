@@ -1,3 +1,24 @@
+DROP INDEX IF EXISTS idx_sessions_last;
+DROP INDEX IF EXISTS idx_session_parts_msg;
+DROP INDEX IF EXISTS idx_session_parts_hash;
+DROP TABLE IF EXISTS session_parts;
+ALTER TABLE sessions RENAME TO sessions_legacy;
+
+CREATE TABLE sessions (
+  id            TEXT PRIMARY KEY,
+  first_seen_ts INTEGER NOT NULL,
+  last_seen_ts  INTEGER NOT NULL,
+  source        TEXT    NOT NULL,
+  account_id    TEXT,
+  provider_id   TEXT,
+  model         TEXT
+);
+INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
+SELECT id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model
+FROM sessions_legacy;
+DROP TABLE sessions_legacy;
+CREATE INDEX idx_sessions_last ON sessions(last_seen_ts);
+
 CREATE TABLE session_nodes (
   id                     TEXT PRIMARY KEY,
   session_id             TEXT    NOT NULL REFERENCES sessions(id),
