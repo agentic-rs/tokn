@@ -529,7 +529,7 @@ fn playback_request_connection(
   let order_index = request_order_index(requests)?;
   let mut stmt = requests.prepare(&format!(
     "SELECT ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
-            inbound_req_headers, inbound_req_body, inbound_resp_body, {order_index}
+            {order_index}
      FROM requests
      WHERE session_id IS NOT NULL
      ORDER BY ts, {order_index}",
@@ -538,15 +538,19 @@ fn playback_request_connection(
   while let Some(row) = rows.next()? {
     report.rows_seen += 1;
     report.rows_with_session += 1;
-    let headers = row.get::<_, Option<Vec<u8>>>(8)?.unwrap_or_default();
-    let body = row.get::<_, Option<Vec<u8>>>(9)?.unwrap_or_default();
-    let response_body = row.get::<_, Option<Vec<u8>>>(10)?.unwrap_or_default();
-    let header_json = parse_json_bytes(&headers).unwrap_or(Value::Null);
     let ts: i64 = row.get(0)?;
     let session_id: String = row.get(1)?;
     let request_id: String = row.get(2)?;
     let endpoint: String = row.get(3)?;
-    let request_order: i64 = row.get(11)?;
+    let request_order: i64 = row.get(8)?;
+    if !options.force && sessions.node_exists(&session_id, &request_id)? {
+      report.rows_existing += 1;
+      update_expected_latest(expected_latest, &session_id, &request_id, ts, request_order);
+      emit_playback_row_progress(progress, ctx, report);
+      continue;
+    }
+    let (headers, body, response_body) = select_playback_payload(requests, &request_id)?;
+    let header_json = parse_json_bytes(&headers).unwrap_or(Value::Null);
     let body_json = if body.is_empty() {
       if headers_expect_body(&header_json) {
         tracing::warn!(
@@ -612,18 +616,6 @@ fn playback_request_connection(
       request_messages,
       response_messages,
     };
-    if !options.force && sessions.node_exists(&record.session_id, &record.request_id)? {
-      report.rows_existing += 1;
-      update_expected_latest(
-        expected_latest,
-        &record.session_id,
-        &record.request_id,
-        record.ts,
-        request_order,
-      );
-      emit_playback_row_progress(progress, ctx, report);
-      continue;
-    }
     let parent = sessions.head_for_session(&record.session_id)?;
     sessions.record_tree(&record)?;
     if parent.is_some() {
@@ -663,6 +655,24 @@ fn request_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
   }
   files.sort();
   Ok(files)
+}
+
+fn select_playback_payload(requests: &Connection, request_id: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+  requests
+    .query_row(
+      "SELECT inbound_req_headers, inbound_req_body, inbound_resp_body
+       FROM requests
+       WHERE request_id = ?1",
+      params![request_id],
+      |r| {
+        Ok((
+          r.get::<_, Option<Vec<u8>>>(0)?.unwrap_or_default(),
+          r.get::<_, Option<Vec<u8>>>(1)?.unwrap_or_default(),
+          r.get::<_, Option<Vec<u8>>>(2)?.unwrap_or_default(),
+        ))
+      },
+    )
+    .map_err(Into::into)
 }
 
 fn count_request_rows(paths: &[PathBuf]) -> Result<u64> {

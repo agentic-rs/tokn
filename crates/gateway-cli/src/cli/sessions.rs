@@ -134,7 +134,11 @@ impl PlaybackProgressDisplay {
         if let Some(bar) = self.file_bar.take() {
           bar.finish_and_clear();
         }
-        let bar = crate::progress::multi().add(ProgressBar::new(rows_total));
+        let bar = if let Some(global_bar) = &self.global_bar {
+          crate::progress::multi().insert_before(global_bar, ProgressBar::new(rows_total))
+        } else {
+          crate::progress::multi().add(ProgressBar::new(rows_total))
+        };
         bar.set_style(self.file_style.clone());
         bar.set_message(format!(
           "file {} {}/{}",
@@ -176,14 +180,22 @@ impl PlaybackProgressDisplay {
         }
       }
       crate::db::sessions::PlaybackProgressEvent::FileFinished {
+        path,
         file_index,
         files_total,
+        file_stats,
         global_stats,
-        ..
       } => {
         if let Some(bar) = self.file_bar.take() {
           bar.finish_and_clear();
         }
+        let _ = crate::progress::multi().println(format!(
+          "file {} {}/{} done {}",
+          playback_filename(&path),
+          file_index + 1,
+          files_total,
+          format_stats(file_stats)
+        ));
         if let Some(bar) = &self.global_bar {
           bar.set_position(global_stats.rows_seen);
           bar.set_message(format!(
