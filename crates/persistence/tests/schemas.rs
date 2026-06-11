@@ -55,7 +55,7 @@ const SESSIONS_V0_0_0: &str = include_str!("../schemas/snapshot/sessions/v0.0.0.
 const SESSIONS_V0_1_1: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
 const SESSIONS_V0_2_0: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const SESSIONS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/sessions/v0.0.0_v0.1.1_0001_0001.sql");
-const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0001.sql");
+const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0002.sql");
 const SESSIONS_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
