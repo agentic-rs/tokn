@@ -51,10 +51,16 @@ pub struct PlaybackReport {
   pub rows_seen: u64,
   pub rows_with_session: u64,
   pub rows_recorded: u64,
+  pub rows_existing: u64,
   pub rows_skipped: u64,
   pub decode_errors: u64,
   pub reduction_mismatches: u64,
   pub latest_mismatches: Vec<LatestMismatch>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlaybackOptions {
+  pub force: bool,
 }
 
 #[derive(Debug)]
@@ -159,7 +165,10 @@ impl SessionsDb {
     tx.execute(
       "INSERT INTO session_heads (session_id, node_id, updated_ts)
        VALUES (?1, ?2, ?3)
-       ON CONFLICT(session_id) DO UPDATE SET node_id = excluded.node_id, updated_ts = excluded.updated_ts",
+       ON CONFLICT(session_id) DO UPDATE SET
+         node_id = excluded.node_id,
+         updated_ts = excluded.updated_ts
+       WHERE excluded.updated_ts >= session_heads.updated_ts",
       params![r.session_id, r.request_id, r.ts],
     )?;
     if let Some(parent_session_id) = r.parent_session_id.as_deref() {
@@ -187,6 +196,15 @@ impl SessionsDb {
         )
         .optional()?,
     )
+  }
+
+  fn node_exists(&self, session_id: &str, request_id: &str) -> Result<bool> {
+    let exists = self.conn.query_row(
+      "SELECT EXISTS(SELECT 1 FROM session_nodes WHERE session_id = ?1 AND request_id = ?2)",
+      params![session_id, request_id],
+      |r| r.get::<_, bool>(0),
+    )?;
+    Ok(exists)
   }
 
   fn materialize_request_messages(&self, node_id: &str) -> Result<Vec<MessageRecord>> {
@@ -346,6 +364,14 @@ fn messages_equal(a: &MessageRecord, b: &MessageRecord) -> bool {
 }
 
 pub fn playback_requests_into_sessions(requests_db: &Path, sessions_db: &Path) -> Result<PlaybackReport> {
+  playback_requests_into_sessions_with_options(requests_db, sessions_db, PlaybackOptions::default())
+}
+
+pub fn playback_requests_into_sessions_with_options(
+  requests_db: &Path,
+  sessions_db: &Path,
+  options: PlaybackOptions,
+) -> Result<PlaybackReport> {
   let requests = Connection::open_with_flags(requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
   let mut sessions = SessionsDb::open(sessions_db)?;
   let mut report = PlaybackReport::default();
@@ -402,6 +428,10 @@ pub fn playback_requests_into_sessions(requests_db: &Path, sessions_db: &Path) -
       request_messages,
       response_messages,
     };
+    if !options.force && sessions.node_exists(&record.session_id, &record.request_id)? {
+      report.rows_existing += 1;
+      continue;
+    }
     let parent = sessions.head_for_session(&record.session_id)?;
     sessions.record_tree(&record)?;
     if parent.is_some() {
@@ -763,6 +793,31 @@ mod tests {
       )
       .unwrap();
     assert_eq!(head, "req-3");
+
+    db.record_tree(&TreeRequestRecord {
+      ts: 90,
+      session_id: "sess-1".into(),
+      parent_session_id: None,
+      request_id: "req-old".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: vec![msg("user", "old")],
+      response_messages: Vec::new(),
+    })
+    .unwrap();
+    let head_after_old_insert: String = db
+      .conn
+      .query_row(
+        "SELECT node_id FROM session_heads WHERE session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head_after_old_insert, "req-3");
+
     let relation_count: i64 = db
       .conn
       .query_row("SELECT COUNT(*) FROM session_relations", [], |r| r.get(0))
@@ -806,8 +861,23 @@ mod tests {
     let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
     assert_eq!(report.rows_seen, 2);
     assert_eq!(report.rows_recorded, 2);
+    assert_eq!(report.rows_existing, 0);
     assert_eq!(report.decode_errors, 0);
     assert!(report.latest_mismatches.is_empty());
+
+    let second_report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(second_report.rows_seen, 2);
+    assert_eq!(second_report.rows_recorded, 0);
+    assert_eq!(second_report.rows_existing, 2);
+    assert!(second_report.latest_mismatches.is_empty());
+
+    let forced_report =
+      playback_requests_into_sessions_with_options(&requests_path, &sessions_path, PlaybackOptions { force: true })
+        .unwrap();
+    assert_eq!(forced_report.rows_seen, 2);
+    assert_eq!(forced_report.rows_recorded, 2);
+    assert_eq!(forced_report.rows_existing, 0);
+    assert!(forced_report.latest_mismatches.is_empty());
 
     let sessions = Connection::open(&sessions_path).unwrap();
     let reduction: String = sessions
