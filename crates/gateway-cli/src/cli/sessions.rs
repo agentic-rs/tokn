@@ -1,5 +1,7 @@
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 #[derive(Subcommand, Debug)]
@@ -43,11 +45,14 @@ async fn playback(args: PlaybackArgs) -> Result<()> {
     Some(path) => crate::db::sessions::PlaybackSource::File(path),
     None => crate::db::sessions::PlaybackSource::Dir(requests_dir),
   };
-  let report = crate::db::sessions::playback_requests_source_into_sessions(
+  let mut progress = PlaybackProgressDisplay::new(std::io::stdout().is_terminal());
+  let report = crate::db::sessions::playback_requests_source_into_sessions_with_progress(
     source.clone(),
     &sessions_db,
     crate::db::sessions::PlaybackOptions { force: args.force },
+    |event| progress.on_event(event),
   )?;
+  progress.finish();
   match source {
     crate::db::sessions::PlaybackSource::File(path) => println!("requests_db={}", path.display()),
     crate::db::sessions::PlaybackSource::Dir(path) => println!("requests_dir={}", path.display()),
@@ -78,4 +83,152 @@ async fn playback(args: PlaybackArgs) -> Result<()> {
 
 fn default_playback_sessions_db() -> crate::config::Result<PathBuf> {
   Ok(crate::config::paths::data_dir()?.join("sessions.playback.db"))
+}
+
+struct PlaybackProgressDisplay {
+  enabled: bool,
+  file_bar: Option<ProgressBar>,
+  global_bar: Option<ProgressBar>,
+  file_style: ProgressStyle,
+  global_style: ProgressStyle,
+}
+
+impl PlaybackProgressDisplay {
+  fn new(enabled: bool) -> Self {
+    Self {
+      enabled,
+      file_bar: None,
+      global_bar: None,
+      file_style: ProgressStyle::with_template("{spinner:.cyan} {msg} [{wide_bar:.cyan/blue}] {pos}/{len}")
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("=> "),
+      global_style: ProgressStyle::with_template("{spinner:.green} {msg} [{wide_bar:.green/blue}] {pos}/{len}")
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .progress_chars("=> "),
+    }
+  }
+
+  fn on_event(&mut self, event: crate::db::sessions::PlaybackProgressEvent) {
+    if !self.enabled {
+      return;
+    }
+    match event {
+      crate::db::sessions::PlaybackProgressEvent::Started {
+        files_total,
+        rows_total,
+      } => {
+        let bar = crate::progress::multi().add(ProgressBar::new(rows_total));
+        bar.set_style(self.global_style.clone());
+        bar.set_message(format!(
+          "global files=0/{files_total} {}",
+          format_stats(Default::default())
+        ));
+        self.global_bar = Some(bar);
+      }
+      crate::db::sessions::PlaybackProgressEvent::FileStarted {
+        path,
+        file_index,
+        files_total,
+        rows_total,
+      } => {
+        if let Some(bar) = self.file_bar.take() {
+          bar.finish_and_clear();
+        }
+        let bar = crate::progress::multi().add(ProgressBar::new(rows_total));
+        bar.set_style(self.file_style.clone());
+        bar.set_message(format!(
+          "file {} {}/{}",
+          playback_filename(&path),
+          file_index + 1,
+          files_total
+        ));
+        self.file_bar = Some(bar);
+      }
+      crate::db::sessions::PlaybackProgressEvent::RowProcessed {
+        path,
+        file_index,
+        files_total,
+        rows_seen,
+        file_stats,
+        global_stats,
+        ..
+      } => {
+        if let Some(bar) = &self.file_bar {
+          bar.set_position(rows_seen);
+          bar.set_message(format!(
+            "file {} {}/{} {}",
+            playback_filename(&path),
+            file_index + 1,
+            files_total,
+            format_stats(file_stats)
+          ));
+          bar.tick();
+        }
+        if let Some(bar) = &self.global_bar {
+          bar.set_position(global_stats.rows_seen);
+          bar.set_message(format!(
+            "global files={}/{} {}",
+            file_index + 1,
+            files_total,
+            format_stats(global_stats)
+          ));
+          bar.tick();
+        }
+      }
+      crate::db::sessions::PlaybackProgressEvent::FileFinished {
+        file_index,
+        files_total,
+        global_stats,
+        ..
+      } => {
+        if let Some(bar) = self.file_bar.take() {
+          bar.finish_and_clear();
+        }
+        if let Some(bar) = &self.global_bar {
+          bar.set_position(global_stats.rows_seen);
+          bar.set_message(format!(
+            "global files={}/{} {}",
+            file_index + 1,
+            files_total,
+            format_stats(global_stats)
+          ));
+        }
+      }
+      crate::db::sessions::PlaybackProgressEvent::Finished { global_stats } => {
+        if let Some(bar) = &self.global_bar {
+          bar.set_position(global_stats.rows_seen);
+          bar.set_message(format!("global {}", format_stats(global_stats)));
+        }
+      }
+    }
+  }
+
+  fn finish(&mut self) {
+    if let Some(bar) = self.file_bar.take() {
+      bar.finish_and_clear();
+    }
+    if let Some(bar) = self.global_bar.take() {
+      bar.finish_and_clear();
+    }
+  }
+}
+
+fn playback_filename(path: &std::path::Path) -> String {
+  path
+    .file_name()
+    .and_then(|value| value.to_str())
+    .unwrap_or("<unknown>")
+    .to_string()
+}
+
+fn format_stats(stats: crate::db::sessions::PlaybackStats) -> String {
+  format!(
+    "seen={} recorded={} existing={} skipped={} decode_errors={} reductions={}",
+    stats.rows_seen,
+    stats.rows_recorded,
+    stats.rows_existing,
+    stats.rows_skipped,
+    stats.decode_errors,
+    stats.reduction_mismatches
+  )
 }

@@ -60,8 +60,66 @@ pub struct PlaybackReport {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct PlaybackStats {
+  pub rows_seen: u64,
+  pub rows_with_session: u64,
+  pub rows_recorded: u64,
+  pub rows_existing: u64,
+  pub rows_skipped: u64,
+  pub decode_errors: u64,
+  pub reduction_mismatches: u64,
+}
+
+impl PlaybackStats {
+  fn from_report(report: &PlaybackReport) -> Self {
+    Self {
+      rows_seen: report.rows_seen,
+      rows_with_session: report.rows_with_session,
+      rows_recorded: report.rows_recorded,
+      rows_existing: report.rows_existing,
+      rows_skipped: report.rows_skipped,
+      decode_errors: report.decode_errors,
+      reduction_mismatches: report.reduction_mismatches,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct PlaybackOptions {
   pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackProgressEvent {
+  Started {
+    files_total: usize,
+    rows_total: u64,
+  },
+  FileStarted {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    rows_total: u64,
+  },
+  RowProcessed {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    rows_seen: u64,
+    rows_total: u64,
+    file_stats: PlaybackStats,
+    global_stats: PlaybackStats,
+  },
+  FileFinished {
+    path: PathBuf,
+    file_index: usize,
+    files_total: usize,
+    file_stats: PlaybackStats,
+    global_stats: PlaybackStats,
+  },
+  Finished {
+    global_stats: PlaybackStats,
+  },
 }
 
 #[derive(Debug, Clone)]
@@ -387,35 +445,86 @@ pub fn playback_requests_source_into_sessions(
   sessions_db: &Path,
   options: PlaybackOptions,
 ) -> Result<PlaybackReport> {
+  playback_requests_source_into_sessions_with_progress(source, sessions_db, options, |_| {})
+}
+
+pub fn playback_requests_source_into_sessions_with_progress(
+  source: PlaybackSource,
+  sessions_db: &Path,
+  options: PlaybackOptions,
+  mut progress: impl FnMut(PlaybackProgressEvent),
+) -> Result<PlaybackReport> {
   let request_dbs = match source {
     PlaybackSource::File(path) => vec![path],
     PlaybackSource::Dir(dir) => request_db_files(&dir)?,
   };
+  let files_total = request_dbs.len();
+  let rows_total = count_request_rows(&request_dbs)?;
   let mut sessions = SessionsDb::open(sessions_db)?;
   let mut report = PlaybackReport::default();
   let mut expected_latest = HashMap::new();
-  for requests_db in request_dbs {
+  progress(PlaybackProgressEvent::Started {
+    files_total,
+    rows_total,
+  });
+  for (file_index, requests_db) in request_dbs.into_iter().enumerate() {
     let requests = Connection::open_with_flags(&requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let file_rows_total = count_request_rows_in_connection(&requests)?;
+    progress(PlaybackProgressEvent::FileStarted {
+      path: requests_db.clone(),
+      file_index,
+      files_total,
+      rows_total: file_rows_total,
+    });
+    let file_start = PlaybackStats::from_report(&report);
     playback_request_connection(
-      &requests_db,
       &requests,
       &mut sessions,
       options,
       &mut report,
       &mut expected_latest,
+      PlaybackFileContext {
+        requests_db: &requests_db,
+        file_start,
+        rows_total: file_rows_total,
+        file_index,
+        files_total,
+      },
+      &mut progress,
     )?;
+    let file_stats = subtract_stats(PlaybackStats::from_report(&report), file_start);
+    progress(PlaybackProgressEvent::FileFinished {
+      path: requests_db,
+      file_index,
+      files_total,
+      file_stats,
+      global_stats: PlaybackStats::from_report(&report),
+    });
   }
   report.latest_mismatches = check_latest_heads(&expected_latest, &sessions.conn)?;
+  progress(PlaybackProgressEvent::Finished {
+    global_stats: PlaybackStats::from_report(&report),
+  });
   Ok(report)
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PlaybackFileContext<'a> {
+  requests_db: &'a Path,
+  file_start: PlaybackStats,
+  rows_total: u64,
+  file_index: usize,
+  files_total: usize,
+}
+
 fn playback_request_connection(
-  requests_db: &Path,
   requests: &Connection,
   sessions: &mut SessionsDb,
   options: PlaybackOptions,
   report: &mut PlaybackReport,
   expected_latest: &mut HashMap<String, (i64, i64, String)>,
+  ctx: PlaybackFileContext<'_>,
+  progress: &mut impl FnMut(PlaybackProgressEvent),
 ) -> Result<()> {
   let order_index = request_order_index(requests)?;
   let mut stmt = requests.prepare(&format!(
@@ -441,12 +550,13 @@ fn playback_request_connection(
     let body_json = if body.is_empty() {
       if headers_expect_body(&header_json) {
         tracing::warn!(
-          requests_db = %requests_db.display(),
+          requests_db = %ctx.requests_db.display(),
           request_id = %request_id,
           "request playback body missing"
         );
         report.decode_errors += 1;
         report.rows_skipped += 1;
+        emit_playback_row_progress(progress, ctx, report);
         continue;
       }
       Value::Null
@@ -455,13 +565,14 @@ fn playback_request_connection(
         Ok(decoded) => decoded,
         Err(e) => {
           tracing::warn!(
-            requests_db = %requests_db.display(),
+            requests_db = %ctx.requests_db.display(),
             request_id = %request_id,
             error = %e,
             "request playback decode failed"
           );
           report.decode_errors += 1;
           report.rows_skipped += 1;
+          emit_playback_row_progress(progress, ctx, report);
           continue;
         }
       };
@@ -469,13 +580,14 @@ fn playback_request_connection(
         Ok(value) => value,
         Err(e) => {
           tracing::warn!(
-            requests_db = %requests_db.display(),
+            requests_db = %ctx.requests_db.display(),
             request_id = %request_id,
             error = %e,
             "request playback json parse failed"
           );
           report.decode_errors += 1;
           report.rows_skipped += 1;
+          emit_playback_row_progress(progress, ctx, report);
           continue;
         }
       }
@@ -484,6 +596,7 @@ fn playback_request_connection(
     let response_messages = response_messages_from_body(&response_body);
     if request_messages.is_empty() && response_messages.is_empty() {
       report.rows_skipped += 1;
+      emit_playback_row_progress(progress, ctx, report);
       continue;
     }
     let record = TreeRequestRecord {
@@ -508,6 +621,7 @@ fn playback_request_connection(
         record.ts,
         request_order,
       );
+      emit_playback_row_progress(progress, ctx, report);
       continue;
     }
     let parent = sessions.head_for_session(&record.session_id)?;
@@ -533,6 +647,7 @@ fn playback_request_connection(
       record.ts,
       request_order,
     );
+    emit_playback_row_progress(progress, ctx, report);
   }
   Ok(())
 }
@@ -548,6 +663,52 @@ fn request_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
   }
   files.sort();
   Ok(files)
+}
+
+fn count_request_rows(paths: &[PathBuf]) -> Result<u64> {
+  let mut total = 0;
+  for path in paths {
+    let requests = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    total += count_request_rows_in_connection(&requests)?;
+  }
+  Ok(total)
+}
+
+fn count_request_rows_in_connection(requests: &Connection) -> Result<u64> {
+  let count = requests.query_row("SELECT COUNT(*) FROM requests WHERE session_id IS NOT NULL", [], |r| {
+    r.get::<_, i64>(0)
+  })?;
+  Ok(count.max(0) as u64)
+}
+
+fn emit_playback_row_progress(
+  progress: &mut impl FnMut(PlaybackProgressEvent),
+  ctx: PlaybackFileContext<'_>,
+  report: &PlaybackReport,
+) {
+  let global_stats = PlaybackStats::from_report(report);
+  let file_stats = subtract_stats(global_stats, ctx.file_start);
+  progress(PlaybackProgressEvent::RowProcessed {
+    path: ctx.requests_db.to_path_buf(),
+    file_index: ctx.file_index,
+    files_total: ctx.files_total,
+    rows_seen: file_stats.rows_seen,
+    rows_total: ctx.rows_total,
+    file_stats,
+    global_stats,
+  });
+}
+
+fn subtract_stats(after: PlaybackStats, before: PlaybackStats) -> PlaybackStats {
+  PlaybackStats {
+    rows_seen: after.rows_seen.saturating_sub(before.rows_seen),
+    rows_with_session: after.rows_with_session.saturating_sub(before.rows_with_session),
+    rows_recorded: after.rows_recorded.saturating_sub(before.rows_recorded),
+    rows_existing: after.rows_existing.saturating_sub(before.rows_existing),
+    rows_skipped: after.rows_skipped.saturating_sub(before.rows_skipped),
+    decode_errors: after.decode_errors.saturating_sub(before.decode_errors),
+    reduction_mismatches: after.reduction_mismatches.saturating_sub(before.reduction_mismatches),
+  }
 }
 
 fn update_expected_latest(
