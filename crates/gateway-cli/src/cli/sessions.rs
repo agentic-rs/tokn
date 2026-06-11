@@ -10,13 +10,17 @@ pub enum SessionsCmd {
 
 #[derive(Args, Debug)]
 pub struct PlaybackArgs {
-  /// Source requests/<YYYY-MM-DD>.db file to read.
+  /// Source requests/<YYYY-MM-DD>.db file to read. Overrides --requests-dir.
   #[arg(long)]
-  pub requests_db: PathBuf,
+  pub requests_db: Option<PathBuf>,
+
+  /// Source requests directory to replay in filename order.
+  #[arg(long)]
+  pub requests_dir: Option<PathBuf>,
 
   /// Destination sessions.db file to create or update.
   #[arg(long)]
-  pub sessions_db: PathBuf,
+  pub sessions_db: Option<PathBuf>,
 
   /// Reprocess rows even when their session/request node already exists.
   #[arg(long)]
@@ -30,13 +34,25 @@ pub async fn run(cmd: SessionsCmd) -> Result<()> {
 }
 
 async fn playback(args: PlaybackArgs) -> Result<()> {
-  let report = crate::db::sessions::playback_requests_into_sessions_with_options(
-    &args.requests_db,
-    &args.sessions_db,
+  let requests_dir = args
+    .requests_dir
+    .map(Ok)
+    .unwrap_or_else(crate::config::paths::default_requests_dir)?;
+  let sessions_db = args.sessions_db.map(Ok).unwrap_or_else(default_playback_sessions_db)?;
+  let source = match args.requests_db {
+    Some(path) => crate::db::sessions::PlaybackSource::File(path),
+    None => crate::db::sessions::PlaybackSource::Dir(requests_dir),
+  };
+  let report = crate::db::sessions::playback_requests_source_into_sessions(
+    source.clone(),
+    &sessions_db,
     crate::db::sessions::PlaybackOptions { force: args.force },
   )?;
-  println!("requests_db={}", args.requests_db.display());
-  println!("sessions_db={}", args.sessions_db.display());
+  match source {
+    crate::db::sessions::PlaybackSource::File(path) => println!("requests_db={}", path.display()),
+    crate::db::sessions::PlaybackSource::Dir(path) => println!("requests_dir={}", path.display()),
+  }
+  println!("sessions_db={}", sessions_db.display());
   println!("force={}", args.force);
   println!("rows_seen={}", report.rows_seen);
   println!("rows_with_session={}", report.rows_with_session);
@@ -58,4 +74,8 @@ async fn playback(args: PlaybackArgs) -> Result<()> {
     bail!("session latest view did not match requests DB latest rows");
   }
   Ok(())
+}
+
+fn default_playback_sessions_db() -> crate::config::Result<PathBuf> {
+  Ok(crate::config::paths::data_dir()?.join("sessions.playback.db"))
 }

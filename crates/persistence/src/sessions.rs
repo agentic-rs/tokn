@@ -4,8 +4,9 @@ use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokn_core::db::SessionSource;
 use tracing::debug;
 
@@ -61,6 +62,12 @@ pub struct PlaybackReport {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PlaybackOptions {
   pub force: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum PlaybackSource {
+  File(PathBuf),
+  Dir(PathBuf),
 }
 
 #[derive(Debug)]
@@ -372,9 +379,36 @@ pub fn playback_requests_into_sessions_with_options(
   sessions_db: &Path,
   options: PlaybackOptions,
 ) -> Result<PlaybackReport> {
-  let requests = Connection::open_with_flags(requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+  playback_requests_source_into_sessions(PlaybackSource::File(requests_db.to_path_buf()), sessions_db, options)
+}
+
+pub fn playback_requests_source_into_sessions(
+  source: PlaybackSource,
+  sessions_db: &Path,
+  options: PlaybackOptions,
+) -> Result<PlaybackReport> {
+  let request_dbs = match source {
+    PlaybackSource::File(path) => vec![path],
+    PlaybackSource::Dir(dir) => request_db_files(&dir)?,
+  };
   let mut sessions = SessionsDb::open(sessions_db)?;
   let mut report = PlaybackReport::default();
+  let mut expected_latest = HashMap::new();
+  for requests_db in request_dbs {
+    let requests = Connection::open_with_flags(&requests_db, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    playback_request_connection(&requests, &mut sessions, options, &mut report)?;
+    collect_latest_heads(&requests, &mut expected_latest)?;
+  }
+  report.latest_mismatches = check_latest_heads(&expected_latest, &sessions.conn)?;
+  Ok(report)
+}
+
+fn playback_request_connection(
+  requests: &Connection,
+  sessions: &mut SessionsDb,
+  options: PlaybackOptions,
+  report: &mut PlaybackReport,
+) -> Result<()> {
   let mut stmt = requests.prepare(
     "SELECT ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
             inbound_req_headers, inbound_req_body, inbound_resp_body
@@ -449,26 +483,59 @@ pub fn playback_requests_into_sessions_with_options(
     }
     report.rows_recorded += 1;
   }
-  report.latest_mismatches = check_latest_heads(&requests, &sessions.conn)?;
-  Ok(report)
+  Ok(())
 }
 
-fn check_latest_heads(requests: &Connection, sessions: &Connection) -> Result<Vec<LatestMismatch>> {
+fn request_db_files(dir: &Path) -> Result<Vec<PathBuf>> {
+  let mut files = Vec::new();
+  for entry in std::fs::read_dir(dir)? {
+    let entry = entry?;
+    let path = entry.path();
+    if path.extension().and_then(|value| value.to_str()) == Some("db") {
+      files.push(path);
+    }
+  }
+  files.sort();
+  Ok(files)
+}
+
+fn collect_latest_heads(requests: &Connection, out: &mut HashMap<String, (i64, i64, String)>) -> Result<()> {
   let mut stmt = requests.prepare(
-    "SELECT session_id, request_id
-     FROM (
-       SELECT session_id, request_id, ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY ts DESC, idx DESC) AS rn
-       FROM requests
-       WHERE session_id IS NOT NULL
-     )
-     WHERE rn = 1
-     ORDER BY session_id",
+    "SELECT session_id, request_id, ts, idx
+     FROM requests
+     WHERE session_id IS NOT NULL
+     ORDER BY session_id, ts, idx",
   )?;
   let rows = stmt
-    .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+    .query_map([], |r| {
+      Ok((
+        r.get::<_, String>(0)?,
+        r.get::<_, String>(1)?,
+        r.get::<_, i64>(2)?,
+        r.get::<_, i64>(3)?,
+      ))
+    })?
     .collect::<rusqlite::Result<Vec<_>>>()?;
+  for (session_id, request_id, ts, idx) in rows {
+    let update = out
+      .get(&session_id)
+      .map(|(existing_ts, existing_idx, _)| (ts, idx) >= (*existing_ts, *existing_idx))
+      .unwrap_or(true);
+    if update {
+      out.insert(session_id, (ts, idx, request_id));
+    }
+  }
+  Ok(())
+}
+
+fn check_latest_heads(
+  expected: &HashMap<String, (i64, i64, String)>,
+  sessions: &Connection,
+) -> Result<Vec<LatestMismatch>> {
   let mut out = Vec::new();
-  for (session_id, expected_request_id) in rows {
+  let mut expected: Vec<_> = expected.iter().collect();
+  expected.sort_by(|a, b| a.0.cmp(b.0));
+  for (session_id, (_, _, expected_request_id)) in expected {
     let actual_request_id = sessions
       .query_row(
         "SELECT n.request_id
@@ -481,8 +548,8 @@ fn check_latest_heads(requests: &Connection, sessions: &Connection) -> Result<Ve
       .optional()?;
     if actual_request_id.as_deref() != Some(expected_request_id.as_str()) {
       out.push(LatestMismatch {
-        session_id,
-        expected_request_id,
+        session_id: session_id.clone(),
+        expected_request_id: expected_request_id.clone(),
         actual_request_id,
       });
     }
@@ -904,6 +971,72 @@ mod tests {
       )
       .unwrap();
     assert_eq!(response_messages, 2);
+  }
+
+  #[test]
+  fn playback_requests_dir_sorts_files_and_verifies_latest_across_all_days() {
+    let dir = tempdir();
+    let requests_dir = dir.join("requests");
+    std::fs::create_dir_all(&requests_dir).unwrap();
+    let first_day = requests_dir.join("2026-05-21.db");
+    let second_day = requests_dir.join("2026-05-22.db");
+    std::fs::write(requests_dir.join("2026-05-23.db.bak"), b"not sqlite").unwrap();
+    crate::requests::open_day_db(&second_day).unwrap();
+    crate::requests::open_day_db(&first_day).unwrap();
+    let first_conn = Connection::open(&first_day).unwrap();
+    let second_conn = Connection::open(&second_day).unwrap();
+    insert_request_row(
+      &second_conn,
+      200,
+      "req-new",
+      "sess-1",
+      &json!({
+        "input": [
+          {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+          {"role": "user", "content": [{"type": "input_text", "text": "new"}]}
+        ]
+      }),
+      sse_completed("new"),
+    );
+    insert_request_row(
+      &first_conn,
+      100,
+      "req-old",
+      "sess-1",
+      &json!({
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}]
+      }),
+      sse_completed("old"),
+    );
+
+    let sessions_path = dir.join("sessions.db");
+    let report = playback_requests_source_into_sessions(
+      PlaybackSource::Dir(requests_dir),
+      &sessions_path,
+      PlaybackOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(report.rows_seen, 2);
+    assert_eq!(report.rows_recorded, 2);
+    assert!(report.latest_mismatches.is_empty());
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let head: String = sessions
+      .query_row(
+        "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(head, "req-new");
+    let parent: Option<String> = sessions
+      .query_row(
+        "SELECT parent_id FROM session_nodes WHERE request_id = 'req-new'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(parent.as_deref(), Some("req-old"));
   }
 
   fn msg(role: &str, text: &str) -> MessageRecord {
