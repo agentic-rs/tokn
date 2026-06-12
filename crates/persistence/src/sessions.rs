@@ -11,6 +11,7 @@ use tokn_core::db::SessionSource;
 use tracing::debug;
 
 const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
+const REQUESTS_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
@@ -21,6 +22,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     version: 2,
     name: "tree_nodes",
     sql: include_str!("../schemas/migrations/sessions/0002_tree_nodes.sql"),
+  },
+  migrate::Migration {
+    version: 3,
+    name: "session_views",
+    sql: include_str!("../schemas/migrations/sessions/0003_session_views.sql"),
   },
 ];
 
@@ -527,12 +533,17 @@ fn playback_request_connection(
   progress: &mut impl FnMut(PlaybackProgressEvent),
 ) -> Result<()> {
   let order_index = request_order_index(requests)?;
+  let playback_ts = if migrate::read_current_version(requests)? < REQUESTS_TS_MILLIS_SCHEMA_VERSION {
+    "ts * 1000"
+  } else {
+    "ts"
+  };
   let mut stmt = requests.prepare(&format!(
-    "SELECT ts, session_id, request_id, endpoint, account_id, provider_id, model, status,
+    "SELECT {playback_ts}, session_id, request_id, endpoint, account_id, provider_id, model, status,
             {order_index}
      FROM requests
      WHERE session_id IS NOT NULL
-     ORDER BY ts, {order_index}",
+     ORDER BY {playback_ts}, {order_index}",
   ))?;
   let mut rows = stmt.query([])?;
   while let Some(row) = rows.next()? {
@@ -1207,6 +1218,25 @@ mod tests {
       )
       .unwrap();
     assert_eq!(head, "req-2");
+    let timestamps = sessions
+      .query_row(
+        "SELECT s.first_seen_ts, s.last_seen_ts, h.updated_ts, n.ts
+         FROM sessions s
+         JOIN session_heads h ON h.session_id = s.id
+         JOIN session_nodes n ON n.id = h.node_id
+         WHERE s.id = 'sess-1'",
+        [],
+        |r| {
+          Ok((
+            r.get::<_, i64>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(timestamps, (100, 110, 110, 110));
     let response_messages: i64 = sessions
       .query_row(
         "SELECT COUNT(*) FROM node_messages WHERE side = 'response' AND role = 'assistant'",
@@ -1215,6 +1245,121 @@ mod tests {
       )
       .unwrap();
     assert_eq!(response_messages, 2);
+  }
+
+  #[test]
+  fn session_views_expose_current_head_and_message_parts() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    db.record_tree(&TreeRequestRecord {
+      ts: 100,
+      session_id: "sess-1".into(),
+      parent_session_id: None,
+      request_id: "req-1".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages: vec![msg("user", "hello")],
+      response_messages: vec![msg("assistant", "hi")],
+    })
+    .unwrap();
+
+    let current = db
+      .conn
+      .query_row(
+        "SELECT session_id, head_request_id, head_endpoint, head_status, account_id, provider_id, model,
+                head_reduction_kind, head_request_message_count, head_response_message_count
+         FROM session_current",
+        [],
+        |r| {
+          Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            r.get::<_, String>(6)?,
+            r.get::<_, String>(7)?,
+            r.get::<_, i64>(8)?,
+            r.get::<_, i64>(9)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(
+      current,
+      (
+        "sess-1".into(),
+        "req-1".into(),
+        "responses".into(),
+        200,
+        "acct".into(),
+        "prov".into(),
+        "model".into(),
+        "root_snapshot".into(),
+        1,
+        1,
+      )
+    );
+
+    let messages = db
+      .conn
+      .prepare(
+        "SELECT session_id, node_id, request_id, is_head, side, message_seq, role, part_index, part_type, content
+         FROM session_messages
+         ORDER BY node_ts, side, message_seq, part_index",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, String>(1)?,
+          r.get::<_, String>(2)?,
+          r.get::<_, bool>(3)?,
+          r.get::<_, String>(4)?,
+          r.get::<_, i64>(5)?,
+          r.get::<_, String>(6)?,
+          r.get::<_, i64>(7)?,
+          r.get::<_, String>(8)?,
+          String::from_utf8(r.get::<_, Vec<u8>>(9)?).unwrap(),
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      messages,
+      vec![
+        (
+          "sess-1".into(),
+          "req-1".into(),
+          "req-1".into(),
+          true,
+          "request".into(),
+          0,
+          "user".into(),
+          0,
+          "text".into(),
+          "hello".into(),
+        ),
+        (
+          "sess-1".into(),
+          "req-1".into(),
+          "req-1".into(),
+          true,
+          "response".into(),
+          0,
+          "assistant".into(),
+          0,
+          "text".into(),
+          "hi".into(),
+        ),
+      ]
+    );
   }
 
   #[test]
@@ -1315,6 +1460,12 @@ mod tests {
       )
       .unwrap();
     assert_eq!(head, "req-1");
+    let node_ts: i64 = sessions
+      .query_row("SELECT ts FROM session_nodes WHERE request_id = 'req-1'", [], |r| {
+        r.get(0)
+      })
+      .unwrap();
+    assert_eq!(node_ts, 100_000);
   }
 
   #[test]

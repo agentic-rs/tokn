@@ -67,6 +67,11 @@ const SESSIONS_MIGRATIONS: &[Migration] = &[
     name: "tree_nodes",
     sql: include_str!("../schemas/migrations/sessions/0002_tree_nodes.sql"),
   },
+  Migration {
+    version: 3,
+    name: "session_views",
+    sql: include_str!("../schemas/migrations/sessions/0003_session_views.sql"),
+  },
 ];
 
 const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
@@ -160,7 +165,7 @@ const SESSIONS_V0_2_0_CASE: DbCase = DbCase {
   v0_0_0: SESSIONS_V0_0_0,
   target_snapshot: SESSIONS_V0_2_0,
   target_squash: SESSIONS_SQUASH_V0_2_0,
-  target_version: 2,
+  target_version: 3,
   squash_start_version: 1,
   migrations: SESSIONS_MIGRATIONS,
   meta_json: include_str!("fixtures/sessions_meta_v0.2.0.json"),
