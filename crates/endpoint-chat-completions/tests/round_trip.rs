@@ -34,6 +34,33 @@ fn round_trip_request() {
 }
 
 #[test]
+fn unknown_content_part_round_trips_payload() {
+  let body = json!({
+    "model": "gpt-4o",
+    "messages": [{
+      "role": "user",
+      "content": [{
+        "type": "experimental_part",
+        "payload": { "nested": true },
+        "x-extra": 7
+      }]
+    }]
+  });
+
+  let req: ChatRequest = serde_json::from_value(body).expect("parse");
+  let round = serde_json::to_value(&req).expect("serialize");
+
+  assert_eq!(
+    round.pointer("/messages/0/content/0"),
+    Some(&json!({
+      "type": "experimental_part",
+      "payload": { "nested": true },
+      "x-extra": 7
+    }))
+  );
+}
+
+#[test]
 fn round_trip_response() {
   let body = json!({
     "id": "chatcmpl_1",

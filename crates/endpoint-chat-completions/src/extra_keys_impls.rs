@@ -53,7 +53,7 @@ impl ExtraKeys for ContentPart {
       ContentPart::Text { extras, .. }
       | ContentPart::ImageUrl { extras, .. }
       | ContentPart::InputAudio { extras, .. } => push_extras(extras, prefix, out),
-      ContentPart::Other => {}
+      ContentPart::Other(_) => {}
     }
   }
 }

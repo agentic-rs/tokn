@@ -29,6 +29,58 @@ fn round_trip_request_with_mixed_input_items() {
 }
 
 #[test]
+fn unknown_content_parts_round_trip_payloads() {
+  let body = json!({
+    "model": "gpt-5",
+    "input": [{
+      "role": "user",
+      "content": [{
+        "type": "input_widget",
+        "payload": { "a": 1 }
+      }]
+    }],
+    "output": "ignored"
+  });
+  let req: ResponsesRequest = serde_json::from_value(body).expect("parse request");
+  let req_round = serde_json::to_value(&req).expect("serialize request");
+  assert_eq!(
+    req_round.pointer("/input/0/content/0"),
+    Some(&json!({ "type": "input_widget", "payload": { "a": 1 } }))
+  );
+
+  let resp_body = json!({
+    "id": "resp_1",
+    "output": [
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "output_widget", "payload": { "b": 2 } }]
+      },
+      {
+        "type": "reasoning",
+        "content": [{ "type": "reasoning_widget", "payload": { "c": 3 } }],
+        "summary": [{ "type": "summary_widget", "payload": { "d": 4 } }]
+      }
+    ]
+  });
+  let resp: ResponsesResponse = serde_json::from_value(resp_body).expect("parse response");
+  let resp_round = serde_json::to_value(&resp).expect("serialize response");
+
+  assert_eq!(
+    resp_round.pointer("/output/0/content/0"),
+    Some(&json!({ "type": "output_widget", "payload": { "b": 2 } }))
+  );
+  assert_eq!(
+    resp_round.pointer("/output/1/content/0"),
+    Some(&json!({ "type": "reasoning_widget", "payload": { "c": 3 } }))
+  );
+  assert_eq!(
+    resp_round.pointer("/output/1/summary/0"),
+    Some(&json!({ "type": "summary_widget", "payload": { "d": 4 } }))
+  );
+}
+
+#[test]
 fn round_trip_response() {
   let body = json!({
     "id": "resp_1",

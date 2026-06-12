@@ -76,7 +76,7 @@ impl ExtraKeys for InputContentPart {
       InputContentPart::InputImage { fields }
       | InputContentPart::InputAudio { fields }
       | InputContentPart::InputFile { fields } => push_extras(fields, prefix, out),
-      InputContentPart::Other => {}
+      InputContentPart::Other(_) => {}
     }
   }
 }
@@ -113,7 +113,7 @@ impl ExtraKeys for ReasoningPart {
       ReasoningPart::ReasoningText { extras, .. }
       | ReasoningPart::SummaryText { extras, .. }
       | ReasoningPart::Text { extras, .. } => push_extras(extras, prefix, out),
-      ReasoningPart::Other => {}
+      ReasoningPart::Other(_) => {}
     }
   }
 }
@@ -160,7 +160,7 @@ impl ExtraKeys for OutputContentPart {
       OutputContentPart::OutputText { extras, .. } | OutputContentPart::Refusal { extras, .. } => {
         push_extras(extras, prefix, out)
       }
-      OutputContentPart::Other => {}
+      OutputContentPart::Other(_) => {}
     }
   }
 }

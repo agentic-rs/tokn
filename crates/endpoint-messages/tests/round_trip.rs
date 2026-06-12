@@ -32,6 +32,42 @@ fn round_trip_request() {
 }
 
 #[test]
+fn unknown_content_block_and_delta_round_trip_payloads() {
+  let body = json!({
+    "model": "claude-sonnet",
+    "max_tokens": 1024,
+    "messages": [{
+      "role": "user",
+      "content": [{
+        "type": "experimental_block",
+        "payload": { "nested": true }
+      }]
+    }]
+  });
+  let req: MessagesRequest = serde_json::from_value(body).expect("parse request");
+  let req_round = serde_json::to_value(&req).expect("serialize request");
+  assert_eq!(
+    req_round.pointer("/messages/0/content/0"),
+    Some(&json!({ "type": "experimental_block", "payload": { "nested": true } }))
+  );
+
+  let event = json!({
+    "type": "content_block_delta",
+    "index": 0,
+    "delta": {
+      "type": "experimental_delta",
+      "payload": { "chunk": "x" }
+    }
+  });
+  let parsed: MessagesEvent = serde_json::from_value(event).expect("parse event");
+  let round = serde_json::to_value(&parsed).expect("serialize event");
+  assert_eq!(
+    round.pointer("/delta"),
+    Some(&json!({ "type": "experimental_delta", "payload": { "chunk": "x" } }))
+  );
+}
+
+#[test]
 fn round_trip_response() {
   let body = json!({
     "id": "msg_1",
