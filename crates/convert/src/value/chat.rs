@@ -1,5 +1,5 @@
-use super::error::{ConvertError, Result};
-use super::ir::*;
+use crate::error::{ConvertError, Result};
+use crate::ir::*;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -63,7 +63,7 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     model,
     system: (!system.is_empty()).then(|| system.join("\n\n")),
     messages,
-    tools: super::tools::normalise_tools(
+    tools: crate::tools::normalise_tools(
       obj
         .get("tools")
         .and_then(Value::as_array)

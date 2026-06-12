@@ -1,6 +1,6 @@
 use super::chat::args_to_string;
-use super::error::{ConvertError, Result};
-use super::ir::*;
+use crate::error::{ConvertError, Result};
+use crate::ir::*;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -44,7 +44,7 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
       .to_string(),
     system: system_to_string(obj.get("system")),
     messages,
-    tools: super::tools::normalise_tools(
+    tools: crate::tools::normalise_tools(
       obj
         .get("tools")
         .and_then(Value::as_array)
@@ -81,7 +81,7 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
       .tools
       .iter()
       .filter(|t| t.get("function").and_then(Value::as_object).is_some())
-      .map(super::tools::tool_to_messages)
+      .map(crate::tools::tool_to_messages)
       .collect();
     if !tools.is_empty() {
       out.insert("tools".into(), Value::Array(tools));

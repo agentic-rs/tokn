@@ -1,6 +1,6 @@
 use super::chat::args_to_string;
-use super::error::{ConvertError, Result};
-use super::ir::*;
+use crate::error::{ConvertError, Result};
+use crate::ir::*;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -43,7 +43,7 @@ pub fn request_from_value(v: &Value) -> Result<IrRequest> {
     model,
     system: (!system_parts.is_empty()).then(|| system_parts.join("\n\n")),
     messages,
-    tools: super::tools::normalise_tools(
+    tools: crate::tools::normalise_tools(
       obj
         .get("tools")
         .and_then(Value::as_array)
@@ -81,7 +81,7 @@ pub fn request_to_value(req: &IrRequest) -> Result<Value> {
   if !req.tools.is_empty() {
     out.insert(
       "tools".into(),
-      Value::Array(req.tools.iter().map(super::tools::tool_to_responses).collect()),
+      Value::Array(req.tools.iter().map(crate::tools::tool_to_responses).collect()),
     );
   }
   if let Some(v) = &req.tool_choice {
@@ -1001,7 +1001,7 @@ mod tests {
 
   fn render_chat_messages(body: &Value) -> Vec<Value> {
     let ir = request_from_value(body).expect("parse responses request");
-    let chat = crate::chat::request_to_value(&ir).expect("render chat request");
+    let chat = crate::value::chat::request_to_value(&ir).expect("render chat request");
     chat
       .get("messages")
       .and_then(Value::as_array)
