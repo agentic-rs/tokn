@@ -97,7 +97,7 @@ impl EmitState {
     }
     match self.to {
       Endpoint::ChatCompletions => {
-        for value in crate::chat::chunk_from_deltas(&self.id, &self.model, deltas, false) {
+        for value in crate::value::chat::chunk_from_deltas(&self.id, &self.model, deltas, false) {
           out.push(SseEvent::json(None, value));
         }
       }
@@ -108,7 +108,7 @@ impl EmitState {
         }
       }
       Endpoint::Messages => {
-        for (event, value) in crate::messages::events_from_deltas(&self.id, &self.model, deltas, false) {
+        for (event, value) in crate::value::messages::events_from_deltas(&self.id, &self.model, deltas, false) {
           out.push(SseEvent::json(Some(&event), value));
         }
       }

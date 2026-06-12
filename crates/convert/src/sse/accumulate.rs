@@ -52,12 +52,12 @@ impl SseAccumulator {
     let deltas = match self.endpoint {
       Endpoint::ChatCompletions => {
         self.observe_chat_chunk(value);
-        crate::chat::delta_from_chat_chunk(value)
+        crate::value::chat::delta_from_chat_chunk(value)
       }
       Endpoint::Responses => self.delta_from_responses_event(value),
       Endpoint::Messages => {
         self.observe_messages_event(value);
-        crate::messages::delta_from_messages_event(value)
+        crate::value::messages::delta_from_messages_event(value)
       }
     };
     for delta in deltas.iter().cloned() {
@@ -81,7 +81,7 @@ impl SseAccumulator {
     self.observe_responses_response(value);
     self.observe_responses_output_item(value);
     self.observe_responses_part(value);
-    let mut deltas = crate::responses::delta_from_responses_event(value);
+    let mut deltas = crate::value::responses::delta_from_responses_event(value);
     self.observe_responses_deltas(value, &deltas);
     for delta in &mut deltas {
       if let IrDelta::ToolCall { index, id, name, .. } = delta {
