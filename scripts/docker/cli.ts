@@ -52,6 +52,7 @@ function usage(): never {
   console.error(`Usage:
   bun --cwd scripts docker load [--tag <tag>] <image.tar>
   bun --cwd scripts docker load --pr <number>
+  bun --cwd scripts docker load --branch <name>
   bun --cwd scripts docker up [--tag <tag>] [--copy-local-config|--copy-local-accounts] [--force-copy-local] [--port <host-port>] [--proxy-port <host-port>]
   bun --cwd scripts docker agent [--tag <tag>] [--no-tty] --agent codex|opencode|pi --mode api-route|proxy-switch|api-passthrough|proxy-passthrough [-- <args>]
   bun --cwd scripts docker down [--tag <tag>]
@@ -183,6 +184,13 @@ function requirePositiveInteger(raw: string, label: string): number {
     throw new Error(`${label} must be a positive integer`);
   }
   return Number(raw);
+}
+
+function requireBranch(raw: string): string {
+  if (!raw || raw.startsWith("-")) {
+    throw new Error("--branch requires a branch name");
+  }
+  return raw;
 }
 
 function requirePort(raw: string, label: string): number {
@@ -333,6 +341,12 @@ function loadImage(args: string[]): void {
     loadPrImage(prNumber, namesForTag(targetTag).gatewayImage);
     return;
   }
+  if (tagged.rest.length === 2 && tagged.rest[0] === "--branch") {
+    const branch = requireBranch(tagged.rest[1]);
+    const targetTag = tagged.tag === defaultTag ? tagFromBranch(branch) : tagged.tag;
+    loadBranchImage(branch, namesForTag(targetTag).gatewayImage);
+    return;
+  }
   usage();
 }
 
@@ -348,19 +362,39 @@ type WorkflowRun = {
   url: string;
 };
 
+function tagFromBranch(branch: string): string {
+  const tag = branch
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "");
+  if (!tag) {
+    throw new Error(`cannot derive a container tag from branch '${branch}'; pass --tag explicitly`);
+  }
+  return requireTag(tag);
+}
+
 function loadPrImage(prNumber: number, targetImage: string): void {
   const pr = JSON.parse(gh(["pr", "view", String(prNumber), "--json", "headRefName"], { capture: true })) as PullRequestView;
   if (!pr.headRefName) {
     throw new Error(`could not resolve head branch for PR #${prNumber}`);
   }
 
+  loadWorkflowImage(pr.headRefName, `PR #${prNumber} branch ${pr.headRefName}`, `tokn-pr-${prNumber}`, targetImage);
+}
+
+function loadBranchImage(branch: string, targetImage: string): void {
+  loadWorkflowImage(branch, `branch ${branch}`, `tokn-branch-${tagFromBranch(branch)}`, targetImage);
+}
+
+function loadWorkflowImage(branch: string, description: string, downloadPrefix: string, targetImage: string): void {
   const runs = JSON.parse(
     gh(
       [
         "run",
         "list",
         "--branch",
-        pr.headRefName,
+        branch,
         "--status",
         "success",
         "--json",
@@ -373,10 +407,10 @@ function loadPrImage(prNumber: number, targetImage: string): void {
   ) as WorkflowRun[];
   const run = runs.find((candidate) => candidate.conclusion === "success");
   if (!run) {
-    throw new Error(`could not find a successful workflow run for PR #${prNumber} branch ${pr.headRefName}`);
+    throw new Error(`could not find a successful workflow run for ${description}`);
   }
 
-  const downloadDir = join(tmpRoot, `tokn-pr-${prNumber}-${run.databaseId}`);
+  const downloadDir = join(tmpRoot, `${downloadPrefix}-${run.databaseId}`);
   rmSync(downloadDir, { recursive: true, force: true });
   mkdirSync(downloadDir, { recursive: true });
   console.log(`Downloading ${gatewayArtifactName} from ${run.url}...`);
@@ -446,13 +480,20 @@ function copyLocalRouterFiles(names: HarnessNames, parsed: UpArgs): void {
   ]);
 }
 
+function loadHintForTag(tag: string): string {
+  if (/^pr-[1-9][0-9]*$/.test(tag)) {
+    return `run \`bun --cwd scripts docker load --pr ${tag.slice("pr-".length)}\` first`;
+  }
+  if (tag === "main") {
+    return "run `bun --cwd scripts docker load --branch main` first";
+  }
+  return `run \`bun --cwd scripts docker load --tag ${tag} <image.tar>\` first`;
+}
+
 function up(args: string[] = []): void {
   const parsed = parseUpArgs(args);
   const names = namesForTag(parsed.tag);
-  const loadHint = /^pr-[1-9][0-9]*$/.test(parsed.tag)
-    ? `run \`bun --cwd scripts docker load --pr ${parsed.tag.slice("pr-".length)}\` first`
-    : `run \`bun --cwd scripts docker load --tag ${parsed.tag} <image.tar>\` first`;
-  ensureImage(names.gatewayImage, loadHint);
+  ensureImage(names.gatewayImage, loadHintForTag(parsed.tag));
   ensureNetwork(names);
   if (resourceExists("container", names.gatewayContainer)) {
     container(["rm", "-f", names.gatewayContainer]);
