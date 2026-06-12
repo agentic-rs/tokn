@@ -1,4 +1,5 @@
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { once } from "node:events";
+import { createWriteStream, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -329,7 +330,7 @@ function loadTar(tarPath: string, targetImage: string): void {
   }
 }
 
-function loadImage(args: string[]): void {
+async function loadImage(args: string[]): Promise<void> {
   const tagged = parseTaggedArgs(args);
   if (tagged.rest.length === 1) {
     loadTar(resolve(tagged.rest[0]), namesForTag(tagged.tag).gatewayImage);
@@ -338,13 +339,13 @@ function loadImage(args: string[]): void {
   if (tagged.rest.length === 2 && tagged.rest[0] === "--pr") {
     const prNumber = requirePositiveInteger(tagged.rest[1], "--pr");
     const targetTag = tagged.tag === defaultTag ? `pr-${prNumber}` : tagged.tag;
-    loadPrImage(prNumber, namesForTag(targetTag).gatewayImage);
+    await loadPrImage(prNumber, namesForTag(targetTag).gatewayImage);
     return;
   }
   if (tagged.rest.length === 2 && tagged.rest[0] === "--branch") {
     const branch = requireBranch(tagged.rest[1]);
     const targetTag = tagged.tag === defaultTag ? tagFromBranch(branch) : tagged.tag;
-    loadBranchImage(branch, namesForTag(targetTag).gatewayImage);
+    await loadBranchImage(branch, namesForTag(targetTag).gatewayImage);
     return;
   }
   usage();
@@ -362,6 +363,21 @@ type WorkflowRun = {
   url: string;
 };
 
+type RepoView = {
+  nameWithOwner: string;
+};
+
+type WorkflowArtifact = {
+  archive_download_url: string;
+  expired: boolean;
+  name: string;
+  size_in_bytes: number;
+};
+
+type WorkflowArtifactsResponse = {
+  artifacts: WorkflowArtifact[];
+};
+
 function tagFromBranch(branch: string): string {
   const tag = branch
     .toLowerCase()
@@ -374,20 +390,25 @@ function tagFromBranch(branch: string): string {
   return requireTag(tag);
 }
 
-function loadPrImage(prNumber: number, targetImage: string): void {
+async function loadPrImage(prNumber: number, targetImage: string): Promise<void> {
   const pr = JSON.parse(gh(["pr", "view", String(prNumber), "--json", "headRefName"], { capture: true })) as PullRequestView;
   if (!pr.headRefName) {
     throw new Error(`could not resolve head branch for PR #${prNumber}`);
   }
 
-  loadWorkflowImage(pr.headRefName, `PR #${prNumber} branch ${pr.headRefName}`, `tokn-pr-${prNumber}`, targetImage);
+  await loadWorkflowImage(pr.headRefName, `PR #${prNumber} branch ${pr.headRefName}`, `tokn-pr-${prNumber}`, targetImage);
 }
 
-function loadBranchImage(branch: string, targetImage: string): void {
-  loadWorkflowImage(branch, `branch ${branch}`, `tokn-branch-${tagFromBranch(branch)}`, targetImage);
+async function loadBranchImage(branch: string, targetImage: string): Promise<void> {
+  await loadWorkflowImage(branch, `branch ${branch}`, `tokn-branch-${tagFromBranch(branch)}`, targetImage);
 }
 
-function loadWorkflowImage(branch: string, description: string, downloadPrefix: string, targetImage: string): void {
+async function loadWorkflowImage(
+  branch: string,
+  description: string,
+  downloadPrefix: string,
+  targetImage: string,
+): Promise<void> {
   const runs = JSON.parse(
     gh(
       [
@@ -414,12 +435,95 @@ function loadWorkflowImage(branch: string, description: string, downloadPrefix: 
   rmSync(downloadDir, { recursive: true, force: true });
   mkdirSync(downloadDir, { recursive: true });
   console.log(`Downloading ${gatewayArtifactName} from ${run.url}...`);
-  gh(["run", "download", String(run.databaseId), "--name", gatewayArtifactName, "--dir", downloadDir]);
+  await downloadWorkflowArtifact(run.databaseId, downloadDir);
   const tarPath = findFirstFile(downloadDir, (path) => path.endsWith(".tar"));
   if (!tarPath) {
     throw new Error(`downloaded artifact did not contain a .tar file under ${downloadDir}`);
   }
   loadTar(tarPath, targetImage);
+}
+
+async function downloadWorkflowArtifact(runId: number, downloadDir: string): Promise<void> {
+  const repo = JSON.parse(gh(["repo", "view", "--json", "nameWithOwner"], { capture: true })) as RepoView;
+  const artifacts = JSON.parse(
+    gh(["api", `repos/${repo.nameWithOwner}/actions/runs/${runId}/artifacts`], { capture: true }),
+  ) as WorkflowArtifactsResponse;
+  const artifact = artifacts.artifacts.find((candidate) => candidate.name === gatewayArtifactName && !candidate.expired);
+  if (!artifact) {
+    throw new Error(`could not find non-expired ${gatewayArtifactName} artifact for workflow run ${runId}`);
+  }
+
+  const zipPath = join(downloadDir, `${gatewayArtifactName}.zip`);
+  await downloadWithProgress(artifact.archive_download_url, zipPath, artifact.size_in_bytes);
+  run("unzip", ["-q", zipPath, "-d", downloadDir]);
+}
+
+async function downloadWithProgress(url: string, destination: string, expectedBytes: number): Promise<void> {
+  const token = gh(["auth", "token"], { capture: true }).trim();
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      Authorization: `Bearer ${token}`,
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`artifact download failed (${response.status} ${response.statusText})`);
+  }
+  if (!response.body) {
+    throw new Error("artifact download response did not include a body");
+  }
+
+  const totalBytes = Number(response.headers.get("content-length")) || expectedBytes;
+  const reader = response.body.getReader();
+  const writer = createWriteStream(destination);
+  let receivedBytes = 0;
+  let lastRenderedAt = 0;
+
+  const renderProgress = (force: boolean) => {
+    const now = Date.now();
+    if (!force && now - lastRenderedAt < 250) {
+      return;
+    }
+    lastRenderedAt = now;
+    const renderedTotal = totalBytes > 0 ? formatBytes(totalBytes) : "unknown";
+    const percent = totalBytes > 0 ? ` ${Math.floor((receivedBytes / totalBytes) * 100)}%` : "";
+    process.stderr.write(`\r  ${formatBytes(receivedBytes)} / ${renderedTotal}${percent}`);
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      receivedBytes += value.byteLength;
+      if (!writer.write(value)) {
+        await once(writer, "drain");
+      }
+      renderProgress(false);
+    }
+    writer.end();
+    await once(writer, "finish");
+    renderProgress(true);
+    process.stderr.write("\n");
+  } catch (err) {
+    writer.destroy();
+    throw err;
+  }
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB"];
+  let value = bytes / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units.at(-1)) {
+      return `${value.toFixed(value >= 10 ? 1 : 2)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${bytes} B`;
 }
 
 function findFirstFile(root: string, predicate: (path: string) => boolean): string | undefined {
@@ -619,7 +723,7 @@ async function main(): Promise<void> {
   try {
     switch (cmd) {
       case "load":
-        loadImage(args);
+        await loadImage(args);
         break;
       case "up":
         up(args);
