@@ -120,7 +120,7 @@ SELECT
   COALESCE(n.model, s.model) AS model,
   n.reduction_kind,
   n.parent_source,
-  h.node_id = n.id AS is_head,
+  CASE WHEN h.node_id = n.id THEN 1 ELSE 0 END AS is_head,
   m.side,
   m.message_seq,
   m.role,
