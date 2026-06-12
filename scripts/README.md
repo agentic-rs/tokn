@@ -14,6 +14,14 @@ bun --cwd scripts docker load --pr 67
 
 This tags the loaded gateway image as `tokn-gateway-cli:pr-67`.
 
+To load the latest successful artifact from a branch:
+
+```sh
+bun --cwd scripts docker load --branch main
+```
+
+This tags the loaded gateway image as `tokn-gateway-cli:main`.
+
 If you already downloaded the artifact tar manually:
 
 ```sh
