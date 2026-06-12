@@ -35,20 +35,26 @@ type WorkflowArtifactsResponse = {
 
 export async function loadImage(args: string[]): Promise<void> {
   const tagged = parseTaggedArgs(args, defaultTag);
-  if (tagged.rest.length === 1) {
-    loadTar(resolve(tagged.rest[0]), namesForTag(tagged.tag).gatewayImage);
-    return;
-  }
-  if (tagged.rest.length === 2 && tagged.rest[0] === "--pr") {
+  if (tagged.rest[0] === "--pr") {
+    if (tagged.rest.length !== 2) {
+      throw new UsageError("--pr requires a pull request number");
+    }
     const prNumber = requirePositiveInteger(tagged.rest[1], "--pr");
     const targetTag = tagged.tag === defaultTag ? `pr-${prNumber}` : tagged.tag;
     await loadPrImage(prNumber, namesForTag(targetTag).gatewayImage);
     return;
   }
-  if (tagged.rest.length === 2 && tagged.rest[0] === "--branch") {
+  if (tagged.rest[0] === "--branch") {
+    if (tagged.rest.length !== 2) {
+      throw new UsageError("--branch requires a branch name");
+    }
     const branch = requireBranch(tagged.rest[1]);
     const targetTag = tagged.tag === defaultTag ? tagFromBranch(branch) : tagged.tag;
     await loadBranchImage(branch, namesForTag(targetTag).gatewayImage);
+    return;
+  }
+  if (tagged.rest.length === 1) {
+    loadTar(resolve(tagged.rest[0]), namesForTag(tagged.tag).gatewayImage);
     return;
   }
   throw new UsageError("invalid load arguments");
@@ -186,8 +192,9 @@ async function downloadWithProgress(url: string, destination: string, expectedBy
     }
     lastRenderedAt = now;
     const renderedTotal = totalBytes > 0 ? formatBytes(totalBytes) : "unknown";
-    const percent = totalBytes > 0 ? ` ${Math.floor((receivedBytes / totalBytes) * 100)}%` : "";
-    process.stderr.write(`\r  ${formatBytes(receivedBytes)} / ${renderedTotal}${percent}`);
+    const percentValue = totalBytes > 0 ? Math.min(100, Math.floor((receivedBytes / totalBytes) * 100)) : undefined;
+    const percent = percentValue === undefined ? "" : ` ${percentValue}%`;
+    process.stderr.write(`\r\x1b[2K  ${formatBytes(receivedBytes)} / ${renderedTotal}${percent}`);
   };
 
   try {
@@ -203,7 +210,7 @@ async function downloadWithProgress(url: string, destination: string, expectedBy
     writer.end();
     await once(writer, "finish");
     renderProgress(true);
-    process.stderr.write("\n");
+    process.stderr.write("\x1b[0K\n");
   } catch (err) {
     writer.destroy();
     throw err;
