@@ -1,7 +1,10 @@
 pub use tokn_core::provider;
 
+pub mod chat;
 pub mod error;
 pub mod ir;
+pub mod messages;
+pub mod responses;
 pub mod sse;
 pub mod tools;
 pub mod usage;
