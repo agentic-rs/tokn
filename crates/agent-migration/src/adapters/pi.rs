@@ -9,6 +9,9 @@ use tokn_core::provider::ID_OPENAI;
 use tokn_core::util::secret::Secret;
 use tokn_core::AgentId;
 
+const ROUTER_PROVIDER: &str = "deepseek";
+const ROUTER_MODEL: &str = "deepseek-v4-flash";
+
 pub(crate) struct PiAdapter;
 
 impl AgentAdapter for PiAdapter {
@@ -17,11 +20,11 @@ impl AgentAdapter for PiAdapter {
   }
 
   fn auth_path(&self, home: &Path) -> PathBuf {
-    home.join(".local/share/pi/auth.json")
+    pi_agent_dir(home).join("auth.json")
   }
 
   fn config_path(&self, home: &Path) -> PathBuf {
-    home.join(".config/pi/config.json")
+    pi_agent_dir(home).join("settings.json")
   }
 
   fn discover_accounts(&self, home: &Path, timestamp: &str) -> Result<Vec<Account>> {
@@ -35,44 +38,85 @@ impl AgentAdapter for PiAdapter {
   }
 
   fn rewrite_config(&self, home: &Path, base_url: &str) -> Result<Vec<PlannedEdit>> {
-    let config_path = self.config_path(home);
-    let mut json = if config_path.exists() {
-      let raw = std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?;
-      serde_json::from_str(&raw).with_context(|| format!("parsing {}", config_path.display()))?
+    let settings_path = self.config_path(home);
+    let models_path = pi_agent_dir(home).join("models.json");
+
+    let mut settings = if settings_path.exists() {
+      let raw =
+        std::fs::read_to_string(&settings_path).with_context(|| format!("reading {}", settings_path.display()))?;
+      serde_json::from_str(&raw).with_context(|| format!("parsing {}", settings_path.display()))?
     } else {
       Value::Object(serde_json::Map::new())
     };
-    rewrite_config(&mut json, base_url);
-    Ok(vec![PlannedEdit {
-      path: config_path,
-      kind: EditKind::Json(json),
-    }])
+    rewrite_settings(&mut settings);
+
+    let mut models = if models_path.exists() {
+      let raw = std::fs::read_to_string(&models_path).with_context(|| format!("reading {}", models_path.display()))?;
+      serde_json::from_str(&raw).with_context(|| format!("parsing {}", models_path.display()))?
+    } else {
+      Value::Object(serde_json::Map::new())
+    };
+    rewrite_models(&mut models, base_url);
+
+    Ok(vec![
+      PlannedEdit {
+        path: settings_path,
+        kind: EditKind::Json(settings),
+      },
+      PlannedEdit {
+        path: models_path,
+        kind: EditKind::Json(models),
+      },
+    ])
   }
 }
 
-fn rewrite_config(json: &mut Value, target_base_url: &str) {
+fn pi_agent_dir(home: &Path) -> PathBuf {
+  home.join(".pi/agent")
+}
+
+fn rewrite_settings(json: &mut Value) {
   if !json.is_object() {
     *json = Value::Object(serde_json::Map::new());
   }
   let obj = json.as_object_mut().expect("object ensured");
-  obj.insert("provider".into(), Value::String("tokn-router".into()));
-  obj.insert("base_url".into(), Value::String(target_base_url.into()));
-  obj.insert("api_key".into(), Value::String("tokn-router".into()));
-  obj.insert("env_key".into(), Value::String("OPENAI_API_KEY".into()));
+  obj.insert("defaultProvider".into(), Value::String(ROUTER_PROVIDER.into()));
+  obj.insert("defaultModel".into(), Value::String(ROUTER_MODEL.into()));
+}
 
+fn rewrite_models(json: &mut Value, target_base_url: &str) {
+  if !json.is_object() {
+    *json = Value::Object(serde_json::Map::new());
+  }
+  let obj = json.as_object_mut().expect("object ensured");
   let providers = obj
-    .entry("model_providers")
+    .entry("providers")
     .or_insert_with(|| Value::Object(serde_json::Map::new()));
   if !providers.is_object() {
     *providers = Value::Object(serde_json::Map::new());
   }
   providers.as_object_mut().expect("object ensured").insert(
-    "tokn-router".into(),
+    ROUTER_PROVIDER.into(),
     serde_json::json!({
-      "name": "tokn-router",
-      "base_url": target_base_url,
-      "api_key": "tokn-router",
-      "env_key": "OPENAI_API_KEY"
+      "name": "tokn-router DeepSeek",
+      "baseUrl": target_base_url,
+      "apiKey": "tokn-router",
+      "api": "openai-chat",
+      "models": [
+        {
+          "id": ROUTER_MODEL,
+          "name": "DeepSeek V4 Flash via tokn-router",
+          "api": "openai-chat",
+          "baseUrl": target_base_url,
+          "reasoning": false,
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "compat": {
+            "supportsDeveloperRole": true,
+            "supportsUsageInStreaming": true
+          }
+        }
+      ]
     }),
   );
 }
@@ -138,15 +182,23 @@ mod tests {
   }
 
   #[test]
-  fn config_rewrite_preserves_existing_keys() {
+  fn settings_rewrite_preserves_existing_keys() {
     let mut json = serde_json::json!({"model": "gpt-5"});
-    rewrite_config(&mut json, "http://127.0.0.1:4141/pi/v1");
+    rewrite_settings(&mut json);
     assert_eq!(json["model"], "gpt-5");
-    assert_eq!(json["provider"], "tokn-router");
-    assert_eq!(json["base_url"], "http://127.0.0.1:4141/pi/v1");
+    assert_eq!(json["defaultProvider"], "deepseek");
+    assert_eq!(json["defaultModel"], "deepseek-v4-flash");
+  }
+
+  #[test]
+  fn models_rewrite_registers_router_deepseek_model() {
+    let mut json = serde_json::json!({"providers": {"other": {"baseUrl": "http://example.test"}}});
+    rewrite_models(&mut json, "http://127.0.0.1:4141/v1");
+    assert_eq!(json["providers"]["other"]["baseUrl"], "http://example.test");
+    assert_eq!(json["providers"]["deepseek"]["models"][0]["id"], "deepseek-v4-flash");
     assert_eq!(
-      json["model_providers"]["tokn-router"]["base_url"],
-      "http://127.0.0.1:4141/pi/v1"
+      json["providers"]["deepseek"]["models"][0]["baseUrl"],
+      "http://127.0.0.1:4141/v1"
     );
   }
 
@@ -155,20 +207,20 @@ mod tests {
     let dir = tempfile::tempdir().unwrap();
     let adapter = PiAdapter;
     let auth_path = adapter.auth_path(dir.path());
-    let config_path = adapter.config_path(dir.path());
+    let settings_path = adapter.config_path(dir.path());
+    let models_path = pi_agent_dir(dir.path()).join("models.json");
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     std::fs::write(&auth_path, serde_json::json!({"api_key": "sk-pi"}).to_string()).unwrap();
-    std::fs::write(&config_path, serde_json::json!({"model": "gpt-5"}).to_string()).unwrap();
+    std::fs::write(&settings_path, serde_json::json!({"theme": "dark"}).to_string()).unwrap();
+    std::fs::write(&models_path, serde_json::json!({"providers": {}}).to_string()).unwrap();
 
     let accounts = adapter.discover_accounts(dir.path(), "20260604T153012Z").unwrap();
-    let edits = adapter
-      .rewrite_config(dir.path(), "http://127.0.0.1:4141/pi/v1")
-      .unwrap();
+    let edits = adapter.rewrite_config(dir.path(), "http://127.0.0.1:4141/v1").unwrap();
 
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].id, "pi-openai");
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].path, config_path);
+    assert_eq!(edits.len(), 2);
+    assert!(edits.iter().any(|edit| edit.path == settings_path));
+    assert!(edits.iter().any(|edit| edit.path == models_path));
   }
 }
