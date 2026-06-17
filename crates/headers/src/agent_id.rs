@@ -18,6 +18,7 @@ pub enum AgentId {
   ClaudeCode,
   Cline,
   CopilotCli,
+  Pi,
   Other(SmolStr),
 }
 
@@ -29,6 +30,7 @@ impl AgentId {
       Self::ClaudeCode => "claude-code",
       Self::Cline => "cline",
       Self::CopilotCli => "copilot-cli",
+      Self::Pi => "pi",
       Self::Other(value) => value.as_str(),
     }
   }
@@ -40,6 +42,7 @@ impl AgentId {
       "claude-cli" | "claude-code" => Some(Self::ClaudeCode),
       "cline" => Some(Self::Cline),
       "copilot" | "copilot-cli" => Some(Self::CopilotCli),
+      "pi" => Some(Self::Pi),
       _ => None,
     }
   }
@@ -109,6 +112,7 @@ mod tests {
       ("claude-code", AgentId::ClaudeCode),
       ("cline", AgentId::Cline),
       ("copilot-cli", AgentId::CopilotCli),
+      ("pi", AgentId::Pi),
     ] {
       assert_eq!(AgentId::from_slug(slug), Some(expected.clone()));
       assert_eq!(expected.as_str(), slug);

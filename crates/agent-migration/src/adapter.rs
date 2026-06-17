@@ -2,7 +2,7 @@
 //! config so it routes through a gateway profile. Everything agent-specific
 //! lives behind the [`AgentAdapter`] trait; the rest of the crate is generic.
 
-use crate::adapters::{codex::CodexAdapter, opencode::OpencodeAdapter};
+use crate::adapters::{codex::CodexAdapter, opencode::OpencodeAdapter, pi::PiAdapter};
 use crate::reconcile::PlannedEdit;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -35,13 +35,14 @@ pub fn adapter_for(agent: &AgentId) -> Option<Box<dyn AgentAdapter>> {
   match agent {
     AgentId::Opencode => Some(Box::new(OpencodeAdapter)),
     AgentId::CodexCli => Some(Box::new(CodexAdapter)),
+    AgentId::Pi => Some(Box::new(PiAdapter)),
     _ => None,
   }
 }
 
 /// All agents with a built-in adapter, in stable display order.
 pub fn supported_agents() -> Vec<AgentId> {
-  vec![AgentId::Opencode, AgentId::CodexCli]
+  vec![AgentId::Opencode, AgentId::CodexCli, AgentId::Pi]
 }
 
 #[cfg(test)]

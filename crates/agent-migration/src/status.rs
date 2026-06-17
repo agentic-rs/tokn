@@ -123,8 +123,25 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -
       })
       .map(|value| value == expected)
       .unwrap_or(false),
+    AgentId::Pi => std::fs::read_to_string(config_path)
+      .ok()
+      .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+      .and_then(|json| pi_base_url(&json))
+      .map(|value| value == expected)
+      .unwrap_or(false),
     _ => false,
   }
+}
+
+fn pi_base_url(json: &serde_json::Value) -> Option<String> {
+  json
+    .get("model_providers")
+    .and_then(|providers| providers.get("tokn-router"))
+    .and_then(|provider| provider.get("base_url").or_else(|| provider.get("baseURL")))
+    .or_else(|| json.get("base_url"))
+    .or_else(|| json.get("baseURL"))
+    .and_then(serde_json::Value::as_str)
+    .map(str::to_string)
 }
 
 fn resolve_home(agent_home: Option<&Path>) -> Result<PathBuf> {

@@ -181,9 +181,9 @@ fn parse_supported_agent(value: &str) -> Result<AgentId, String> {
     return Err(format!("unknown agent '{value}'"));
   };
   match agent {
-    AgentId::Opencode | AgentId::CodexCli => Ok(agent),
+    AgentId::Opencode | AgentId::CodexCli | AgentId::Pi => Ok(agent),
     _ => Err(format!(
-      "agent '{}' is recognized but not yet supported by `agent`; supported: opencode, codex-cli",
+      "agent '{}' is recognized but not yet supported by `agent`; supported: opencode, codex-cli, pi",
       agent.as_str()
     )),
   }
@@ -318,4 +318,20 @@ fn confirm(prompt: &str) -> Result<bool> {
     .with_default(false)
     .prompt()
     .context("confirmation prompt cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::cli::{Cli, Cmd};
+  use clap::Parser;
+
+  #[test]
+  fn agent_pi_is_supported() {
+    let cli = Cli::try_parse_from(["tokn-router", "agent", "show", "pi"]).unwrap();
+    let Cmd::Agent(AgentCmd::Show(args)) = cli.cmd else {
+      panic!("expected agent show command");
+    };
+    assert_eq!(args.agent, AgentId::Pi);
+  }
 }
