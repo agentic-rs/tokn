@@ -9,9 +9,6 @@ use tokn_core::provider::ID_OPENAI;
 use tokn_core::util::secret::Secret;
 use tokn_core::AgentId;
 
-const ROUTER_PROVIDER: &str = "deepseek";
-const ROUTER_MODEL: &str = "deepseek-v4-flash";
-
 pub(crate) struct PiAdapter;
 
 impl AgentAdapter for PiAdapter {
@@ -41,14 +38,14 @@ impl AgentAdapter for PiAdapter {
     let settings_path = self.config_path(home);
     let models_path = pi_agent_dir(home).join("models.json");
 
-    let mut settings = if settings_path.exists() {
+    let settings = if settings_path.exists() {
       let raw =
         std::fs::read_to_string(&settings_path).with_context(|| format!("reading {}", settings_path.display()))?;
       serde_json::from_str(&raw).with_context(|| format!("parsing {}", settings_path.display()))?
     } else {
       Value::Object(serde_json::Map::new())
     };
-    rewrite_settings(&mut settings);
+    let default_provider = default_provider(&settings).map(str::to_string);
 
     let mut models = if models_path.exists() {
       let raw = std::fs::read_to_string(&models_path).with_context(|| format!("reading {}", models_path.display()))?;
@@ -56,7 +53,7 @@ impl AgentAdapter for PiAdapter {
     } else {
       Value::Object(serde_json::Map::new())
     };
-    rewrite_models(&mut models, base_url);
+    rewrite_models(&mut models, default_provider.as_deref(), base_url);
 
     Ok(vec![
       PlannedEdit {
@@ -75,16 +72,14 @@ fn pi_agent_dir(home: &Path) -> PathBuf {
   home.join(".pi/agent")
 }
 
-fn rewrite_settings(json: &mut Value) {
-  if !json.is_object() {
-    *json = Value::Object(serde_json::Map::new());
-  }
-  let obj = json.as_object_mut().expect("object ensured");
-  obj.insert("defaultProvider".into(), Value::String(ROUTER_PROVIDER.into()));
-  obj.insert("defaultModel".into(), Value::String(ROUTER_MODEL.into()));
+fn default_provider(settings: &Value) -> Option<&str> {
+  settings.get("defaultProvider").and_then(Value::as_str)
 }
 
-fn rewrite_models(json: &mut Value, target_base_url: &str) {
+fn rewrite_models(json: &mut Value, provider_name: Option<&str>, target_base_url: &str) {
+  let Some(provider_name) = provider_name.filter(|provider| !provider.trim().is_empty()) else {
+    return;
+  };
   if !json.is_object() {
     *json = Value::Object(serde_json::Map::new());
   }
@@ -96,27 +91,10 @@ fn rewrite_models(json: &mut Value, target_base_url: &str) {
     *providers = Value::Object(serde_json::Map::new());
   }
   providers.as_object_mut().expect("object ensured").insert(
-    ROUTER_PROVIDER.into(),
+    provider_name.into(),
     serde_json::json!({
-      "name": "tokn-router DeepSeek",
       "baseUrl": target_base_url,
-      "apiKey": "tokn-router",
-      "api": "openai-chat",
-      "models": [
-        {
-          "id": ROUTER_MODEL,
-          "name": "DeepSeek V4 Flash via tokn-router",
-          "api": "openai-chat",
-          "baseUrl": target_base_url,
-          "reasoning": false,
-          "contextWindow": 128000,
-          "maxTokens": 8192,
-          "compat": {
-            "supportsDeveloperRole": true,
-            "supportsUsageInStreaming": true
-          }
-        }
-      ]
+      "apiKey": "tokn-router"
     }),
   );
 }
@@ -182,24 +160,28 @@ mod tests {
   }
 
   #[test]
-  fn settings_rewrite_preserves_existing_keys() {
-    let mut json = serde_json::json!({"model": "gpt-5"});
-    rewrite_settings(&mut json);
-    assert_eq!(json["model"], "gpt-5");
-    assert_eq!(json["defaultProvider"], "deepseek");
-    assert_eq!(json["defaultModel"], "deepseek-v4-flash");
+  fn default_provider_reads_existing_selection_without_inventing_one() {
+    assert_eq!(
+      default_provider(&serde_json::json!({"defaultProvider": "openai"})),
+      Some("openai")
+    );
+    assert_eq!(default_provider(&serde_json::json!({})), None);
   }
 
   #[test]
-  fn models_rewrite_registers_router_deepseek_model() {
+  fn models_rewrite_points_existing_default_provider_at_router() {
     let mut json = serde_json::json!({"providers": {"other": {"baseUrl": "http://example.test"}}});
-    rewrite_models(&mut json, "http://127.0.0.1:4141/v1");
+    rewrite_models(&mut json, Some("openai"), "http://127.0.0.1:4141/v1");
     assert_eq!(json["providers"]["other"]["baseUrl"], "http://example.test");
-    assert_eq!(json["providers"]["deepseek"]["models"][0]["id"], "deepseek-v4-flash");
-    assert_eq!(
-      json["providers"]["deepseek"]["models"][0]["baseUrl"],
-      "http://127.0.0.1:4141/v1"
-    );
+    assert_eq!(json["providers"]["openai"]["baseUrl"], "http://127.0.0.1:4141/v1");
+    assert_eq!(json["providers"]["openai"]["apiKey"], "tokn-router");
+  }
+
+  #[test]
+  fn models_rewrite_without_default_provider_is_noop() {
+    let mut json = serde_json::json!({"providers": {"other": {"baseUrl": "http://example.test"}}});
+    rewrite_models(&mut json, None, "http://127.0.0.1:4141/v1");
+    assert!(json["providers"].get("openai").is_none());
   }
 
   #[test]
@@ -211,7 +193,11 @@ mod tests {
     let models_path = pi_agent_dir(dir.path()).join("models.json");
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     std::fs::write(&auth_path, serde_json::json!({"api_key": "sk-pi"}).to_string()).unwrap();
-    std::fs::write(&settings_path, serde_json::json!({"theme": "dark"}).to_string()).unwrap();
+    std::fs::write(
+      &settings_path,
+      serde_json::json!({"theme": "dark", "defaultProvider": "openai", "defaultModel": "gpt-5"}).to_string(),
+    )
+    .unwrap();
     std::fs::write(&models_path, serde_json::json!({"providers": {}}).to_string()).unwrap();
 
     let accounts = adapter.discover_accounts(dir.path(), "20260604T153012Z").unwrap();

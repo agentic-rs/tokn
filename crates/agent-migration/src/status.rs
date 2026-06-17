@@ -133,32 +133,28 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -
 }
 
 fn pi_config_points_at_gateway(settings_path: &Path, settings: &serde_json::Value, expected_base_url: &str) -> bool {
-  if settings.get("defaultProvider").and_then(serde_json::Value::as_str) != Some("deepseek") {
+  let Some(provider) = settings.get("defaultProvider").and_then(serde_json::Value::as_str) else {
     return false;
-  }
-  if settings.get("defaultModel").and_then(serde_json::Value::as_str) != Some("deepseek-v4-flash") {
-    return false;
-  }
+  };
   let Some(models_path) = settings_path.parent().map(|parent| parent.join("models.json")) else {
     return false;
   };
   std::fs::read_to_string(models_path)
     .ok()
     .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-    .and_then(|models| pi_router_model_base_url(&models))
+    .and_then(|models| pi_provider_base_url(&models, provider))
     .map(|value| value == expected_base_url)
     .unwrap_or(false)
 }
 
-fn pi_router_model_base_url(models: &serde_json::Value) -> Option<String> {
-  let provider = models.get("providers")?.get("deepseek")?;
-  provider
-    .get("models")?
-    .as_array()?
-    .iter()
-    .find(|model| model.get("id").and_then(serde_json::Value::as_str) == Some("deepseek-v4-flash"))?
+fn pi_provider_base_url(models: &serde_json::Value, provider: &str) -> Option<String> {
+  if provider.trim().is_empty() {
+    return None;
+  }
+  models
+    .get("providers")?
+    .get(provider)?
     .get("baseUrl")
-    .or_else(|| provider.get("baseUrl"))
     .and_then(serde_json::Value::as_str)
     .map(str::to_string)
 }
