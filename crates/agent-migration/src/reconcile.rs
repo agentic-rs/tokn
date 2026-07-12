@@ -195,7 +195,12 @@ pub fn unlink(request: UnlinkRequest) -> Result<UnlinkReport> {
   }
   let timestamp = latest.1.timestamp.clone();
 
-  restore_latest_credentials(&request.agent, &latest.1)?;
+  if !latest.1.credentials_handoff_complete {
+    restore_latest_credentials(&request.agent, &latest.1)?;
+    let latest = chain.first_mut().expect("manifest chain contains selected manifest");
+    latest.1.credentials_handoff_complete = true;
+    manifest::write_manifest(&latest.0, &latest.1)?;
+  }
   let mut actions = Vec::new();
   for (_, current) in &chain {
     restore_manifest_files(current, &mut actions)?;
@@ -358,6 +363,7 @@ fn apply_reconcile_to_manifest_path(plan: ReconcilePlan, manifest_path: PathBuf)
     provider_routes: plan.provider_routes.clone(),
     previous_manifest: plan.previous_manifest.clone(),
     unlinked: false,
+    credentials_handoff_complete: false,
     imported_account_ids: plan
       .imported_accounts
       .iter()
@@ -1485,7 +1491,48 @@ providers = ["anthropic"]
     assert_eq!(restored_auth["github-copilot"]["expires"], 0);
     assert_eq!(restored_auth["anthropic"]["key"], "anthropic-keep");
     assert!(manifest::read_manifest(&first_manifest_path).unwrap().unlinked);
-    assert!(manifest::read_manifest(&second_manifest_path).unwrap().unlinked);
+    let second_manifest = manifest::read_manifest(&second_manifest_path).unwrap();
+    assert!(second_manifest.unlinked);
+    assert!(second_manifest.credentials_handoff_complete);
+  }
+
+  #[test]
+  fn unlink_resumes_after_credentials_handoff_without_gateway_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("20260604T153012Z-opencode.json");
+    let agent_auth_path = dir.path().join("opencode-auth.json");
+    let gateway_auth_path = dir.path().join("missing-gateway-auth.yaml");
+    let auth = serde_json::json!({"openai": {"type": "api", "key": "already-restored"}});
+    std::fs::write(&agent_auth_path, serde_json::to_vec_pretty(&auth).unwrap()).unwrap();
+    let manifest = MigrationManifest {
+      version: 2,
+      completed: true,
+      agent: AgentId::Opencode,
+      timestamp: "20260604T153012Z".into(),
+      profile: Some("opencode".into()),
+      target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
+      gateway_auth_path: Some(gateway_auth_path),
+      agent_auth_path: Some(agent_auth_path.clone()),
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: true,
+      imported_account_ids: vec!["opencode-openai".into()],
+      files: Vec::new(),
+    };
+    manifest::write_manifest(&manifest_path, &manifest).unwrap();
+
+    unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(
+      serde_json::from_str::<Value>(&std::fs::read_to_string(agent_auth_path).unwrap()).unwrap(),
+      auth
+    );
+    assert!(manifest::read_manifest(&manifest_path).unwrap().unlinked);
   }
 
   #[test]
@@ -1508,6 +1555,7 @@ providers = ["anthropic"]
       provider_routes: Vec::new(),
       previous_manifest: None,
       unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["codex-cli-codex".into()],
       files: vec![FileBackup {
         original: original.clone(),
@@ -1546,6 +1594,7 @@ providers = ["anthropic"]
       provider_routes: Vec::new(),
       previous_manifest: None,
       unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["opencode-openai".into()],
       files: vec![FileBackup {
         original: original.clone(),
@@ -1582,6 +1631,7 @@ providers = ["anthropic"]
       provider_routes: Vec::new(),
       previous_manifest: None,
       unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["codex-cli-codex".into()],
       files: Vec::new(),
     };

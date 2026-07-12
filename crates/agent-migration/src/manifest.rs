@@ -23,6 +23,8 @@ pub struct MigrationManifest {
   pub previous_manifest: Option<PathBuf>,
   #[serde(default)]
   pub unlinked: bool,
+  #[serde(default)]
+  pub credentials_handoff_complete: bool,
   pub imported_account_ids: Vec<String>,
   pub files: Vec<FileBackup>,
 }
