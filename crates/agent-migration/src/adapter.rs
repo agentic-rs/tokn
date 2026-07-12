@@ -5,9 +5,28 @@
 use crate::adapters::{codex::CodexAdapter, opencode::OpencodeAdapter};
 use crate::reconcile::PlannedEdit;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokn_config::Account;
 use tokn_core::AgentId;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ProviderRoute {
+  pub source_provider_id: String,
+  pub gateway_provider_id: String,
+  pub account_id: String,
+  pub profile: String,
+  pub base_url: String,
+}
+
+pub(crate) fn source_provider_id(account: &Account) -> Option<&str> {
+  account
+    .settings
+    .get("import")
+    .and_then(toml::Value::as_table)
+    .and_then(|import| import.get("source_provider"))
+    .and_then(toml::Value::as_str)
+}
 
 /// A local agent the gateway can bind to: import credentials from it and point
 /// its own config at a gateway profile.
@@ -26,8 +45,19 @@ pub trait AgentAdapter {
   /// found" and is **not** an error.
   fn discover_accounts(&self, home: &Path, timestamp: &str) -> Result<Vec<Account>>;
 
-  /// Produce the edits that point the agent's own config at `base_url`.
-  fn rewrite_config(&self, home: &Path, base_url: &str) -> Result<Vec<PlannedEdit>>;
+  /// Whether linking transfers credential ownership from the agent to the
+  /// gateway instead of maintaining a source-managed copy.
+  fn transfers_credentials(&self) -> bool {
+    false
+  }
+
+  /// Produce the edits that point the agent's own config at the gateway.
+  fn rewrite_config(&self, home: &Path, base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>>;
+
+  /// Export the gateway-owned credentials back into the agent during unlink.
+  fn restore_transferred_credentials(&self, _auth_path: &Path, _accounts: &[Account]) -> Result<()> {
+    Ok(())
+  }
 }
 
 /// Resolve the adapter for an agent, if the agent is supported.

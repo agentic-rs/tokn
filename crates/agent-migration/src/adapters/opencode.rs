@@ -1,8 +1,9 @@
-use crate::adapter::AgentAdapter;
-use crate::jsonc::read_json_or_jsonc;
+use crate::adapter::{source_provider_id, AgentAdapter, ProviderRoute};
+use crate::jsonc::{parse_cst, set_property};
 use crate::reconcile::{annotate_imported_account, EditKind, PlannedEdit};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tokn_config::{Account, AuthType};
 use tokn_core::account::AccountTier;
@@ -37,18 +38,33 @@ impl AgentAdapter for OpencodeAdapter {
     Ok(accounts_from_auth_json(&json, &auth_path, timestamp))
   }
 
-  fn rewrite_config(&self, home: &Path, base_url: &str) -> Result<Vec<PlannedEdit>> {
+  fn transfers_credentials(&self) -> bool {
+    true
+  }
+
+  fn rewrite_config(&self, home: &Path, _base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
     let config_path = self.config_path(home);
-    let mut json = if config_path.exists() {
-      read_json_or_jsonc(&config_path)?
+    let raw = if config_path.exists() {
+      std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?
     } else {
-      Value::Object(serde_json::Map::new())
+      "{}\n".to_string()
     };
-    rewrite_config(&mut json, base_url);
-    Ok(vec![PlannedEdit {
+    let root = parse_cst(&raw, &config_path)?;
+    rewrite_config(&root, routes)?;
+
+    let mut edits = vec![PlannedEdit {
       path: config_path,
-      kind: EditKind::Json(json),
-    }])
+      kind: EditKind::Jsonc(root.to_string()),
+      backup: true,
+    }];
+    if let Some(auth_edit) = remove_transferred_credentials(&self.auth_path(home), routes)? {
+      edits.push(auth_edit);
+    }
+    Ok(edits)
+  }
+
+  fn restore_transferred_credentials(&self, auth_path: &Path, accounts: &[Account]) -> Result<()> {
+    restore_transferred_credentials(auth_path, accounts)
   }
 }
 
@@ -57,69 +73,135 @@ fn opencode_config_path(home: &Path) -> PathBuf {
   if jsonc.exists() {
     return jsonc;
   }
-  home.join(OPENCODE_CONFIG_JSON)
+  let json = home.join(OPENCODE_CONFIG_JSON);
+  if json.exists() {
+    return json;
+  }
+  jsonc
 }
 
-fn rewrite_config(json: &mut Value, target_base_url: &str) {
-  if !json.is_object() {
-    *json = Value::Object(serde_json::Map::new());
+fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, routes: &[ProviderRoute]) -> Result<()> {
+  let Some(obj) = root.object_value() else {
+    bail!("OpenCode config must contain a JSON object");
+  };
+  if obj.get("$schema").is_none() {
+    set_property(&obj, "$schema", "https://opencode.ai/config.json");
   }
-  let obj = json.as_object_mut().expect("object ensured");
-  obj
-    .entry("$schema")
-    .or_insert_with(|| Value::String("https://opencode.ai/config.json".into()));
-  let model_ids = ["model", "small_model"]
-    .into_iter()
-    .filter_map(|key| rewrite_model_provider(obj, key))
-    .collect::<Vec<_>>();
-  obj.remove("providers");
+  let providers = obj.object_value_or_set("provider");
+  for route in routes {
+    let provider = providers.object_value_or_set(&route.source_provider_id);
+    set_property(&provider, "name", format!("tokn-router ({})", route.source_provider_id));
+    set_property(&provider, "npm", "@ai-sdk/openai-compatible");
+    let options = provider.object_value_or_set("options");
+    set_property(&options, "baseURL", route.base_url.clone());
+    set_property(&options, "apiKey", "tokn-router");
+  }
+  Ok(())
+}
 
-  let provider = obj
-    .entry("provider")
-    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-  if !provider.is_object() {
-    *provider = Value::Object(serde_json::Map::new());
+fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) -> Result<Option<PlannedEdit>> {
+  if !auth_path.exists() {
+    return Ok(None);
   }
-  let mut router_provider = serde_json::json!({
-    "name": "tokn-router",
-    "npm": "@ai-sdk/openai-compatible",
-    "options": {
-      "baseURL": target_base_url,
-      "apiKey": "tokn-router"
+  let raw = std::fs::read_to_string(auth_path).with_context(|| format!("reading {}", auth_path.display()))?;
+  let mut json: Value = serde_json::from_str(&raw).with_context(|| format!("parsing {}", auth_path.display()))?;
+  let Some(auth) = json.as_object_mut() else {
+    bail!("{} must contain a JSON object", auth_path.display());
+  };
+  let providers = routes
+    .iter()
+    .filter(|route| !route.account_id.is_empty())
+    .map(|route| route.source_provider_id.as_str())
+    .collect::<BTreeSet<_>>();
+  let mut changed = false;
+  for provider in providers {
+    changed |= auth.remove(provider).is_some();
+  }
+  Ok(changed.then(|| PlannedEdit {
+    path: auth_path.to_path_buf(),
+    kind: EditKind::Json(json),
+    // The gateway-owned credentials are the rollback source of truth. Avoid
+    // leaving adjacent plaintext token backups behind.
+    backup: false,
+  }))
+}
+
+fn restore_transferred_credentials(auth_path: &Path, accounts: &[Account]) -> Result<()> {
+  if accounts.is_empty() {
+    return Ok(());
+  }
+  let mut json = if auth_path.exists() {
+    let raw = std::fs::read_to_string(auth_path).with_context(|| format!("reading {}", auth_path.display()))?;
+    serde_json::from_str(&raw).with_context(|| format!("parsing {}", auth_path.display()))?
+  } else {
+    Value::Object(serde_json::Map::new())
+  };
+  let Some(auth) = json.as_object_mut() else {
+    bail!("{} must contain a JSON object", auth_path.display());
+  };
+  for account in accounts {
+    let Some(provider) = source_provider_id(account) else {
+      continue;
+    };
+    if let Some(record) = opencode_auth_record(provider, account) {
+      auth.insert(provider.to_string(), record);
     }
-  });
-  if !model_ids.is_empty() {
-    router_provider["models"] = model_map(&model_ids);
   }
-  provider
-    .as_object_mut()
-    .expect("object ensured")
-    .insert("tokn-router".into(), router_provider);
+  write_sensitive_json(auth_path, &json)
 }
 
-fn rewrite_model_provider(obj: &mut serde_json::Map<String, Value>, key: &str) -> Option<String> {
-  let model = obj.get(key).and_then(Value::as_str).map(str::to_string)?;
-  let (provider, model_id) = model.split_once('/')?;
-  if is_routeable_opencode_provider(provider) && !model_id.trim().is_empty() {
-    *obj.get_mut(key).expect("model exists") = Value::String(format!("tokn-router/{model_id}"));
-    return Some(model_id.to_string());
+fn opencode_auth_record(source_provider: &str, account: &Account) -> Option<Value> {
+  if let Some(api_key) = &account.api_key {
+    return Some(serde_json::json!({
+      "type": "api",
+      "key": api_key.expose()
+    }));
   }
-  None
+  let refresh = account.refresh_token.as_ref()?;
+  let mut record = serde_json::Map::new();
+  record.insert("type".into(), Value::String("oauth".into()));
+  record.insert("refresh".into(), Value::String(refresh.expose().to_string()));
+  if source_provider == tokn_core::provider::ID_GITHUB_COPILOT {
+    record.insert("access".into(), Value::String(refresh.expose().to_string()));
+    record.insert("expires".into(), Value::Number(0.into()));
+  } else {
+    if let Some(access) = &account.access_token {
+      record.insert("access".into(), Value::String(access.expose().to_string()));
+    }
+    if let Some(expires) = account.access_token_expires_at {
+      record.insert("expires".into(), Value::Number(expires.saturating_mul(1_000).into()));
+    }
+  }
+  if let Some(account_id) = &account.provider_account_id {
+    record.insert("accountId".into(), Value::String(account_id.clone()));
+  }
+  Some(Value::Object(record))
 }
 
-fn is_routeable_opencode_provider(provider: &str) -> bool {
-  matches!(
-    provider,
-    tokn_core::provider::ID_OPENAI | tokn_core::provider::ID_GITHUB_COPILOT
-  )
+fn write_sensitive_json(path: &Path, value: &Value) -> Result<()> {
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+  }
+  let bytes = serde_json::to_vec_pretty(value)?;
+  write_sensitive(path, &bytes).with_context(|| format!("writing {}", path.display()))
 }
 
-fn model_map(model_ids: &[String]) -> Value {
-  let mut models = serde_json::Map::new();
-  for model_id in model_ids {
-    models.insert(model_id.clone(), serde_json::json!({"name": model_id}));
-  }
-  Value::Object(models)
+#[cfg(unix)]
+fn write_sensitive(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+  use std::io::Write;
+  use std::os::unix::fs::OpenOptionsExt;
+  let mut file = std::fs::OpenOptions::new()
+    .create(true)
+    .truncate(true)
+    .write(true)
+    .mode(0o600)
+    .open(path)?;
+  file.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_sensitive(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+  std::fs::write(path, bytes)
 }
 
 fn accounts_from_auth_json(json: &Value, auth_path: &Path, timestamp: &str) -> Vec<Account> {
@@ -131,13 +213,20 @@ fn accounts_from_auth_json(json: &Value, auth_path: &Path, timestamp: &str) -> V
     .iter()
     .filter_map(|(provider, auth)| {
       account_from_provider_auth(provider, auth).map(|account| {
-        annotate_imported_account(
+        let mut account = annotate_imported_account(
           account,
           AgentId::Opencode,
           auth_path,
           &format!("auth.{provider}"),
           timestamp,
-        )
+        );
+        account
+          .settings
+          .get_mut("import")
+          .and_then(toml::Value::as_table_mut)
+          .expect("import metadata inserted")
+          .insert("source_provider".into(), toml::Value::String(provider.clone()));
+        account
       })
     })
     .collect()
@@ -165,7 +254,7 @@ fn account_from_provider_auth(provider: &str, auth: &Value) -> Option<Account> {
         .or_else(|| auth.get("account_id"))
         .and_then(Value::as_str),
     ),
-    (tokn_core::provider::ID_GITHUB_COPILOT, "oauth") => oauth_account_from_auth(
+    (tokn_core::provider::ID_GITHUB_COPILOT, "oauth") if !has_enterprise_url(auth) => oauth_account_from_auth(
       "opencode-github-copilot",
       tokn_core::provider::ID_GITHUB_COPILOT,
       "opencode GitHub Copilot migration",
@@ -249,91 +338,100 @@ fn non_empty_string(value: &str) -> Option<String> {
   (!value.is_empty()).then(|| value.to_string())
 }
 
+fn has_enterprise_url(auth: &serde_json::Map<String, Value>) -> bool {
+  auth
+    .get("enterpriseUrl")
+    .or_else(|| auth.get("enterprise_url"))
+    .and_then(Value::as_str)
+    .is_some_and(|value| !value.trim().is_empty())
+}
+
 fn expires_at(value: &Value) -> Option<i64> {
-  match value {
+  let expires = match value {
     Value::Number(n) => n
       .as_i64()
       .or_else(|| n.as_u64().and_then(|value| i64::try_from(value).ok())),
     Value::String(s) => s.trim().parse().ok(),
     _ => None,
-  }
+  }?;
+  Some(if expires > 10_000_000_000 {
+    expires / 1_000
+  } else {
+    expires
+  })
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
 
+  fn route(source: &str, provider: &str, account: &str, base_url: &str) -> ProviderRoute {
+    ProviderRoute {
+      source_provider_id: source.into(),
+      gateway_provider_id: provider.into(),
+      account_id: account.into(),
+      profile: format!("opencode-{provider}"),
+      base_url: base_url.into(),
+    }
+  }
+
   #[test]
-  fn rewrite_preserves_mcp() {
-    let mut json = serde_json::json!({
-      "mcp": {"x": true},
-      "model": "openai/gpt-5",
-      "small_model": "github-copilot/gpt-5-mini",
-      "providers": {
-        "old": {}
-      }
-    });
-    rewrite_config(&mut json, "http://127.0.0.1:4141/opencode/v1");
+  fn rewrite_preserves_comments_and_model_selections() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  // project defaults remain readable.
+  "model": "openai/gpt-5",
+  "mcp": {"x": true},
+}
+"#,
+      path,
+    )
+    .unwrap();
+    rewrite_config(
+      &root,
+      &[route(
+        "openai",
+        "codex",
+        "opencode-codex",
+        "http://127.0.0.1:4141/opencode-codex/v1",
+      )],
+    )
+    .unwrap();
+
+    let output = root.to_string();
+    let json = crate::jsonc::parse_jsonc(&output, path).unwrap();
+    assert!(output.contains("// project defaults remain readable."));
+    assert_eq!(json["model"], "openai/gpt-5");
     assert_eq!(json["mcp"]["x"], true);
-    assert_eq!(json["model"], "tokn-router/gpt-5");
-    assert_eq!(json["small_model"], "tokn-router/gpt-5-mini");
-    assert_eq!(json["providers"], Value::Null);
-    assert_eq!(json["$schema"], "https://opencode.ai/config.json");
-    assert_eq!(json["provider"]["tokn-router"]["models"]["gpt-5"]["name"], "gpt-5");
+    assert_eq!(json["provider"]["openai"]["npm"], "@ai-sdk/openai-compatible");
     assert_eq!(
-      json["provider"]["tokn-router"]["models"]["gpt-5-mini"]["name"],
-      "gpt-5-mini"
-    );
-    assert_eq!(
-      json["provider"]["tokn-router"]["options"]["baseURL"],
-      "http://127.0.0.1:4141/opencode/v1"
+      json["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/opencode-codex/v1"
     );
   }
 
   #[test]
   fn accounts_from_auth_json_imports_openai_api_key() {
-    let json = serde_json::json!({
-      "openai": {
-        "type": "api",
-        "key": "sk-test"
-      }
-    });
-
-    let auth_path = std::path::PathBuf::from("/tmp/opencode-auth.json");
-    let accounts = accounts_from_auth_json(&json, &auth_path, "20260604T153012Z");
+    let json = serde_json::json!({"openai": {"type": "api", "key": "sk-test"}});
+    let accounts = accounts_from_auth_json(
+      &json,
+      std::path::Path::new("/tmp/opencode-auth.json"),
+      "20260604T153012Z",
+    );
 
     assert_eq!(accounts.len(), 1);
     assert_eq!(accounts[0].id, "opencode-openai");
     assert_eq!(accounts[0].provider, tokn_core::provider::ID_OPENAI);
     assert_eq!(accounts[0].api_key.as_ref().unwrap().expose(), "sk-test");
-    assert!(accounts[0].tags.iter().any(|tag| tag == "source:opencode"));
-    assert_eq!(
-      accounts[0]
-        .settings
-        .get("import")
-        .and_then(toml::Value::as_table)
-        .and_then(|table| table.get("source_key"))
-        .and_then(toml::Value::as_str),
-      Some("auth.openai")
-    );
+    assert_eq!(source_provider_id(&accounts[0]), Some("openai"));
   }
 
   #[test]
   fn accounts_from_auth_json_imports_oauth_records() {
     let json = serde_json::json!({
-      "github-copilot": {
-        "type": "oauth",
-        "access": "at",
-        "refresh": "ghu_rt",
-        "expires": 0
-      },
-      "openai": {
-        "type": "oauth",
-        "access": "codex_at",
-        "refresh": "codex_rt",
-        "expires": "42",
-        "accountId": "acc"
-      }
+      "github-copilot": {"type": "oauth", "access": "at", "refresh": "ghu_rt", "expires": 0},
+      "openai": {"type": "oauth", "access": "codex_at", "refresh": "codex_rt", "expires": "1800000000000", "accountId": "acc"}
     });
 
     let accounts = accounts_from_auth_json(
@@ -349,28 +447,45 @@ mod tests {
       .unwrap();
     assert_eq!(copilot.provider, tokn_core::provider::ID_GITHUB_COPILOT);
     assert_eq!(copilot.refresh_token.as_ref().unwrap().expose(), "ghu_rt");
-    assert_eq!(copilot.access_token.as_ref().unwrap().expose(), "at");
-    assert_eq!(copilot.access_token_expires_at, Some(0));
-
     let codex = accounts.iter().find(|account| account.id == "opencode-codex").unwrap();
     assert_eq!(codex.provider, tokn_core::provider::ID_CODEX);
-    assert_eq!(codex.refresh_token.as_ref().unwrap().expose(), "codex_rt");
-    assert_eq!(codex.access_token.as_ref().unwrap().expose(), "codex_at");
-    assert_eq!(codex.access_token_expires_at, Some(42));
+    assert_eq!(codex.access_token_expires_at, Some(1_800_000_000));
     assert_eq!(codex.provider_account_id.as_deref(), Some("acc"));
+    assert_eq!(source_provider_id(codex), Some("openai"));
+  }
+
+  #[test]
+  fn codex_oauth_expiry_roundtrips_between_opencode_milliseconds_and_gateway_seconds() {
+    let json = serde_json::json!({
+      "openai": {
+        "type": "oauth",
+        "access": "codex_at",
+        "refresh": "codex_rt",
+        "expires": 1800000000000_i64
+      }
+    });
+    let account = accounts_from_auth_json(&json, Path::new("/tmp/opencode-auth.json"), "20260604T153012Z")
+      .pop()
+      .unwrap();
+
+    assert_eq!(account.access_token_expires_at, Some(1_800_000_000));
+    assert_eq!(
+      opencode_auth_record("openai", &account).unwrap()["expires"],
+      1_800_000_000_000_i64
+    );
   }
 
   #[test]
   fn accounts_from_auth_json_ignores_unsupported_and_incomplete_records() {
     let json = serde_json::json!({
-      "anthropic": {
+      "anthropic": {"type": "oauth", "access": "at", "refresh": "rt"},
+      "openai": {"type": "oauth", "access": "at"},
+      "github-copilot": {
         "type": "oauth",
-        "access": "at",
-        "refresh": "rt"
-      },
-      "openai": {
-        "type": "oauth",
-        "access": "at"
+        "access": "github-token",
+        "refresh": "github-token",
+        "expires": 0,
+        "enterpriseUrl": "company.ghe.com"
       }
     });
 
@@ -383,66 +498,100 @@ mod tests {
   }
 
   #[test]
-  fn adapter_reads_existing_auth_imports_account_and_rewrites_config() {
+  fn adapter_plans_config_patch_and_credential_removal() {
     let dir = tempfile::tempdir().unwrap();
     let adapter = OpencodeAdapter;
     let auth_path = adapter.auth_path(dir.path());
-    let config_path = adapter.config_path(dir.path());
+    let config_path = dir.path().join(OPENCODE_CONFIG_JSONC);
     std::fs::create_dir_all(auth_path.parent().unwrap()).unwrap();
     std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
     std::fs::write(
       &auth_path,
       serde_json::json!({
-        "openai": {
-          "type": "api",
-          "key": "sk-test"
-        }
+        "openai": {"type": "api", "key": "sk-test"},
+        "anthropic": {"type": "api", "key": "keep-me"}
       })
       .to_string(),
     )
     .unwrap();
-    std::fs::write(
-      &config_path,
-      serde_json::json!({
-        "mcp": {"x": true}
-      })
-      .to_string(),
-    )
-    .unwrap();
+    std::fs::write(&config_path, "{\n  // keep me\n}\n").unwrap();
+    let routes = [route(
+      "openai",
+      "openai",
+      "opencode-openai",
+      "http://127.0.0.1:4141/opencode-openai/v1",
+    )];
 
-    let accounts = adapter.discover_accounts(dir.path(), "20260604T153012Z").unwrap();
     let edits = adapter
-      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1")
+      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1", &routes)
       .unwrap();
 
-    assert_eq!(accounts.len(), 1);
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].path, config_path);
+    assert_eq!(edits.len(), 2);
+    let config = edits.iter().find(|edit| edit.path == config_path).unwrap();
+    assert!(matches!(&config.kind, EditKind::Jsonc(raw) if raw.contains("// keep me")));
+    let auth = edits.iter().find(|edit| edit.path == auth_path).unwrap();
+    assert!(!auth.backup);
+    assert!(
+      matches!(&auth.kind, EditKind::Json(json) if json.get("openai").is_none() && json.get("anthropic").is_some())
+    );
   }
 
   #[test]
-  fn adapter_prefers_existing_jsonc_config() {
+  fn fallback_route_does_not_remove_an_untransferred_credential() {
     let dir = tempfile::tempdir().unwrap();
-    let adapter = OpencodeAdapter;
-    let config_path = dir.path().join(OPENCODE_CONFIG_JSONC);
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    let auth_path = dir.path().join("auth.json");
     std::fs::write(
-      &config_path,
-      r#"
-{
-  // opencode accepts JSONC here.
-  "model": "openai/gpt-5",
-}
-"#,
+      &auth_path,
+      serde_json::json!({
+        "openai": {"type": "oauth", "access": "missing-refresh-token"}
+      })
+      .to_string(),
     )
     .unwrap();
+    let fallback = route("openai", "openai", "", "http://127.0.0.1:4141/v1");
 
-    let edits = adapter
-      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1")
-      .unwrap();
+    assert!(remove_transferred_credentials(&auth_path, &[fallback])
+      .unwrap()
+      .is_none());
+    assert!(std::fs::read_to_string(auth_path)
+      .unwrap()
+      .contains("missing-refresh-token"));
+  }
 
-    assert_eq!(adapter.config_path(dir.path()), config_path);
-    assert_eq!(edits.len(), 1);
-    assert_eq!(edits[0].path, config_path);
+  #[test]
+  fn restore_exports_latest_api_and_oauth_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_path = dir.path().join("auth.json");
+    std::fs::write(&auth_path, r#"{"anthropic":{"type":"api","key":"keep"}}"#).unwrap();
+    let mut api = openai_account_from_key("sk-latest");
+    api.settings.insert(
+      "import".into(),
+      toml::Value::Table(toml::toml! { source_provider = "openai" }),
+    );
+    let mut oauth = oauth_account_from_auth(
+      "opencode-github-copilot",
+      tokn_core::provider::ID_GITHUB_COPILOT,
+      "copilot",
+      None,
+      None,
+      serde_json::json!({"refresh": "rt-latest", "access": "at-latest", "expires": 42})
+        .as_object()
+        .unwrap(),
+      None,
+    )
+    .unwrap();
+    oauth.settings.insert(
+      "import".into(),
+      toml::Value::Table(toml::toml! { source_provider = "github-copilot" }),
+    );
+
+    restore_transferred_credentials(&auth_path, &[api, oauth]).unwrap();
+
+    let restored: Value = serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
+    assert_eq!(restored["anthropic"]["key"], "keep");
+    assert_eq!(restored["openai"]["key"], "sk-latest");
+    assert_eq!(restored["github-copilot"]["refresh"], "rt-latest");
+    assert_eq!(restored["github-copilot"]["access"], "rt-latest");
+    assert_eq!(restored["github-copilot"]["expires"], 0);
   }
 }

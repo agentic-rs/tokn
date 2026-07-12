@@ -1,6 +1,6 @@
-use crate::adapter::{adapter_for, supported_agents};
-use crate::jsonc::read_json_or_jsonc;
-use crate::reconcile::imported_account_ids;
+use crate::adapter::{adapter_for, source_provider_id, supported_agents};
+use crate::jsonc::read_jsonc;
+use crate::reconcile::{imported_account_ids, is_source_managed_account};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokn_auth::AuthStore;
@@ -63,7 +63,7 @@ fn status_for_agent(cfg: &Config, store: &AuthStore, home: &Path, agent: AgentId
     let auth_path = adapter.auth_path(home);
     let config_path = adapter.config_path(home);
     let detected = auth_path.exists() || config_path.exists();
-    let drifted = config_points_at_gateway(&config_path, &agent, cfg);
+    let drifted = config_points_at_gateway(&config_path, &agent, cfg, store);
     (auth_path, config_path, detected, drifted)
   } else {
     let base = home.join(format!(".unsupported/{}", agent.as_str()));
@@ -87,7 +87,7 @@ fn status_for_agent(cfg: &Config, store: &AuthStore, home: &Path, agent: AgentId
   })
 }
 
-fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -> bool {
+fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config, store: &AuthStore) -> bool {
   if !config_path.exists() {
     return false;
   }
@@ -97,22 +97,43 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -
   };
   let expected = match binding.profile.as_deref() {
     Some(profile) => format!("http://{}:{}/{profile}/v1", cfg.server.host, cfg.server.port),
-    None => default_base,
+    None => default_base.clone(),
   };
   match agent {
-    AgentId::Opencode => read_json_or_jsonc(config_path)
-      .ok()
-      .and_then(|json| {
-        json
-          .get("provider")?
-          .get("tokn-router")?
-          .get("options")?
-          .get("baseURL")?
-          .as_str()
-          .map(str::to_string)
+    AgentId::Opencode => {
+      let Ok(json) = read_jsonc(config_path) else {
+        return false;
+      };
+      let accounts = binding
+        .profile
+        .as_deref()
+        .and_then(|profile| cfg.profiles.get(profile))
+        .and_then(|profile| profile.accounts.as_deref())
+        .into_iter()
+        .flatten()
+        .filter_map(|id| store.get(id))
+        .filter(|account| is_source_managed_account(account, agent))
+        .collect::<Vec<_>>();
+      if accounts.is_empty() {
+        return provider_base_url(&json, tokn_core::provider::ID_OPENAI) == Some(expected.as_str());
+      }
+      accounts.iter().all(|account| {
+        let Some(source_provider) = source_provider_id(account) else {
+          return false;
+        };
+        let expected = binding
+          .profile
+          .as_deref()
+          .map(|profile| {
+            format!(
+              "http://{}:{}/{profile}-{}/v1",
+              cfg.server.host, cfg.server.port, account.provider
+            )
+          })
+          .unwrap_or_else(|| default_base.clone());
+        provider_base_url(&json, source_provider) == Some(expected.as_str())
       })
-      .map(|value| value == expected)
-      .unwrap_or(false),
+    }
     AgentId::CodexCli => std::fs::read_to_string(config_path)
       .ok()
       .and_then(|raw| raw.parse::<toml_edit::DocumentMut>().ok())
@@ -125,6 +146,15 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config) -
       .unwrap_or(false),
     _ => false,
   }
+}
+
+fn provider_base_url<'a>(json: &'a serde_json::Value, provider: &str) -> Option<&'a str> {
+  json
+    .get("provider")?
+    .get(provider)?
+    .get("options")?
+    .get("baseURL")?
+    .as_str()
 }
 
 fn resolve_home(agent_home: Option<&Path>) -> Result<PathBuf> {
@@ -190,6 +220,7 @@ sync = true
 [profiles.work]
 agent_id = "opencode"
 providers = ["openai"]
+accounts = ["opencode-openai"]
 "#,
     )
     .unwrap();
@@ -201,9 +232,9 @@ providers = ["openai"]
 {
   // opencode may store this as JSONC.
   "provider": {
-    "tokn-router": {
+    "openai": {
       "options": {
-        "baseURL": "http://127.0.0.1:4141/work/v1",
+        "baseURL": "http://127.0.0.1:4141/work-openai/v1",
       },
     },
   },
@@ -216,8 +247,19 @@ providers = ["openai"]
     account.tags.push("source:opencode".into());
     let mut import = toml::Table::new();
     import.insert("source_agent".into(), toml::Value::String("opencode".into()));
+    import.insert("source_provider".into(), toml::Value::String("openai".into()));
     account.settings.insert("import".into(), toml::Value::Table(import));
     store.upsert(account);
+    let mut historical = sample_account("opencode-codex", "codex");
+    historical.enabled = false;
+    historical.tags.push("source:opencode".into());
+    let mut historical_import = toml::Table::new();
+    historical_import.insert("source_agent".into(), toml::Value::String("opencode".into()));
+    historical_import.insert("source_provider".into(), toml::Value::String("openai".into()));
+    historical
+      .settings
+      .insert("import".into(), toml::Value::Table(historical_import));
+    store.upsert(historical);
     store.save().unwrap();
 
     let statuses = list_agents(Some(&config_path), Some(&auth_path), Some(&home)).unwrap();
@@ -229,7 +271,7 @@ providers = ["openai"]
     assert_eq!(opencode.config_path, opencode_config);
     assert!(opencode.drifted);
     assert_eq!(opencode.binding.as_ref().unwrap().profile.as_deref(), Some("work"));
-    assert_eq!(opencode.imported_account_ids, vec!["opencode-openai"]);
+    assert_eq!(opencode.imported_account_ids, vec!["opencode-codex", "opencode-openai"]);
   }
 
   #[test]
