@@ -110,7 +110,7 @@ fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) ->
   };
   let providers = routes
     .iter()
-    .filter(|route| !route.account_id.is_empty())
+    .filter(|route| route.transfer_source_auth)
     .map(|route| route.source_provider_id.as_str())
     .collect::<BTreeSet<_>>();
   let mut changed = false;
@@ -140,24 +140,27 @@ fn restore_transferred_credentials(auth_path: &Path, accounts: &[Account]) -> Re
     bail!("{} must contain a JSON object", auth_path.display());
   };
   for account in accounts {
-    let Some(provider) = source_provider_id(account) else {
+    let provider = source_provider_id(account)
+      .with_context(|| format!("transferred account '{}' is missing its OpenCode provider", account.id))?;
+    if auth.contains_key(provider) {
       continue;
-    };
-    if let Some(record) = opencode_auth_record(provider, account) {
-      auth.insert(provider.to_string(), record);
     }
+    auth.insert(provider.to_string(), opencode_auth_record(provider, account)?);
   }
   write_sensitive_json(auth_path, &json)
 }
 
-fn opencode_auth_record(source_provider: &str, account: &Account) -> Option<Value> {
+fn opencode_auth_record(source_provider: &str, account: &Account) -> Result<Value> {
   if let Some(api_key) = &account.api_key {
-    return Some(serde_json::json!({
+    return Ok(serde_json::json!({
       "type": "api",
       "key": api_key.expose()
     }));
   }
-  let refresh = account.refresh_token.as_ref()?;
+  let refresh = account
+    .refresh_token
+    .as_ref()
+    .with_context(|| format!("transferred account '{}' has no refresh token", account.id))?;
   let mut record = serde_json::Map::new();
   record.insert("type".into(), Value::String("oauth".into()));
   record.insert("refresh".into(), Value::String(refresh.expose().to_string()));
@@ -165,17 +168,26 @@ fn opencode_auth_record(source_provider: &str, account: &Account) -> Option<Valu
     record.insert("access".into(), Value::String(refresh.expose().to_string()));
     record.insert("expires".into(), Value::Number(0.into()));
   } else {
-    if let Some(access) = &account.access_token {
-      record.insert("access".into(), Value::String(access.expose().to_string()));
+    let access = account
+      .access_token
+      .as_ref()
+      .with_context(|| format!("transferred account '{}' has no access token", account.id))?;
+    let expires = account
+      .access_token_expires_at
+      .with_context(|| format!("transferred account '{}' has no access-token expiry", account.id))?;
+    if expires < 0 {
+      bail!(
+        "transferred account '{}' has a negative access-token expiry",
+        account.id
+      );
     }
-    if let Some(expires) = account.access_token_expires_at {
-      record.insert("expires".into(), Value::Number(expires.saturating_mul(1_000).into()));
-    }
+    record.insert("access".into(), Value::String(access.expose().to_string()));
+    record.insert("expires".into(), Value::Number(expires.saturating_mul(1_000).into()));
   }
   if let Some(account_id) = &account.provider_account_id {
     record.insert("accountId".into(), Value::String(account_id.clone()));
   }
-  Some(Value::Object(record))
+  Ok(Value::Object(record))
 }
 
 fn write_sensitive_json(path: &Path, value: &Value) -> Result<()> {
@@ -189,13 +201,14 @@ fn write_sensitive_json(path: &Path, value: &Value) -> Result<()> {
 #[cfg(unix)]
 fn write_sensitive(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
   use std::io::Write;
-  use std::os::unix::fs::OpenOptionsExt;
+  use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
   let mut file = std::fs::OpenOptions::new()
     .create(true)
     .truncate(true)
     .write(true)
     .mode(0o600)
     .open(path)?;
+  file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
   file.write_all(bytes)
 }
 
@@ -306,8 +319,8 @@ fn oauth_account_from_auth(
   if refresh.is_empty() {
     return None;
   }
-  let access = auth.get("access").and_then(Value::as_str).and_then(non_empty_string);
-  let expires = auth.get("expires").and_then(expires_at);
+  let access = auth.get("access").and_then(Value::as_str).and_then(non_empty_string)?;
+  let expires = auth.get("expires").and_then(expires_at)?;
   Some(Account {
     id: id.into(),
     provider: provider.into(),
@@ -321,8 +334,8 @@ fn oauth_account_from_auth(
     username: None,
     api_key: None,
     api_key_expires_at: None,
-    access_token: access.map(Secret::new),
-    access_token_expires_at: expires,
+    access_token: Some(Secret::new(access)),
+    access_token_expires_at: Some(expires),
     id_token: None,
     refresh_token: Some(Secret::new(refresh.to_string())),
     provider_account_id: provider_account_id.and_then(non_empty_string),
@@ -354,6 +367,9 @@ fn expires_at(value: &Value) -> Option<i64> {
     Value::String(s) => s.trim().parse().ok(),
     _ => None,
   }?;
+  if expires < 0 {
+    return None;
+  }
   Some(if expires > 10_000_000_000 {
     expires / 1_000
   } else {
@@ -372,6 +388,7 @@ mod tests {
       account_id: account.into(),
       profile: format!("opencode-{provider}"),
       base_url: base_url.into(),
+      transfer_source_auth: true,
     }
   }
 
@@ -498,6 +515,17 @@ mod tests {
   }
 
   #[test]
+  fn oauth_import_requires_the_complete_opencode_auth_shape() {
+    for auth in [
+      serde_json::json!({"type": "oauth", "refresh": "rt", "expires": 1_800_000_000_000_i64}),
+      serde_json::json!({"type": "oauth", "refresh": "rt", "access": "at"}),
+      serde_json::json!({"type": "oauth", "refresh": "rt", "access": "at", "expires": -1}),
+    ] {
+      assert!(account_from_provider_auth(tokn_core::provider::ID_OPENAI, &auth).is_none());
+    }
+  }
+
+  #[test]
   fn adapter_plans_config_patch_and_credential_removal() {
     let dir = tempfile::tempdir().unwrap();
     let adapter = OpencodeAdapter;
@@ -537,7 +565,7 @@ mod tests {
   }
 
   #[test]
-  fn fallback_route_does_not_remove_an_untransferred_credential() {
+  fn retained_gateway_route_does_not_remove_an_untransferred_credential() {
     let dir = tempfile::tempdir().unwrap();
     let auth_path = dir.path().join("auth.json");
     std::fs::write(
@@ -548,9 +576,15 @@ mod tests {
       .to_string(),
     )
     .unwrap();
-    let fallback = route("openai", "openai", "", "http://127.0.0.1:4141/v1");
+    let mut retained = route(
+      "openai",
+      "openai",
+      "opencode-openai",
+      "http://127.0.0.1:4141/opencode-openai/v1",
+    );
+    retained.transfer_source_auth = false;
 
-    assert!(remove_transferred_credentials(&auth_path, &[fallback])
+    assert!(remove_transferred_credentials(&auth_path, &[retained])
       .unwrap()
       .is_none());
     assert!(std::fs::read_to_string(auth_path)
@@ -593,5 +627,47 @@ mod tests {
     assert_eq!(restored["github-copilot"]["refresh"], "rt-latest");
     assert_eq!(restored["github-copilot"]["access"], "rt-latest");
     assert_eq!(restored["github-copilot"]["expires"], 0);
+  }
+
+  #[test]
+  fn restore_preserves_auth_recreated_while_linked() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_path = dir.path().join("auth.json");
+    std::fs::write(
+      &auth_path,
+      serde_json::to_vec_pretty(&serde_json::json!({
+        "github-copilot": {
+          "type": "oauth",
+          "refresh": "enterprise-token",
+          "access": "enterprise-token",
+          "expires": 0,
+          "enterpriseUrl": "company.ghe.com"
+        }
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+    let mut account = oauth_account_from_auth(
+      "opencode-github-copilot",
+      tokn_core::provider::ID_GITHUB_COPILOT,
+      "copilot",
+      None,
+      None,
+      serde_json::json!({"refresh": "gateway-token", "access": "gateway-token", "expires": 0})
+        .as_object()
+        .unwrap(),
+      None,
+    )
+    .unwrap();
+    account.settings.insert(
+      "import".into(),
+      toml::Value::Table(toml::toml! { source_provider = "github-copilot" }),
+    );
+
+    restore_transferred_credentials(&auth_path, &[account]).unwrap();
+
+    let restored: Value = serde_json::from_str(&std::fs::read_to_string(auth_path).unwrap()).unwrap();
+    assert_eq!(restored["github-copilot"]["refresh"], "enterprise-token");
+    assert_eq!(restored["github-copilot"]["enterpriseUrl"], "company.ghe.com");
   }
 }

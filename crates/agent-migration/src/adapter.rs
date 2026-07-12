@@ -17,6 +17,8 @@ pub(crate) struct ProviderRoute {
   pub account_id: String,
   pub profile: String,
   pub base_url: String,
+  #[serde(default)]
+  pub transfer_source_auth: bool,
 }
 
 pub(crate) fn source_provider_id(account: &Account) -> Option<&str> {

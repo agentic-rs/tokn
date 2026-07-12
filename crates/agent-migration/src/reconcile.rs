@@ -125,6 +125,11 @@ fn plan_reconcile_with_gateway_auth_path(
   let timestamp = timestamp()?;
   let home = resolve_home(request.agent_home)?;
   let discovered_accounts = adapter.discover_accounts(&home, &timestamp)?;
+  let transferred_source_providers = discovered_accounts
+    .iter()
+    .filter_map(source_provider_id)
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
   let imported_accounts = if adapter.transfers_credentials() {
     let store = AuthStore::load(Some(&gateway_auth_path), Some(&gateway_config_path))?;
     merge_transferred_accounts(&store, &request.agent, discovered_accounts)
@@ -147,8 +152,10 @@ fn plan_reconcile_with_gateway_auth_path(
     &cfg,
     binding_profile.as_deref(),
     &imported_accounts,
+    &transferred_source_providers,
     adapter.default_provider_id(),
   );
+  validate_provider_route_profiles(&cfg, &request.agent, &provider_routes)?;
   let edits = adapter.rewrite_config(&home, &target_base_url, &provider_routes)?;
   Ok(ReconcilePlan {
     agent: request.agent,
@@ -193,7 +200,9 @@ pub fn unlink(request: UnlinkRequest) -> Result<UnlinkReport> {
   for (_, current) in &chain {
     restore_manifest_files(current, &mut actions)?;
   }
-  for (path, current) in &mut chain {
+  // Keep the latest manifest active until every ancestor is marked. A retry
+  // can then finish cleanly if writing one of the older manifests fails.
+  for (path, current) in chain.iter_mut().rev() {
     current.unlinked = true;
     manifest::write_manifest(path, current)?;
   }
@@ -483,6 +492,7 @@ fn provider_routes(
   cfg: &Config,
   binding_profile: Option<&str>,
   accounts: &[Account],
+  transferred_source_providers: &BTreeSet<String>,
   default_provider_id: &str,
 ) -> Vec<ProviderRoute> {
   if accounts.is_empty() {
@@ -492,6 +502,7 @@ fn provider_routes(
       account_id: String::new(),
       profile: binding_profile.unwrap_or_default().to_string(),
       base_url: gateway_profile_base_url(cfg, binding_profile),
+      transfer_source_auth: false,
     }];
   }
 
@@ -512,10 +523,29 @@ fn provider_routes(
         account_id: account.id.clone(),
         base_url: gateway_profile_base_url(cfg, Some(&profile)),
         profile,
+        transfer_source_auth: transferred_source_providers.contains(source_provider_id),
       },
     );
   }
   routes.into_values().collect()
+}
+
+fn validate_provider_route_profiles(cfg: &Config, agent: &AgentId, routes: &[ProviderRoute]) -> Result<()> {
+  for route in routes {
+    if route.account_id.is_empty() || route.profile.is_empty() {
+      continue;
+    }
+    if let Some(existing) = cfg.profiles.get(&route.profile) {
+      if existing.agent_id.as_ref() != Some(agent) {
+        bail!(
+          "generated profile '{}' already exists and is not owned by {}",
+          route.profile,
+          agent
+        );
+      }
+    }
+  }
+  Ok(())
 }
 
 pub(crate) fn imported_account_ids(store: &AuthStore, agent: &AgentId) -> Vec<String> {
@@ -616,7 +646,7 @@ fn upsert_agent_and_profiles(
       upsert_profile_item(doc, profile, agent, mode, accounts, default_provider_id);
       if !provider_routes.is_empty() {
         remove_agent_profiles(doc, profile, agent);
-        upsert_provider_route_profiles(doc, agent, mode, provider_routes);
+        upsert_provider_route_profiles(doc, agent, mode, provider_routes)?;
       } else if mode == RouteMode::Switch {
         upsert_switch_profiles(doc, profile, agent, accounts);
       } else {
@@ -704,11 +734,24 @@ fn upsert_provider_route_profiles(
   agent: &AgentId,
   mode: RouteMode,
   routes: &[ProviderRoute],
-) {
+) -> Result<()> {
   let profiles = doc["profiles"].or_insert(toml_edit::table());
   for route in routes {
     if route.account_id.is_empty() || route.profile.is_empty() {
       continue;
+    }
+    if let Some(existing) = profiles.get(route.profile.as_str()) {
+      let owner = existing
+        .as_table_like()
+        .and_then(|profile| profile.get("agent_id"))
+        .and_then(toml_edit::Item::as_str);
+      if owner != Some(agent.as_str()) {
+        bail!(
+          "generated profile '{}' already exists and is not owned by {}",
+          route.profile,
+          agent
+        );
+      }
     }
     let item = profiles[route.profile.as_str()].or_insert(toml_edit::table());
     item["mode"] = toml_edit::value(route_mode_as_str(mode));
@@ -716,6 +759,7 @@ fn upsert_provider_route_profiles(
     item["providers"] = array_value(std::slice::from_ref(&route.gateway_provider_id));
     item["accounts"] = array_value(std::slice::from_ref(&route.account_id));
   }
+  Ok(())
 }
 
 fn remove_materialized_profile(doc: &mut toml_edit::DocumentMut, profile: &str, agent: &AgentId) {
@@ -1010,6 +1054,39 @@ port = 4141
   }
 
   #[test]
+  fn provider_route_profiles_reject_unowned_name_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = r#"[profiles.opencode-openai]
+providers = ["anthropic"]
+"#;
+    std::fs::write(&path, original).unwrap();
+    let account = sample_account("opencode-openai", tokn_core::provider::ID_OPENAI);
+    let routes = [ProviderRoute {
+      source_provider_id: "openai".into(),
+      gateway_provider_id: tokn_core::provider::ID_OPENAI.into(),
+      account_id: account.id.clone(),
+      profile: "opencode-openai".into(),
+      base_url: "http://127.0.0.1:4141/opencode-openai/v1".into(),
+      transfer_source_auth: true,
+    }];
+
+    let error = upsert_agent_and_profiles(
+      &path,
+      &AgentId::Opencode,
+      Some("opencode"),
+      RouteMode::Route,
+      &[account],
+      &routes,
+      tokn_core::provider::ID_OPENAI,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not owned by opencode"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+  }
+
+  #[test]
   fn upsert_agent_and_profiles_respects_switch_mode_with_synthetic_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -1288,6 +1365,10 @@ providers = ["anthropic"]
     first_plan.timestamp = "20260604T153012Z".into();
     assert_eq!(first_plan.imported_accounts.len(), 2);
     assert_eq!(first_plan.provider_routes.len(), 2);
+    assert!(first_plan
+      .provider_routes
+      .iter()
+      .all(|route| route.transfer_source_auth));
     apply_reconcile_to_manifest_path(first_plan, first_manifest_path.clone()).unwrap();
 
     let linked_auth: Value = serde_json::from_str(&std::fs::read_to_string(&opencode_auth_path).unwrap()).unwrap();
@@ -1349,6 +1430,10 @@ providers = ["anthropic"]
     second_plan.previous_manifest = Some(first_manifest_path.clone());
     assert_eq!(second_plan.imported_accounts.len(), 2);
     assert!(second_plan.imported_accounts.iter().all(|account| account.enabled));
+    assert!(second_plan
+      .provider_routes
+      .iter()
+      .all(|route| !route.transfer_source_auth));
     apply_reconcile_to_manifest_path(second_plan, second_manifest_path.clone()).unwrap();
 
     let synced_store = AuthStore::load(Some(&gateway_auth_path), None).unwrap();
