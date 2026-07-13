@@ -444,7 +444,7 @@ async fn add(cfg_path: Option<PathBuf>, args: AddArgs) -> Result<()> {
   let account = crate::cli::onboarding::interactive_add_account(&client, args.provider, args.id).await?;
   let id = account.id.clone();
   let provider = account.provider.clone();
-  store.upsert(account);
+  store.upsert_in_main(account)?;
   store.save()?;
   tracing::info!(account = %id, %provider, path = %store.path().display(), "account added");
   println!("Saved account '{id}' ({provider}) to {}", store.path().display());

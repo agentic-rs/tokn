@@ -46,7 +46,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: LoginArgs) -> Result<()> {
 
   let id = account.id.clone();
   let provider = account.provider.clone();
-  store.upsert(account);
+  store.upsert_in_main(account)?;
   store.save()?;
   tracing::info!(account = %id, %provider, path = %store.path().display(), "account saved");
   println!("Saved account '{id}' to {}", store.path().display());

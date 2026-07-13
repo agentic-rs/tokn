@@ -86,7 +86,9 @@ export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
 Default files live under `~/.tokn/router/`:
 
 - `config.toml`: runtime config.
-- `auth.yaml`: stored account credentials.
+- `config.d/`: non-secret, agent-owned binding and profile overlays.
+- `auth.yaml`: user-managed and shared account credentials.
+- `auth.d/`: credential-only fragments owned by linked agents.
 - `usage.db`: usage summaries.
 - `sessions.db`: session affinity data.
 - `requests/`: archived request bodies.
@@ -222,8 +224,11 @@ credential kind, for example `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
 Provider ids are canonical config values. Z.ai and Zhipu coding-plan ids use
 coding-plan upstream paths; the non-coding ids use the regular PAAS paths.
 
-Per-account `base_url` can override the provider default. Account records live
-in `auth.yaml`; the CLI normally writes them for you.
+Per-account `base_url` can override the provider default. Manual account
+commands write account records to `auth.yaml`; linked agents keep transferred
+credentials in their own `auth.d/<agent>.yaml` fragment. The gateway loads both
+locations as one account pool, while preserving the file that owns each account
+when credentials are refreshed or removed.
 
 ```yaml
 version: 1
@@ -273,16 +278,18 @@ tokn-gateway smoke provider|model|send ...
 Route modes are `passthrough`, `switch`, `exact`, `route`, and `fuzzy`.
 
 `agent link` writes its binding and generated profile to
-`config.d/<agent>.toml`, so the primary config remains untouched and the
-agent-specific subset can be backed up and restored independently. In
-`--use-main-accounts` mode, OpenCode keeps its local credentials unchanged and
-routes the selected provider namespaces through the gateway's existing account
-pool. `--source-provider` is repeatable and defaults to `openai`; raw
-`passthrough` and `switch` links require a target `--provider` (or a configured
-default provider) that supports OpenCode's Chat Completions endpoint. Codex CLI
-does not yet support main-account links because its credential bootstrap would
-need to be changed. To replace an existing imported agent link with a
-main-account link, unlink it first so its local credentials are restored.
+`config.d/<agent>.toml`, so the primary config remains untouched. When a normal
+agent-owned link transfers credentials, its matching `auth.d/<agent>.yaml`
+fragment forms a separately backed up and restored credential bundle; the shared
+root `auth.yaml` stays unchanged. `--use-main-accounts` creates no auth fragment:
+OpenCode keeps its local credentials unchanged and routes selected provider
+namespaces through the gateway's existing account pool. `--source-provider` is
+repeatable and defaults to `openai`; raw `passthrough` and `switch` links require
+a target `--provider` (or a configured default provider) that supports
+OpenCode's Chat Completions endpoint. Codex CLI does not yet support
+main-account links because its credential bootstrap would need to be changed.
+To move a pre-`auth.d` imported link, unlink it first so its local credentials
+are restored, then link it again.
 
 ## Proxy Mode
 

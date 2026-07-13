@@ -331,10 +331,13 @@ fn print_plan(kind: &str, plan: &ReconcilePlan) {
     "gateway_config_fragment: {}",
     plan.gateway_config_fragment_path.display()
   );
-  if plan.account_source == AgentAccountSource::Agent {
-    println!("gateway_auth: {}", plan.gateway_auth_path.display());
+  if let Some(auth_shard) = &plan.gateway_auth_shard_path {
+    println!("gateway_auth_root: unchanged");
+    println!("gateway_auth_fragment: {}", auth_shard.display());
   } else {
     println!("gateway_auth: unchanged");
+  }
+  if plan.account_source == AgentAccountSource::Main {
     print_string_list("source_providers", &plan.source_provider_ids);
   }
   print_string_list(

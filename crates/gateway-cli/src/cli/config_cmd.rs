@@ -332,7 +332,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
       let source = account_source_from_spec(&spec, false)?;
       let account =
         crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
-      store.upsert(account);
+      store.upsert_in_main(account)?;
     }
     cfg.save(path)?;
     store.save()?;
@@ -346,7 +346,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
   let mut upserted = 0usize;
   loop {
     let account = crate::cli::onboarding::interactive_add_account(&client, None, None).await?;
-    store.upsert(account);
+    store.upsert_in_main(account)?;
     upserted += 1;
     let more = Confirm::new("Add another account?")
       .with_default(false)

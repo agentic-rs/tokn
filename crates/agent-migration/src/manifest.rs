@@ -15,6 +15,11 @@ pub struct MigrationManifest {
   pub target_base_url: String,
   #[serde(default)]
   pub gateway_auth_path: Option<PathBuf>,
+  /// Agent-owned credential shard within the gateway auth store. Older
+  /// manifests stored imported credentials directly in `gateway_auth_path`,
+  /// so the absence of this field retains that restore behavior.
+  #[serde(default)]
+  pub gateway_auth_shard_path: Option<PathBuf>,
   #[serde(default)]
   pub agent_auth_path: Option<PathBuf>,
   #[serde(default)]
@@ -127,6 +132,99 @@ pub(crate) fn backup_path_for(path: &Path, timestamp: &str, files: &mut Vec<File
   Ok(())
 }
 
+/// Back up a credential file without leaving a world-readable token copy.
+/// Generic migration backups preserve their original permissions, but auth
+/// shards are always secrets and should be private even when their source was
+/// accidentally created with a broader mode.
+pub(crate) fn backup_sensitive_path_for(path: &Path, timestamp: &str, files: &mut Vec<FileBackup>) -> Result<()> {
+  if files.iter().any(|file| file.original == path) {
+    return Ok(());
+  }
+  let existed = path.exists();
+  let backup = if existed {
+    let backup = adjacent_backup_path(path, timestamp)?;
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    write_private_file(&backup, &bytes)?;
+    Some(backup)
+  } else {
+    None
+  };
+  files.push(FileBackup {
+    original: path.to_path_buf(),
+    backup,
+    existed,
+    created_by_migration: false,
+  });
+  Ok(())
+}
+
+pub(crate) fn restore_sensitive_path_from_backup(backup: &Path, destination: &Path) -> Result<()> {
+  let bytes = std::fs::read(backup).with_context(|| format!("reading {}", backup.display()))?;
+  write_private_file(destination, &bytes)
+}
+
+#[cfg(unix)]
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+  use std::io::Write;
+  use std::os::unix::fs::OpenOptionsExt;
+  use std::sync::atomic::{AtomicU64, Ordering};
+
+  static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
+
+  let parent = path
+    .parent()
+    .ok_or_else(|| anyhow!("cannot write path without parent: {}", path.display()))?;
+  std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+  let file_name = path
+    .file_name()
+    .and_then(|name| name.to_str())
+    .ok_or_else(|| anyhow!("cannot write path without file name: {}", path.display()))?;
+
+  for _ in 0..16 {
+    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{file_name}.tokn-{:#x}-{sequence}.tmp", std::process::id()));
+    let file = match std::fs::OpenOptions::new()
+      .create_new(true)
+      .write(true)
+      .mode(0o600)
+      .open(&temporary)
+    {
+      Ok(file) => file,
+      Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+      Err(error) => {
+        return Err(error).with_context(|| format!("creating private temporary file {}", temporary.display()));
+      }
+    };
+    let result = (|| -> Result<()> {
+      let mut file = file;
+      file
+        .write_all(bytes)
+        .with_context(|| format!("writing private temporary file {}", temporary.display()))?;
+      file
+        .sync_all()
+        .with_context(|| format!("syncing private temporary file {}", temporary.display()))?;
+      drop(file);
+      std::fs::rename(&temporary, path)
+        .with_context(|| format!("replacing {} with private temporary file", path.display()))?;
+      Ok(())
+    })();
+    if result.is_err() {
+      let _ = std::fs::remove_file(&temporary);
+    }
+    return result;
+  }
+  bail!("could not allocate a private temporary file for {}", path.display())
+}
+
+#[cfg(not(unix))]
+fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+  if let Some(parent) = path.parent() {
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+  }
+  std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+  Ok(())
+}
+
 pub(crate) fn mark_created(files: &mut [FileBackup], path: &Path, existed: bool) {
   if !existed {
     if let Some(file) = files.iter_mut().find(|file| file.original == path) {
@@ -201,6 +299,46 @@ mod tests {
     assert_eq!(backup, &dir.path().join("auth.json.bak.20260604T153012Z"));
     assert_eq!(std::fs::read_to_string(backup).unwrap(), "original");
     assert!(files[0].existed);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn sensitive_backup_is_private_even_when_source_is_not() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("auth.d/opencode.yaml");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "secret").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let mut files = Vec::new();
+
+    backup_sensitive_path_for(&path, "20260604T153012Z", &mut files).unwrap();
+
+    let backup = files[0].backup.as_ref().unwrap();
+    assert_eq!(std::fs::metadata(backup).unwrap().permissions().mode() & 0o777, 0o600);
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn sensitive_restore_replaces_destination_with_private_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let backup = dir.path().join("opencode.yaml.bak");
+    let destination = dir.path().join("auth.d/opencode.yaml");
+    std::fs::write(&backup, "secret").unwrap();
+    std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    std::fs::write(&destination, "old").unwrap();
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    restore_sensitive_path_from_backup(&backup, &destination).unwrap();
+
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), "secret");
+    assert_eq!(
+      std::fs::metadata(destination).unwrap().permissions().mode() & 0o777,
+      0o600
+    );
   }
 
   #[test]
