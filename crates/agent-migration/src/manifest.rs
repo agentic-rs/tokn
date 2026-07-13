@@ -1,3 +1,4 @@
+use crate::adapter::ProviderRoute;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -12,6 +13,18 @@ pub struct MigrationManifest {
   pub timestamp: String,
   pub profile: Option<String>,
   pub target_base_url: String,
+  #[serde(default)]
+  pub gateway_auth_path: Option<PathBuf>,
+  #[serde(default)]
+  pub agent_auth_path: Option<PathBuf>,
+  #[serde(default)]
+  pub provider_routes: Vec<ProviderRoute>,
+  #[serde(default)]
+  pub previous_manifest: Option<PathBuf>,
+  #[serde(default)]
+  pub unlinked: bool,
+  #[serde(default)]
+  pub credentials_handoff_complete: bool,
   pub imported_account_ids: Vec<String>,
   pub files: Vec<FileBackup>,
 }
@@ -57,6 +70,10 @@ pub(crate) fn resolve_manifest(agent: &AgentId, backup_id: Option<&str>) -> Resu
     bail!("backup manifest not found: {id}");
   }
 
+  latest_active_manifest(agent)?.ok_or_else(|| anyhow!("no active migration manifest found for {}", agent.as_str()))
+}
+
+pub(crate) fn latest_active_manifest(agent: &AgentId) -> Result<Option<PathBuf>> {
   let dir = manifest_dir()?;
   let suffix = format!("-{}.json", agent.as_str());
   let mut candidates = Vec::new();
@@ -75,9 +92,18 @@ pub(crate) fn resolve_manifest(agent: &AgentId, backup_id: Option<&str>) -> Resu
     }
   }
   candidates.sort();
-  candidates
-    .pop()
-    .ok_or_else(|| anyhow!("no migration manifest found for {}", agent.as_str()))
+  for path in candidates.into_iter().rev() {
+    let manifest = read_manifest(&path)?;
+    if manifest.completed && !manifest.unlinked {
+      return Ok(Some(path));
+    }
+  }
+  Ok(None)
+}
+
+pub(crate) fn read_manifest(path: &Path) -> Result<MigrationManifest> {
+  let raw = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+  serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
 }
 
 pub(crate) fn backup_path_for(path: &Path, timestamp: &str, files: &mut Vec<FileBackup>) -> Result<()> {

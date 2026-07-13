@@ -1,4 +1,4 @@
-use crate::adapter::adapter_for;
+use crate::adapter::{adapter_for, source_provider_id, ProviderRoute};
 use crate::manifest::{self, FileBackup, MigrationManifest};
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
@@ -37,23 +37,97 @@ pub struct ReconcilePlan {
   pub timestamp: String,
   pub gateway_config_path: PathBuf,
   pub gateway_auth_path: PathBuf,
+  gateway_config_snapshot: FileSnapshot,
+  gateway_auth_snapshot: FileSnapshot,
+  source_auth_path: PathBuf,
+  source_auth_snapshot: FileSnapshot,
+  pub agent_auth_path: Option<PathBuf>,
   pub binding_profile: Option<String>,
   pub binding_mode: RouteMode,
   pub target_base_url: String,
   pub imported_accounts: Vec<Account>,
+  pub(crate) provider_routes: Vec<ProviderRoute>,
   pub edits: Vec<PlannedEdit>,
+  pub(crate) previous_manifest: Option<PathBuf>,
 }
 
 #[derive(Debug)]
 pub struct PlannedEdit {
   pub path: PathBuf,
   pub(crate) kind: EditKind,
+  pub(crate) backup: bool,
+  source_snapshot: FileSnapshot,
 }
 
-#[derive(Debug)]
 pub(crate) enum EditKind {
   Json(Value),
+  Jsonc(String),
   Toml(toml_edit::DocumentMut),
+}
+
+impl std::fmt::Debug for EditKind {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let (kind, length) = match self {
+      Self::Json(value) => ("Json", serde_json::to_vec(value).map_or(0, |value| value.len())),
+      Self::Jsonc(raw) => ("Jsonc", raw.len()),
+      Self::Toml(doc) => ("Toml", doc.to_string().len()),
+    };
+    f.debug_struct(kind).field("length", &length).finish_non_exhaustive()
+  }
+}
+
+#[derive(PartialEq, Eq)]
+enum FileSnapshot {
+  Missing,
+  Contents(Vec<u8>),
+}
+
+impl std::fmt::Debug for FileSnapshot {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      Self::Missing => f.write_str("Missing"),
+      Self::Contents(contents) => f
+        .debug_struct("Contents")
+        .field("length", &contents.len())
+        .finish_non_exhaustive(),
+    }
+  }
+}
+
+impl FileSnapshot {
+  fn capture(path: &Path) -> Result<Self> {
+    if !path.exists() {
+      return Ok(Self::Missing);
+    }
+    std::fs::read(path)
+      .map(Self::Contents)
+      .with_context(|| format!("reading {}", path.display()))
+  }
+
+  fn validate(&self, path: &Path) -> Result<()> {
+    if &Self::capture(path)? != self {
+      bail!(
+        "{} changed after the agent migration plan was created; rerun the command",
+        path.display()
+      );
+    }
+    Ok(())
+  }
+}
+
+impl PlannedEdit {
+  pub(crate) fn new(path: PathBuf, kind: EditKind, backup: bool, source: Option<Vec<u8>>) -> Self {
+    Self {
+      path,
+      kind,
+      backup,
+      source_snapshot: source.map_or(FileSnapshot::Missing, FileSnapshot::Contents),
+    }
+  }
+
+  fn validate_source(&self) -> Result<()> {
+    self.source_snapshot.validate(&self.path)
+  }
 }
 
 #[derive(Debug)]
@@ -107,12 +181,38 @@ pub fn import_accounts(request: ImportRequest) -> Result<ImportReport> {
 }
 
 pub fn plan_reconcile(request: ReconcileRequest) -> Result<ReconcilePlan> {
-  let adapter = adapter_for(&request.agent).ok_or_else(|| anyhow!("unsupported agent {}", request.agent))?;
-  let (cfg, gateway_config_path) = Config::load(request.gateway_config_path.as_deref())?;
   let gateway_auth_path = default_gateway_auth_path()?;
+  plan_reconcile_with_gateway_auth_path(request, gateway_auth_path)
+}
+
+fn plan_reconcile_with_gateway_auth_path(
+  request: ReconcileRequest,
+  gateway_auth_path: PathBuf,
+) -> Result<ReconcilePlan> {
+  let adapter = adapter_for(&request.agent).ok_or_else(|| anyhow!("unsupported agent {}", request.agent))?;
+  let gateway_config_path = match request.gateway_config_path.as_deref() {
+    Some(path) => path.to_path_buf(),
+    None => tokn_config::paths::config_path()?,
+  };
+  let gateway_config_snapshot = FileSnapshot::capture(&gateway_config_path)?;
+  let gateway_auth_snapshot = FileSnapshot::capture(&gateway_auth_path)?;
+  let (cfg, _) = Config::load(Some(&gateway_config_path))?;
   let timestamp = timestamp()?;
   let home = resolve_home(request.agent_home)?;
-  let imported_accounts = adapter.discover_accounts(&home, &timestamp)?;
+  let source_auth_path = adapter.auth_path(&home);
+  let source_auth_snapshot = FileSnapshot::capture(&source_auth_path)?;
+  let discovered_accounts = adapter.discover_accounts(&home, &timestamp)?;
+  let transferred_source_providers = discovered_accounts
+    .iter()
+    .filter_map(source_provider_id)
+    .map(str::to_string)
+    .collect::<BTreeSet<_>>();
+  let imported_accounts = if adapter.transfers_credentials() {
+    let store = AuthStore::load(Some(&gateway_auth_path), Some(&gateway_config_path))?;
+    merge_transferred_accounts(&store, &request.agent, discovered_accounts)
+  } else {
+    discovered_accounts
+  };
   let existing_binding = cfg.agents.get(request.agent.as_str());
   let binding_profile = resolve_binding_profile(
     request.profile.as_deref(),
@@ -125,41 +225,177 @@ pub fn plan_reconcile(request: ReconcileRequest) -> Result<ReconcilePlan> {
     .or_else(|| existing_binding.and_then(|binding| binding.mode))
     .unwrap_or(RouteMode::Route);
   let target_base_url = gateway_profile_base_url(&cfg, binding_profile.as_deref());
-  let edits = adapter.rewrite_config(&home, &target_base_url)?;
-
+  let provider_routes = provider_routes(
+    &cfg,
+    binding_profile.as_deref(),
+    &imported_accounts,
+    &transferred_source_providers,
+    adapter.default_provider_id(),
+  );
+  validate_binding_profile(&cfg, &request.agent, binding_profile.as_deref())?;
+  validate_provider_route_profiles(&cfg, &request.agent, &provider_routes)?;
+  validate_switch_profile_owners(
+    &cfg,
+    &request.agent,
+    binding_profile.as_deref(),
+    binding_mode,
+    &imported_accounts,
+    &provider_routes,
+  )?;
+  let edits = adapter.rewrite_config(&home, &target_base_url, &provider_routes)?;
+  gateway_config_snapshot.validate(&gateway_config_path)?;
+  gateway_auth_snapshot.validate(&gateway_auth_path)?;
+  source_auth_snapshot.validate(&source_auth_path)?;
   Ok(ReconcilePlan {
     agent: request.agent,
     timestamp,
     gateway_config_path,
     gateway_auth_path,
+    gateway_config_snapshot,
+    gateway_auth_snapshot,
+    source_auth_path: source_auth_path.clone(),
+    source_auth_snapshot,
+    agent_auth_path: adapter.transfers_credentials().then_some(source_auth_path),
     binding_profile,
     binding_mode,
     target_base_url,
     imported_accounts,
+    provider_routes,
     edits,
+    previous_manifest: None,
   })
 }
 
-pub fn apply_reconcile(plan: ReconcilePlan) -> Result<ApplyReport> {
+pub fn apply_reconcile(mut plan: ReconcilePlan) -> Result<ApplyReport> {
+  plan.previous_manifest = manifest::latest_active_manifest(&plan.agent)?;
   let manifest_path = manifest::manifest_path(&plan.timestamp, &plan.agent)?;
   apply_reconcile_to_manifest_path(plan, manifest_path)
 }
 
 pub fn unlink(request: UnlinkRequest) -> Result<UnlinkReport> {
   let manifest_path = manifest::resolve_manifest(&request.agent, request.backup_id.as_deref())?;
-  let raw = std::fs::read_to_string(&manifest_path).with_context(|| format!("reading {}", manifest_path.display()))?;
-  let manifest: MigrationManifest =
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", manifest_path.display()))?;
-  if manifest.agent != request.agent {
+  if let Some(successor) = active_manifest_successor(&manifest_path, &request.agent)? {
     bail!(
-      "manifest {} is for {}, not {}",
+      "manifest {} has newer active successor {}; unlink the latest migration instead",
       manifest_path.display(),
-      manifest.agent,
-      request.agent
+      successor.display()
     );
   }
+  let mut chain = manifest_chain(&manifest_path, &request.agent)?;
+  let latest = chain.first().expect("manifest chain contains selected manifest");
+  if latest.1.unlinked {
+    bail!("manifest {} has already been unlinked", latest.0.display());
+  }
+  let timestamp = latest.1.timestamp.clone();
 
+  if !latest.1.credentials_handoff_complete {
+    restore_latest_credentials(&request.agent, &latest.1)?;
+    let latest = chain.first_mut().expect("manifest chain contains selected manifest");
+    latest.1.credentials_handoff_complete = true;
+    manifest::write_manifest(&latest.0, &latest.1)?;
+  }
   let mut actions = Vec::new();
+  for (_, current) in &chain {
+    restore_manifest_files(current, &mut actions)?;
+  }
+  // Keep the latest manifest active until every ancestor is marked. A retry
+  // can then finish cleanly if writing one of the older manifests fails.
+  for (path, current) in chain.iter_mut().rev() {
+    current.unlinked = true;
+    manifest::write_manifest(path, current)?;
+  }
+
+  Ok(UnlinkReport {
+    manifest_path,
+    timestamp,
+    actions,
+  })
+}
+
+fn active_manifest_successor(path: &Path, agent: &AgentId) -> Result<Option<PathBuf>> {
+  let Some(dir) = path.parent() else {
+    return Ok(None);
+  };
+  let suffix = format!("-{}.json", agent.as_str());
+  let mut successors = Vec::new();
+  for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+    let candidate = entry?.path();
+    if candidate == path
+      || !candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.ends_with(&suffix))
+        .unwrap_or(false)
+    {
+      continue;
+    }
+    let manifest = manifest::read_manifest(&candidate)?;
+    if manifest.agent != *agent || !manifest.completed || manifest.unlinked {
+      continue;
+    }
+    let chain = manifest_chain(&candidate, agent)?;
+    if chain.iter().skip(1).any(|(ancestor, _)| same_path(ancestor, path)) {
+      successors.push(candidate);
+    }
+  }
+  successors.sort();
+  Ok(successors.pop())
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+  left == right
+    || left
+      .canonicalize()
+      .ok()
+      .zip(right.canonicalize().ok())
+      .map(|(left, right)| left == right)
+      .unwrap_or(false)
+}
+
+fn manifest_chain(path: &Path, agent: &AgentId) -> Result<Vec<(PathBuf, MigrationManifest)>> {
+  let mut chain = Vec::new();
+  let mut seen = BTreeSet::new();
+  let mut current = Some(path.to_path_buf());
+  while let Some(path) = current {
+    if !seen.insert(path.clone()) {
+      bail!("migration manifest chain contains a cycle at {}", path.display());
+    }
+    let manifest = manifest::read_manifest(&path)?;
+    if manifest.agent != *agent {
+      bail!("manifest {} is for {}, not {}", path.display(), manifest.agent, agent);
+    }
+    current = manifest.previous_manifest.clone();
+    chain.push((path, manifest));
+  }
+  Ok(chain)
+}
+
+fn restore_latest_credentials(agent: &AgentId, manifest: &MigrationManifest) -> Result<()> {
+  let Some(agent_auth_path) = &manifest.agent_auth_path else {
+    return Ok(());
+  };
+  let Some(gateway_auth_path) = &manifest.gateway_auth_path else {
+    bail!("manifest is missing the gateway auth path required to restore transferred credentials");
+  };
+  let store = AuthStore::load(Some(gateway_auth_path), None)?;
+  let accounts = manifest
+    .imported_account_ids
+    .iter()
+    .map(|id| {
+      store.get(id).cloned().ok_or_else(|| {
+        anyhow!(
+          "transferred account '{id}' is missing from {}",
+          gateway_auth_path.display()
+        )
+      })
+    })
+    .collect::<Result<Vec<_>>>()?;
+  adapter_for(agent)
+    .ok_or_else(|| anyhow!("unsupported agent {agent}"))?
+    .restore_transferred_credentials(agent_auth_path, &accounts)
+}
+
+fn restore_manifest_files(manifest: &MigrationManifest, actions: &mut Vec<FileAction>) -> Result<()> {
   for file in manifest.files.iter().rev() {
     if file.created_by_migration {
       if file.original.exists() {
@@ -181,15 +417,17 @@ pub fn unlink(request: UnlinkRequest) -> Result<UnlinkReport> {
       backup: backup.clone(),
     });
   }
-
-  Ok(UnlinkReport {
-    manifest_path,
-    timestamp: manifest.timestamp,
-    actions,
-  })
+  Ok(())
 }
 
 fn apply_reconcile_to_manifest_path(plan: ReconcilePlan, manifest_path: PathBuf) -> Result<ApplyReport> {
+  plan.gateway_config_snapshot.validate(&plan.gateway_config_path)?;
+  plan.gateway_auth_snapshot.validate(&plan.gateway_auth_path)?;
+  plan.source_auth_snapshot.validate(&plan.source_auth_path)?;
+  for edit in &plan.edits {
+    edit.validate_source()?;
+  }
+
   let mut files = Vec::new();
   let imported_account_ids = plan
     .imported_accounts
@@ -205,18 +443,27 @@ fn apply_reconcile_to_manifest_path(plan: ReconcilePlan, manifest_path: PathBuf)
   manifest::mark_created(&mut files, &plan.gateway_config_path, gateway_config_existed);
 
   for edit in &plan.edits {
+    if !edit.backup {
+      continue;
+    }
     let existed = edit.path.exists();
     manifest::backup_path_for(&edit.path, &plan.timestamp, &mut files)?;
     manifest::mark_created(&mut files, &edit.path, existed);
   }
 
   let manifest = MigrationManifest {
-    version: 1,
+    version: 2,
     completed: true,
     agent: plan.agent.clone(),
     timestamp: plan.timestamp.clone(),
     profile: plan.binding_profile.clone(),
     target_base_url: plan.target_base_url.clone(),
+    gateway_auth_path: Some(plan.gateway_auth_path.clone()),
+    agent_auth_path: plan.agent_auth_path.clone(),
+    provider_routes: plan.provider_routes.clone(),
+    previous_manifest: plan.previous_manifest.clone(),
+    unlinked: false,
+    credentials_handoff_complete: false,
     imported_account_ids: plan
       .imported_accounts
       .iter()
@@ -226,22 +473,27 @@ fn apply_reconcile_to_manifest_path(plan: ReconcilePlan, manifest_path: PathBuf)
   };
   manifest::write_manifest(&manifest_path, &manifest.clone().in_progress())?;
 
+  plan.gateway_auth_snapshot.validate(&plan.gateway_auth_path)?;
   let mut store = AuthStore::load(Some(&plan.gateway_auth_path), Some(&plan.gateway_config_path))?;
+  remove_replaced_gateway_accounts(&mut store, &plan.agent, &plan.imported_accounts);
   disable_missing_source_accounts(&mut store, &plan.agent, &imported_account_ids);
   for account in &plan.imported_accounts {
     store.upsert(account.clone());
   }
+  plan.gateway_auth_snapshot.validate(&plan.gateway_auth_path)?;
   store.save()?;
 
   let default_provider_id = adapter_for(&plan.agent)
     .expect("supported agent should still have adapter")
     .default_provider_id();
+  plan.gateway_config_snapshot.validate(&plan.gateway_config_path)?;
   upsert_agent_and_profiles(
     &plan.gateway_config_path,
     &plan.agent,
     plan.binding_profile.as_deref(),
     plan.binding_mode,
     &plan.imported_accounts,
+    &plan.provider_routes,
     default_provider_id,
   )?;
 
@@ -287,6 +539,165 @@ pub(crate) fn annotate_imported_account(
   account
 }
 
+fn merge_transferred_accounts(store: &AuthStore, agent: &AgentId, discovered_accounts: Vec<Account>) -> Vec<Account> {
+  let mut accounts = store
+    .accounts
+    .iter()
+    .filter(|account| is_gateway_owned_account(account, agent))
+    .map(|account| (transfer_source_provider(account).to_string(), account.clone()))
+    .collect::<BTreeMap<_, _>>();
+  for account in discovered_accounts {
+    let account = mark_gateway_owned(account);
+    accounts.insert(transfer_source_provider(&account).to_string(), account);
+  }
+  accounts.into_values().collect()
+}
+
+fn mark_gateway_owned(mut account: Account) -> Account {
+  let provider = account.provider.clone();
+  if let Some(import) = account.settings.get_mut("import").and_then(toml::Value::as_table_mut) {
+    import
+      .entry("source_provider")
+      .or_insert_with(|| toml::Value::String(provider));
+    import.insert("ownership".into(), toml::Value::String("gateway".into()));
+    import.insert("sync_managed".into(), toml::Value::Boolean(false));
+    import.insert("missing_from_source".into(), toml::Value::Boolean(false));
+  }
+  account
+}
+
+fn remove_replaced_gateway_accounts(store: &mut AuthStore, agent: &AgentId, desired_accounts: &[Account]) {
+  let desired = desired_accounts
+    .iter()
+    .map(|account| (transfer_source_provider(account), account.id.as_str()))
+    .collect::<BTreeMap<_, _>>();
+  store.accounts.retain(|account| {
+    if !is_gateway_owned_account(account, agent) {
+      return true;
+    }
+    desired
+      .get(transfer_source_provider(account))
+      .map(|desired_id| **desired_id == account.id)
+      .unwrap_or(true)
+  });
+}
+
+fn transfer_source_provider(account: &Account) -> &str {
+  source_provider_id(account).unwrap_or(&account.provider)
+}
+
+fn is_gateway_owned_account(account: &Account, agent: &AgentId) -> bool {
+  is_source_managed_account(account, agent)
+    && account
+      .settings
+      .get("import")
+      .and_then(toml::Value::as_table)
+      .and_then(|import| import.get("ownership"))
+      .and_then(toml::Value::as_str)
+      == Some("gateway")
+}
+
+fn provider_routes(
+  cfg: &Config,
+  binding_profile: Option<&str>,
+  accounts: &[Account],
+  transferred_source_providers: &BTreeSet<String>,
+  default_provider_id: &str,
+) -> Vec<ProviderRoute> {
+  if accounts.is_empty() {
+    return vec![ProviderRoute {
+      source_provider_id: default_provider_id.to_string(),
+      gateway_provider_id: default_provider_id.to_string(),
+      account_id: String::new(),
+      profile: binding_profile.unwrap_or_default().to_string(),
+      base_url: gateway_profile_base_url(cfg, binding_profile),
+      transfer_source_auth: false,
+    }];
+  }
+
+  let Some(binding_profile) = binding_profile else {
+    return Vec::new();
+  };
+  let mut routes = BTreeMap::new();
+  for account in accounts {
+    let Some(source_provider_id) = source_provider_id(account) else {
+      continue;
+    };
+    let profile = format!("{binding_profile}-{}", account.provider);
+    routes.insert(
+      source_provider_id.to_string(),
+      ProviderRoute {
+        source_provider_id: source_provider_id.to_string(),
+        gateway_provider_id: account.provider.clone(),
+        account_id: account.id.clone(),
+        base_url: gateway_profile_base_url(cfg, Some(&profile)),
+        profile,
+        transfer_source_auth: transferred_source_providers.contains(source_provider_id),
+      },
+    );
+  }
+  routes.into_values().collect()
+}
+
+fn validate_provider_route_profiles(cfg: &Config, agent: &AgentId, routes: &[ProviderRoute]) -> Result<()> {
+  for route in routes {
+    if route.account_id.is_empty() || route.profile.is_empty() {
+      continue;
+    }
+    if let Some(existing) = cfg.profiles.get(&route.profile) {
+      if existing.agent_id.as_ref() != Some(agent) {
+        bail!(
+          "generated profile '{}' already exists and is not owned by {}",
+          route.profile,
+          agent
+        );
+      }
+    }
+  }
+  Ok(())
+}
+
+fn validate_binding_profile(cfg: &Config, agent: &AgentId, profile: Option<&str>) -> Result<()> {
+  let Some((profile, existing)) =
+    profile.and_then(|profile| cfg.profiles.get(profile).map(|existing| (profile, existing)))
+  else {
+    return Ok(());
+  };
+  if existing.agent_id.as_ref() != Some(agent) {
+    bail!("profile '{profile}' already exists and is not owned by {agent}");
+  }
+  Ok(())
+}
+
+fn validate_switch_profile_owners(
+  cfg: &Config,
+  agent: &AgentId,
+  profile: Option<&str>,
+  mode: RouteMode,
+  accounts: &[Account],
+  provider_routes: &[ProviderRoute],
+) -> Result<()> {
+  if mode != RouteMode::Switch || !provider_routes.is_empty() {
+    return Ok(());
+  }
+  let Some(profile) = profile else {
+    return Ok(());
+  };
+  let providers = accounts
+    .iter()
+    .map(|account| account.provider.as_str())
+    .collect::<BTreeSet<_>>();
+  for provider in providers {
+    let name = format!("{profile}-{provider}");
+    if let Some(existing) = cfg.profiles.get(&name) {
+      if existing.agent_id.as_ref() != Some(agent) {
+        bail!("generated profile '{name}' already exists and is not owned by {agent}");
+      }
+    }
+  }
+  Ok(())
+}
+
 pub(crate) fn imported_account_ids(store: &AuthStore, agent: &AgentId) -> Vec<String> {
   let mut ids = store
     .accounts
@@ -305,7 +716,7 @@ pub(crate) fn disable_missing_source_accounts(
 ) -> Vec<String> {
   let mut disabled = Vec::new();
   for account in &mut store.accounts {
-    if seen_ids.contains(&account.id) || !is_source_managed_account(account, agent) {
+    if seen_ids.contains(&account.id) || !is_source_managed_account(account, agent) || !is_sync_managed(account) {
       continue;
     }
     account.enabled = false;
@@ -319,6 +730,16 @@ pub(crate) fn disable_missing_source_accounts(
   }
   disabled.sort();
   disabled
+}
+
+fn is_sync_managed(account: &Account) -> bool {
+  account
+    .settings
+    .get("import")
+    .and_then(toml::Value::as_table)
+    .and_then(|import| import.get("sync_managed"))
+    .and_then(toml::Value::as_bool)
+    .unwrap_or(true)
 }
 
 pub(crate) fn is_source_managed_account(account: &Account, agent: &AgentId) -> bool {
@@ -336,6 +757,7 @@ pub(crate) fn is_source_managed_account(account: &Account, agent: &AgentId) -> b
 }
 
 fn write_edit(edit: &PlannedEdit) -> Result<()> {
+  edit.validate_source()?;
   if let Some(parent) = edit.path.parent() {
     std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
   }
@@ -343,6 +765,9 @@ fn write_edit(edit: &PlannedEdit) -> Result<()> {
     EditKind::Json(value) => {
       std::fs::write(&edit.path, serde_json::to_vec_pretty(value)?)
         .with_context(|| format!("writing {}", edit.path.display()))?;
+    }
+    EditKind::Jsonc(raw) => {
+      std::fs::write(&edit.path, raw).with_context(|| format!("writing {}", edit.path.display()))?;
     }
     EditKind::Toml(doc) => {
       std::fs::write(&edit.path, doc.to_string()).with_context(|| format!("writing {}", edit.path.display()))?;
@@ -357,6 +782,7 @@ fn upsert_agent_and_profiles(
   profile: Option<&str>,
   mode: RouteMode,
   accounts: &[Account],
+  provider_routes: &[ProviderRoute],
   default_provider_id: &str,
 ) -> Result<()> {
   Ok(Config::edit_in_place(path, |doc| {
@@ -364,15 +790,19 @@ fn upsert_agent_and_profiles(
     upsert_agent(doc, agent, profile, mode);
     if let Some(previous_profile) = previous_profile.as_deref() {
       if Some(previous_profile) != profile {
-        remove_materialized_profile(doc, previous_profile);
+        remove_materialized_profile(doc, previous_profile, agent);
       }
     }
     if let Some(profile) = profile {
+      validate_profile_item_owner(doc, profile, agent)?;
       upsert_profile_item(doc, profile, agent, mode, accounts, default_provider_id);
-      if mode == RouteMode::Switch {
-        upsert_switch_profiles(doc, profile, agent, accounts);
+      if !provider_routes.is_empty() {
+        remove_agent_profiles(doc, profile, agent);
+        upsert_provider_route_profiles(doc, agent, mode, provider_routes)?;
+      } else if mode == RouteMode::Switch {
+        upsert_switch_profiles(doc, profile, agent, accounts)?;
       } else {
-        remove_switch_profiles(doc, profile);
+        remove_agent_profiles(doc, profile, agent);
       }
     }
     Ok(())
@@ -432,7 +862,12 @@ fn upsert_profile_item(
   }
 }
 
-fn upsert_switch_profiles(doc: &mut toml_edit::DocumentMut, profile: &str, agent: &AgentId, accounts: &[Account]) {
+fn upsert_switch_profiles(
+  doc: &mut toml_edit::DocumentMut,
+  profile: &str,
+  agent: &AgentId,
+  accounts: &[Account],
+) -> Result<()> {
   let mut by_provider: BTreeMap<String, Vec<String>> = BTreeMap::new();
   for account in accounts {
     by_provider
@@ -440,33 +875,101 @@ fn upsert_switch_profiles(doc: &mut toml_edit::DocumentMut, profile: &str, agent
       .or_default()
       .push(account.id.clone());
   }
-  let profiles = doc["profiles"].or_insert(toml_edit::table());
   for (provider, account_ids) in by_provider {
     let synthetic_profile = format!("{profile}-{provider}");
+    validate_profile_item_owner(doc, &synthetic_profile, agent)?;
+    let profiles = doc["profiles"].or_insert(toml_edit::table());
     let item = profiles[synthetic_profile.as_str()].or_insert(toml_edit::table());
     item["mode"] = toml_edit::value("switch");
     item["agent_id"] = toml_edit::value(agent.as_str());
     item["providers"] = array_value(std::slice::from_ref(&provider));
     item["accounts"] = array_value(&account_ids);
   }
+  Ok(())
 }
 
-fn remove_materialized_profile(doc: &mut toml_edit::DocumentMut, profile: &str) {
-  if let Some(table) = doc["profiles"].as_table_mut() {
-    table.remove(profile);
+fn upsert_provider_route_profiles(
+  doc: &mut toml_edit::DocumentMut,
+  agent: &AgentId,
+  mode: RouteMode,
+  routes: &[ProviderRoute],
+) -> Result<()> {
+  let profiles = doc["profiles"].or_insert(toml_edit::table());
+  for route in routes {
+    if route.account_id.is_empty() || route.profile.is_empty() {
+      continue;
+    }
+    if let Some(existing) = profiles.get(route.profile.as_str()) {
+      let owner = existing
+        .as_table_like()
+        .and_then(|profile| profile.get("agent_id"))
+        .and_then(toml_edit::Item::as_str);
+      if owner != Some(agent.as_str()) {
+        bail!(
+          "generated profile '{}' already exists and is not owned by {}",
+          route.profile,
+          agent
+        );
+      }
+    }
+    let item = profiles[route.profile.as_str()].or_insert(toml_edit::table());
+    item["mode"] = toml_edit::value(route_mode_as_str(mode));
+    item["agent_id"] = toml_edit::value(agent.as_str());
+    item["providers"] = array_value(std::slice::from_ref(&route.gateway_provider_id));
+    item["accounts"] = array_value(std::slice::from_ref(&route.account_id));
   }
-  remove_switch_profiles(doc, profile);
+  Ok(())
 }
 
-fn remove_switch_profiles(doc: &mut toml_edit::DocumentMut, profile: &str) {
+fn remove_materialized_profile(doc: &mut toml_edit::DocumentMut, profile: &str, agent: &AgentId) {
+  if let Some(table) = doc["profiles"].as_table_mut() {
+    let owned = table
+      .get(profile)
+      .and_then(toml_edit::Item::as_table_like)
+      .and_then(|profile| profile.get("agent_id"))
+      .and_then(toml_edit::Item::as_str)
+      == Some(agent.as_str());
+    if owned {
+      table.remove(profile);
+    }
+  }
+  remove_agent_profiles(doc, profile, agent);
+}
+
+fn validate_profile_item_owner(doc: &toml_edit::DocumentMut, profile: &str, agent: &AgentId) -> Result<()> {
+  let Some(existing) = doc
+    .get("profiles")
+    .and_then(toml_edit::Item::as_table_like)
+    .and_then(|profiles| profiles.get(profile))
+  else {
+    return Ok(());
+  };
+  let owner = existing
+    .as_table_like()
+    .and_then(|profile| profile.get("agent_id"))
+    .and_then(toml_edit::Item::as_str);
+  if owner != Some(agent.as_str()) {
+    bail!("profile '{profile}' already exists and is not owned by {agent}");
+  }
+  Ok(())
+}
+
+fn remove_agent_profiles(doc: &mut toml_edit::DocumentMut, profile: &str, agent: &AgentId) {
   let Some(table) = doc["profiles"].as_table_mut() else {
     return;
   };
   let prefix = format!("{profile}-");
   let keys = table
     .iter()
+    .filter(|(key, item)| {
+      key.starts_with(&prefix)
+        && item
+          .as_table_like()
+          .and_then(|profile| profile.get("agent_id"))
+          .and_then(toml_edit::Item::as_str)
+          == Some(agent.as_str())
+    })
     .map(|(key, _)| key.to_string())
-    .filter(|key| key.starts_with(&prefix))
     .collect::<Vec<_>>();
   for key in keys {
     table.remove(&key);
@@ -602,7 +1105,7 @@ mod tests {
     let gateway_config_path = dir.path().join("config.toml");
     let agent_home = dir.path().join("agent-home");
     let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
-    let opencode_config_path = agent_home.join(".config/opencode/opencode.json");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.jsonc");
     std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
     std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
     std::fs::write(
@@ -625,7 +1128,7 @@ port = 4141
       .to_string(),
     )
     .unwrap();
-    std::fs::write(&opencode_config_path, serde_json::json!({"mcp": {}}).to_string()).unwrap();
+    std::fs::write(&opencode_config_path, "{\n  // user config\n  \"mcp\": {},\n}\n").unwrap();
 
     let plan = plan_reconcile(ReconcileRequest {
       agent: AgentId::Opencode,
@@ -641,6 +1144,8 @@ port = 4141
     assert_eq!(plan.target_base_url, "http://127.0.0.1:4141/opencode/v1");
     assert_eq!(plan.binding_profile.as_deref(), Some("opencode"));
     assert_eq!(plan.imported_accounts.len(), 1);
+    assert_eq!(plan.agent_auth_path.as_deref(), Some(opencode_auth_path.as_path()));
+    assert!(plan.edits.iter().any(|edit| edit.path == opencode_config_path));
   }
 
   #[test]
@@ -667,6 +1172,223 @@ port = 4141
   }
 
   #[test]
+  fn apply_reconcile_rejects_agent_files_changed_after_planning() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let manifest_path = dir.path().join("manifest.json");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.jsonc");
+    let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
+    let gateway_config = "[server]\nhost = \"127.0.0.1\"\nport = 4141\n";
+    let opencode_config = "{\n  // user config\n}\n";
+    std::fs::write(&gateway_config_path, gateway_config).unwrap();
+    std::fs::write(&opencode_config_path, opencode_config).unwrap();
+    std::fs::write(
+      &opencode_auth_path,
+      serde_json::to_vec_pretty(&serde_json::json!({
+        "openai": {"type": "api", "key": "sk-planned"}
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let plan = plan_reconcile_with_gateway_auth_path(
+      ReconcileRequest {
+        agent: AgentId::Opencode,
+        profile: None,
+        mode: None,
+        gateway_config_path: Some(gateway_config_path.clone()),
+        agent_home: Some(agent_home),
+      },
+      gateway_auth_path.clone(),
+    )
+    .unwrap();
+    let changed_auth = serde_json::json!({
+      "openai": {"type": "api", "key": "sk-rotated"},
+      "anthropic": {"type": "api", "key": "keep-new"}
+    });
+    std::fs::write(&opencode_auth_path, serde_json::to_vec_pretty(&changed_auth).unwrap()).unwrap();
+
+    let error = apply_reconcile_to_manifest_path(plan, manifest_path.clone()).unwrap_err();
+
+    assert!(error.to_string().contains("changed after the agent migration plan"));
+    assert_eq!(std::fs::read_to_string(gateway_config_path).unwrap(), gateway_config);
+    assert!(!gateway_auth_path.exists());
+    assert!(!manifest_path.exists());
+    assert_eq!(std::fs::read_to_string(opencode_config_path).unwrap(), opencode_config);
+    assert_eq!(
+      serde_json::from_str::<Value>(&std::fs::read_to_string(opencode_auth_path).unwrap()).unwrap(),
+      changed_auth
+    );
+  }
+
+  #[test]
+  fn apply_reconcile_rejects_gateway_credentials_changed_after_planning() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let manifest_path = dir.path().join("manifest.json");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.jsonc");
+    let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
+    let gateway_config = "[server]\nhost = \"127.0.0.1\"\nport = 4141\n";
+    let opencode_config = "{\n  // user config\n}\n";
+    std::fs::write(&gateway_config_path, gateway_config).unwrap();
+    std::fs::write(&opencode_config_path, opencode_config).unwrap();
+
+    let mut account = annotate_imported_account(
+      sample_account("opencode-openai", tokn_core::provider::ID_OPENAI),
+      AgentId::Opencode,
+      &opencode_auth_path,
+      "auth.openai",
+      "20260604T153012Z",
+    );
+    account.api_key = Some(tokn_core::util::secret::Secret::new("sk-planned".into()));
+    let mut store = AuthStore::load(Some(&gateway_auth_path), None).unwrap();
+    store.accounts = vec![mark_gateway_owned(account)];
+    store.save().unwrap();
+
+    let plan = plan_reconcile_with_gateway_auth_path(
+      ReconcileRequest {
+        agent: AgentId::Opencode,
+        profile: None,
+        mode: None,
+        gateway_config_path: Some(gateway_config_path.clone()),
+        agent_home: Some(agent_home),
+      },
+      gateway_auth_path.clone(),
+    )
+    .unwrap();
+    assert_eq!(plan.imported_accounts.len(), 1);
+
+    let mut rotated_store = AuthStore::load(Some(&gateway_auth_path), None).unwrap();
+    rotated_store.get_mut("opencode-openai").unwrap().api_key =
+      Some(tokn_core::util::secret::Secret::new("sk-rotated".into()));
+    rotated_store.save().unwrap();
+    let rotated_gateway_auth = std::fs::read(&gateway_auth_path).unwrap();
+
+    let error = apply_reconcile_to_manifest_path(plan, manifest_path.clone()).unwrap_err();
+
+    assert!(error.to_string().contains("changed after the agent migration plan"));
+    assert!(error.to_string().contains(&gateway_auth_path.display().to_string()));
+    assert_eq!(std::fs::read_to_string(gateway_config_path).unwrap(), gateway_config);
+    assert_eq!(std::fs::read(gateway_auth_path).unwrap(), rotated_gateway_auth);
+    assert_eq!(std::fs::read_to_string(opencode_config_path).unwrap(), opencode_config);
+    assert!(!manifest_path.exists());
+  }
+
+  #[test]
+  fn opencode_v1_link_upgrades_and_unlinks_through_the_manifest_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.json");
+    let original_backup_path = dir.path().join("opencode.json.before-v1");
+    let first_manifest_path = dir.path().join("20260604T153012Z-opencode.json");
+    let second_manifest_path = dir.path().join("20260604T153013Z-opencode.json");
+    std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+
+    let original = r#"{
+  // Original user config.
+  "mcp": {"x": true}
+}"#;
+    let legacy = r#"{
+  // Original user config.
+  "mcp": {"x": true},
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#;
+    std::fs::write(&original_backup_path, original).unwrap();
+    std::fs::write(&opencode_config_path, legacy).unwrap();
+    std::fs::write(
+      &gateway_config_path,
+      r#"[server]
+host = "127.0.0.1"
+port = 4141
+
+[agents.opencode]
+mode = "route"
+sync = true
+"#,
+    )
+    .unwrap();
+    manifest::write_manifest(
+      &first_manifest_path,
+      &MigrationManifest {
+        version: 1,
+        completed: true,
+        agent: AgentId::Opencode,
+        timestamp: "20260604T153012Z".into(),
+        profile: None,
+        target_base_url: "http://127.0.0.1:4141/v1".into(),
+        gateway_auth_path: None,
+        agent_auth_path: None,
+        provider_routes: Vec::new(),
+        previous_manifest: None,
+        unlinked: false,
+        credentials_handoff_complete: false,
+        imported_account_ids: Vec::new(),
+        files: vec![FileBackup {
+          original: opencode_config_path.clone(),
+          backup: Some(original_backup_path),
+          existed: true,
+          created_by_migration: false,
+        }],
+      },
+    )
+    .unwrap();
+
+    let mut plan = plan_reconcile_with_gateway_auth_path(
+      ReconcileRequest {
+        agent: AgentId::Opencode,
+        profile: None,
+        mode: None,
+        gateway_config_path: Some(gateway_config_path),
+        agent_home: Some(agent_home),
+      },
+      gateway_auth_path,
+    )
+    .unwrap();
+    plan.timestamp = "20260604T153013Z".into();
+    plan.previous_manifest = Some(first_manifest_path.clone());
+
+    apply_reconcile_to_manifest_path(plan, second_manifest_path.clone()).unwrap();
+
+    let linked = crate::jsonc::read_jsonc(&opencode_config_path).unwrap();
+    assert!(linked["provider"].get("tokn-router").is_none());
+    assert_eq!(
+      linked["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/v1"
+    );
+
+    unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(second_manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(std::fs::read_to_string(opencode_config_path).unwrap(), original);
+    assert!(manifest::read_manifest(&first_manifest_path).unwrap().unlinked);
+    assert!(manifest::read_manifest(&second_manifest_path).unwrap().unlinked);
+  }
+
+  #[test]
   fn validate_profile_name_rejects_empty_and_path_like_names() {
     assert!(validate_profile_name("").is_err());
     assert!(validate_profile_name("   ").is_err());
@@ -684,6 +1406,7 @@ port = 4141
       &AgentId::Opencode,
       Some("opencode"),
       RouteMode::Route,
+      &[],
       &[],
       tokn_core::provider::ID_OPENAI,
     )
@@ -715,6 +1438,7 @@ port = 4141
       Some("codex"),
       RouteMode::Route,
       &accounts,
+      &[],
       tokn_core::provider::ID_CODEX,
     )
     .unwrap();
@@ -732,6 +1456,123 @@ port = 4141
   }
 
   #[test]
+  fn provider_route_profiles_reject_unowned_name_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = r#"[profiles.opencode-openai]
+providers = ["anthropic"]
+"#;
+    std::fs::write(&path, original).unwrap();
+    let account = sample_account("opencode-openai", tokn_core::provider::ID_OPENAI);
+    let routes = [ProviderRoute {
+      source_provider_id: "openai".into(),
+      gateway_provider_id: tokn_core::provider::ID_OPENAI.into(),
+      account_id: account.id.clone(),
+      profile: "opencode-openai".into(),
+      base_url: "http://127.0.0.1:4141/opencode-openai/v1".into(),
+      transfer_source_auth: true,
+    }];
+
+    let error = upsert_agent_and_profiles(
+      &path,
+      &AgentId::Opencode,
+      Some("opencode"),
+      RouteMode::Route,
+      &[account],
+      &routes,
+      tokn_core::provider::ID_OPENAI,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("is not owned by opencode"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+  }
+
+  #[test]
+  fn base_profile_rejects_unowned_name_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = r#"[profiles.shared]
+providers = ["anthropic"]
+"#;
+    std::fs::write(&path, original).unwrap();
+
+    let error = upsert_agent_and_profiles(
+      &path,
+      &AgentId::Opencode,
+      Some("shared"),
+      RouteMode::Route,
+      &[],
+      &[],
+      tokn_core::provider::ID_OPENAI,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("profile 'shared' already exists"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+  }
+
+  #[test]
+  fn changing_binding_preserves_an_unowned_previous_profile() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+      &path,
+      r#"[agents.opencode]
+profile = "shared"
+
+[profiles.shared]
+providers = ["anthropic"]
+"#,
+    )
+    .unwrap();
+
+    upsert_agent_and_profiles(
+      &path,
+      &AgentId::Opencode,
+      Some("opencode"),
+      RouteMode::Route,
+      &[],
+      &[],
+      tokn_core::provider::ID_OPENAI,
+    )
+    .unwrap();
+
+    let (config, _) = Config::load(Some(&path)).unwrap();
+    assert_eq!(config.agents["opencode"].profile.as_deref(), Some("opencode"));
+    assert_eq!(
+      config.profiles["shared"].providers.as_deref(),
+      Some(&["anthropic".into()][..])
+    );
+    assert_eq!(config.profiles["opencode"].agent_id, Some(AgentId::Opencode));
+  }
+
+  #[test]
+  fn switch_profiles_reject_unowned_name_collisions() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = r#"[profiles.opencode-openai]
+providers = ["anthropic"]
+"#;
+    std::fs::write(&path, original).unwrap();
+    let account = sample_account("opencode-openai", tokn_core::provider::ID_OPENAI);
+
+    let error = upsert_agent_and_profiles(
+      &path,
+      &AgentId::Opencode,
+      Some("opencode"),
+      RouteMode::Switch,
+      &[account],
+      &[],
+      tokn_core::provider::ID_OPENAI,
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("profile 'opencode-openai' already exists"));
+    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+  }
+
+  #[test]
   fn upsert_agent_and_profiles_respects_switch_mode_with_synthetic_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -746,6 +1587,7 @@ port = 4141
       Some("opencode"),
       RouteMode::Switch,
       &[openai, codex],
+      &[],
       tokn_core::provider::ID_OPENAI,
     )
     .unwrap();
@@ -788,6 +1630,50 @@ port = 4141
   }
 
   #[test]
+  fn transferred_account_replaces_an_old_credential_for_the_same_source_provider() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_path = dir.path().join("auth.yaml");
+    let source_path = dir.path().join("opencode-auth.json");
+    let mut old = annotate_imported_account(
+      sample_account("opencode-codex", tokn_core::provider::ID_CODEX),
+      AgentId::Opencode,
+      &source_path,
+      "auth.openai",
+      "20260604T153012Z",
+    );
+    old
+      .settings
+      .get_mut("import")
+      .and_then(toml::Value::as_table_mut)
+      .unwrap()
+      .insert("source_provider".into(), toml::Value::String("openai".into()));
+    let old = mark_gateway_owned(old);
+    let mut store = AuthStore::load(Some(&auth_path), None).unwrap();
+    store.accounts = vec![old];
+
+    let mut replacement = annotate_imported_account(
+      sample_account("opencode-openai", tokn_core::provider::ID_OPENAI),
+      AgentId::Opencode,
+      &source_path,
+      "auth.openai",
+      "20260604T153013Z",
+    );
+    replacement
+      .settings
+      .get_mut("import")
+      .and_then(toml::Value::as_table_mut)
+      .unwrap()
+      .insert("source_provider".into(), toml::Value::String("openai".into()));
+
+    let desired = merge_transferred_accounts(&store, &AgentId::Opencode, vec![replacement]);
+    remove_replaced_gateway_accounts(&mut store, &AgentId::Opencode, &desired);
+
+    assert_eq!(desired.len(), 1);
+    assert_eq!(desired[0].id, "opencode-openai");
+    assert!(store.accounts.is_empty());
+  }
+
+  #[test]
   fn write_edit_creates_parent_directories_for_json_and_toml() {
     let dir = tempfile::tempdir().unwrap();
     let json_path = dir.path().join("nested/auth.json");
@@ -795,20 +1681,32 @@ port = 4141
     let mut doc = toml_edit::DocumentMut::new();
     doc["model_provider"] = toml_edit::value("tokn-router");
 
-    write_edit(&PlannedEdit {
-      path: json_path.clone(),
-      kind: EditKind::Json(serde_json::json!({"auth_mode": "api_key"})),
-    })
+    write_edit(&PlannedEdit::new(
+      json_path.clone(),
+      EditKind::Json(serde_json::json!({"auth_mode": "api_key"})),
+      true,
+      None,
+    ))
     .unwrap();
-    write_edit(&PlannedEdit {
-      path: toml_path.clone(),
-      kind: EditKind::Toml(doc),
-    })
-    .unwrap();
+    write_edit(&PlannedEdit::new(toml_path.clone(), EditKind::Toml(doc), true, None)).unwrap();
 
     let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
     assert_eq!(json["auth_mode"], "api_key");
     assert!(std::fs::read_to_string(toml_path).unwrap().contains("model_provider"));
+  }
+
+  #[test]
+  fn planned_edit_debug_redacts_file_contents() {
+    let edit = PlannedEdit::new(
+      PathBuf::from("auth.json"),
+      EditKind::Json(serde_json::json!({"key": "super-secret"})),
+      false,
+      Some(b"super-secret".to_vec()),
+    );
+
+    let debug = format!("{edit:?}");
+    assert!(!debug.contains("super-secret"));
+    assert!(debug.contains("length"));
   }
 
   #[test]
@@ -825,14 +1723,23 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       gateway_config_path: gateway_config_path.clone(),
       gateway_auth_path: gateway_auth_path.clone(),
+      gateway_config_snapshot: FileSnapshot::Missing,
+      gateway_auth_snapshot: FileSnapshot::Missing,
+      source_auth_path: dir.path().join("source-auth.json"),
+      source_auth_snapshot: FileSnapshot::Missing,
+      agent_auth_path: Some(dir.path().join("agent/auth.json")),
       binding_profile: Some("opencode".into()),
       binding_mode: RouteMode::Route,
       target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
       imported_accounts: vec![account],
-      edits: vec![PlannedEdit {
-        path: agent_config_path.clone(),
-        kind: EditKind::Json(serde_json::json!({"provider": "tokn-router"})),
-      }],
+      provider_routes: Vec::new(),
+      edits: vec![PlannedEdit::new(
+        agent_config_path.clone(),
+        EditKind::Json(serde_json::json!({"provider": "tokn-router"})),
+        true,
+        None,
+      )],
+      previous_manifest: None,
     };
 
     let report = apply_reconcile_to_manifest_path(plan, manifest_path.clone()).unwrap();
@@ -868,14 +1775,23 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       gateway_config_path,
       gateway_auth_path,
+      gateway_config_snapshot: FileSnapshot::Missing,
+      gateway_auth_snapshot: FileSnapshot::Missing,
+      source_auth_path: dir.path().join("source-auth.json"),
+      source_auth_snapshot: FileSnapshot::Missing,
+      agent_auth_path: Some(dir.path().join("agent/auth.json")),
       binding_profile: Some("opencode".into()),
       binding_mode: RouteMode::Route,
       target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
       imported_accounts: vec![account],
-      edits: vec![PlannedEdit {
-        path: edit_path.clone(),
-        kind: EditKind::Json(serde_json::json!({"provider": "tokn-router"})),
-      }],
+      provider_routes: Vec::new(),
+      edits: vec![PlannedEdit::new(
+        edit_path.clone(),
+        EditKind::Json(serde_json::json!({"provider": "tokn-router"})),
+        true,
+        None,
+      )],
+      previous_manifest: None,
     };
 
     let err = apply_reconcile_to_manifest_path(plan, manifest_path.clone()).unwrap_err();
@@ -884,6 +1800,239 @@ port = 4141
     let manifest: MigrationManifest = serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
     assert!(!manifest.completed);
     assert!(manifest.files.iter().any(|file| file.original == edit_path));
+  }
+
+  #[test]
+  fn opencode_transfer_survives_sync_and_unlink_exports_latest_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.jsonc");
+    let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
+    let first_manifest_path = dir.path().join("20260604T153012Z-opencode.json");
+    let second_manifest_path = dir.path().join("20260604T153013Z-opencode.json");
+    std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+
+    let original_gateway_config = r#"[server]
+host = "127.0.0.1"
+port = 4141
+
+[profiles.existing]
+providers = ["openai"]
+
+[profiles.opencode-user]
+providers = ["anthropic"]
+"#;
+    let original_opencode_config = r#"{
+  // Preserve the user's global model choice.
+  "model": "openai/gpt-5",
+  "provider": {
+    "anthropic": {
+      "options": { "apiKey": "leave-alone" },
+    },
+  },
+}
+"#;
+    std::fs::write(&gateway_config_path, original_gateway_config).unwrap();
+    std::fs::write(&opencode_config_path, original_opencode_config).unwrap();
+    std::fs::write(
+      &opencode_auth_path,
+      serde_json::to_vec_pretty(&serde_json::json!({
+        "openai": {
+          "type": "api",
+          "key": "sk-original"
+        },
+        "github-copilot": {
+          "type": "oauth",
+          "refresh": "ghu-original",
+          "access": "tid-original",
+          "expires": 0
+        },
+        "anthropic": {
+          "type": "api",
+          "key": "anthropic-keep"
+        }
+      }))
+      .unwrap(),
+    )
+    .unwrap();
+
+    let request = || ReconcileRequest {
+      agent: AgentId::Opencode,
+      profile: None,
+      mode: None,
+      gateway_config_path: Some(gateway_config_path.clone()),
+      agent_home: Some(agent_home.clone()),
+    };
+    let mut first_plan = plan_reconcile_with_gateway_auth_path(request(), gateway_auth_path.clone()).unwrap();
+    first_plan.timestamp = "20260604T153012Z".into();
+    assert_eq!(first_plan.imported_accounts.len(), 2);
+    assert_eq!(first_plan.provider_routes.len(), 2);
+    assert!(first_plan
+      .provider_routes
+      .iter()
+      .all(|route| route.transfer_source_auth));
+    apply_reconcile_to_manifest_path(first_plan, first_manifest_path.clone()).unwrap();
+
+    let linked_auth: Value = serde_json::from_str(&std::fs::read_to_string(&opencode_auth_path).unwrap()).unwrap();
+    assert!(linked_auth.get("openai").is_none());
+    assert!(linked_auth.get("github-copilot").is_none());
+    assert_eq!(linked_auth["anthropic"]["key"], "anthropic-keep");
+
+    let linked_config = crate::jsonc::read_jsonc(&opencode_config_path).unwrap();
+    assert_eq!(linked_config["model"], "openai/gpt-5");
+    assert_eq!(
+      linked_config["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/opencode-openai/v1"
+    );
+    assert_eq!(
+      linked_config["provider"]["github-copilot"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/opencode-github-copilot/v1"
+    );
+    assert!(std::fs::read_to_string(&opencode_config_path)
+      .unwrap()
+      .contains("Preserve the user's global model choice"));
+
+    let (linked_gateway_config, _) = Config::load(Some(&gateway_config_path)).unwrap();
+    assert!(linked_gateway_config.profiles.contains_key("opencode-user"));
+    assert_eq!(
+      linked_gateway_config.profiles["opencode-openai"].accounts.as_deref(),
+      Some(&["opencode-openai".to_string()][..])
+    );
+    assert_eq!(
+      linked_gateway_config.profiles["opencode-github-copilot"]
+        .accounts
+        .as_deref(),
+      Some(&["opencode-github-copilot".to_string()][..])
+    );
+
+    let mut store = AuthStore::load(Some(&gateway_auth_path), None).unwrap();
+    assert_eq!(
+      store.get("opencode-openai").unwrap().api_key.as_ref().unwrap().expose(),
+      "sk-original"
+    );
+    assert_eq!(
+      store
+        .get("opencode-github-copilot")
+        .unwrap()
+        .refresh_token
+        .as_ref()
+        .unwrap()
+        .expose(),
+      "ghu-original"
+    );
+    store.get_mut("opencode-openai").unwrap().api_key = Some(tokn_core::util::secret::Secret::new("sk-latest".into()));
+    let copilot = store.get_mut("opencode-github-copilot").unwrap();
+    copilot.refresh_token = Some(tokn_core::util::secret::Secret::new("ghu-latest".into()));
+    copilot.access_token = Some(tokn_core::util::secret::Secret::new("tid-latest".into()));
+    copilot.access_token_expires_at = Some(222);
+    store.save().unwrap();
+
+    let mut second_plan = plan_reconcile_with_gateway_auth_path(request(), gateway_auth_path.clone()).unwrap();
+    second_plan.timestamp = "20260604T153013Z".into();
+    second_plan.previous_manifest = Some(first_manifest_path.clone());
+    assert_eq!(second_plan.imported_accounts.len(), 2);
+    assert!(second_plan.imported_accounts.iter().all(|account| account.enabled));
+    assert!(second_plan
+      .provider_routes
+      .iter()
+      .all(|route| !route.transfer_source_auth));
+    apply_reconcile_to_manifest_path(second_plan, second_manifest_path.clone()).unwrap();
+
+    let synced_store = AuthStore::load(Some(&gateway_auth_path), None).unwrap();
+    assert_eq!(synced_store.accounts.len(), 2);
+    assert_eq!(
+      synced_store
+        .get("opencode-github-copilot")
+        .unwrap()
+        .refresh_token
+        .as_ref()
+        .unwrap()
+        .expose(),
+      "ghu-latest"
+    );
+    let second_manifest = manifest::read_manifest(&second_manifest_path).unwrap();
+    assert_eq!(
+      second_manifest.previous_manifest.as_deref(),
+      Some(first_manifest_path.as_path())
+    );
+
+    let err = unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(first_manifest_path.display().to_string()),
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("newer active successor"));
+
+    unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(second_manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(
+      std::fs::read_to_string(&opencode_config_path).unwrap(),
+      original_opencode_config
+    );
+    assert_eq!(
+      std::fs::read_to_string(&gateway_config_path).unwrap(),
+      original_gateway_config
+    );
+    assert!(!gateway_auth_path.exists());
+    let restored_auth: Value = serde_json::from_str(&std::fs::read_to_string(&opencode_auth_path).unwrap()).unwrap();
+    assert_eq!(restored_auth["openai"]["type"], "api");
+    assert_eq!(restored_auth["openai"]["key"], "sk-latest");
+    assert_eq!(restored_auth["github-copilot"]["type"], "oauth");
+    assert_eq!(restored_auth["github-copilot"]["refresh"], "ghu-latest");
+    assert_eq!(restored_auth["github-copilot"]["access"], "ghu-latest");
+    assert_eq!(restored_auth["github-copilot"]["expires"], 0);
+    assert_eq!(restored_auth["anthropic"]["key"], "anthropic-keep");
+    assert!(manifest::read_manifest(&first_manifest_path).unwrap().unlinked);
+    let second_manifest = manifest::read_manifest(&second_manifest_path).unwrap();
+    assert!(second_manifest.unlinked);
+    assert!(second_manifest.credentials_handoff_complete);
+  }
+
+  #[test]
+  fn unlink_resumes_after_credentials_handoff_without_gateway_accounts() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("20260604T153012Z-opencode.json");
+    let agent_auth_path = dir.path().join("opencode-auth.json");
+    let gateway_auth_path = dir.path().join("missing-gateway-auth.yaml");
+    let auth = serde_json::json!({"openai": {"type": "api", "key": "already-restored"}});
+    std::fs::write(&agent_auth_path, serde_json::to_vec_pretty(&auth).unwrap()).unwrap();
+    let manifest = MigrationManifest {
+      version: 2,
+      completed: true,
+      agent: AgentId::Opencode,
+      timestamp: "20260604T153012Z".into(),
+      profile: Some("opencode".into()),
+      target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
+      gateway_auth_path: Some(gateway_auth_path),
+      agent_auth_path: Some(agent_auth_path.clone()),
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: true,
+      imported_account_ids: vec!["opencode-openai".into()],
+      files: Vec::new(),
+    };
+    manifest::write_manifest(&manifest_path, &manifest).unwrap();
+
+    unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(
+      serde_json::from_str::<Value>(&std::fs::read_to_string(agent_auth_path).unwrap()).unwrap(),
+      auth
+    );
+    assert!(manifest::read_manifest(&manifest_path).unwrap().unlinked);
   }
 
   #[test]
@@ -901,6 +2050,12 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       profile: Some("codex".into()),
       target_base_url: "http://127.0.0.1:4141/codex/v1".into(),
+      gateway_auth_path: None,
+      agent_auth_path: None,
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["codex-cli-codex".into()],
       files: vec![FileBackup {
         original: original.clone(),
@@ -934,6 +2089,12 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       profile: Some("opencode".into()),
       target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
+      gateway_auth_path: None,
+      agent_auth_path: None,
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["opencode-openai".into()],
       files: vec![FileBackup {
         original: original.clone(),
@@ -965,6 +2126,12 @@ port = 4141
       timestamp: "20260604T153012Z".into(),
       profile: Some("codex".into()),
       target_base_url: "http://127.0.0.1:4141/codex/v1".into(),
+      gateway_auth_path: None,
+      agent_auth_path: None,
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: false,
       imported_account_ids: vec!["codex-cli-codex".into()],
       files: Vec::new(),
     };
