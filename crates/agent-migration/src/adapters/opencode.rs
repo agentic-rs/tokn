@@ -110,7 +110,10 @@ fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject
   let Some(value) = legacy.to_serde_value() else {
     return;
   };
-  if !is_generated_legacy_router_provider(&value, base_url) || config_references_legacy_router(obj) {
+  if !is_generated_legacy_router_provider(&value, base_url)
+    || legacy_router_has_models(&value)
+    || config_references_legacy_router(obj)
+  {
     return;
   }
   legacy.remove();
@@ -129,6 +132,14 @@ fn is_generated_legacy_router_provider(value: &Value, base_url: &str) -> bool {
       .and_then(|options| options.get("baseURL"))
       .and_then(Value::as_str)
       == Some(base_url)
+}
+
+fn legacy_router_has_models(value: &Value) -> bool {
+  match value.get("models") {
+    None => false,
+    Some(Value::Object(models)) => !models.is_empty(),
+    Some(_) => true,
+  }
 }
 
 fn config_references_legacy_router(obj: &jsonc_parser::cst::CstObject) -> bool {
@@ -553,6 +564,41 @@ mod tests {
     let json = root.to_serde_value().unwrap();
     assert_eq!(json["model"], "tokn-router/gpt-5");
     assert!(json["provider"].get("tokn-router").is_some());
+  }
+
+  #[test]
+  fn rewrite_preserves_explicit_legacy_models_without_a_default_selection() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "models": {"copilot-only-model": {"name": "Copilot-only model"}},
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/v1")],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert_eq!(
+      json["provider"]["tokn-router"]["models"]["copilot-only-model"]["name"],
+      "Copilot-only model"
+    );
   }
 
   #[test]
