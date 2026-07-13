@@ -113,10 +113,7 @@ fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject
   let Some(value) = legacy.to_serde_value() else {
     return;
   };
-  if !is_generated_legacy_router_provider(&value, base_url)
-    || legacy_router_has_models(&value)
-    || config_references_legacy_router(obj)
-  {
+  if !is_generated_legacy_router_provider(&value, base_url) || config_references_legacy_router(obj) {
     return;
   }
   legacy.remove();
@@ -124,31 +121,23 @@ fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject
 
 fn is_generated_legacy_router_provider(value: &Value, base_url: &str) -> bool {
   let gateway_root = gateway_root_base_url(base_url);
-  let legacy_base_url = value
-    .get("options")
-    .and_then(|options| options.get("baseURL"))
-    .and_then(Value::as_str);
-  value.get("name").and_then(Value::as_str) == Some("tokn-router")
-    && value.get("npm").and_then(Value::as_str) == Some("@ai-sdk/openai-compatible")
-    && value
-      .get("options")
-      .and_then(|options| options.get("apiKey"))
-      .and_then(Value::as_str)
-      == Some("tokn-router")
-    && legacy_base_url.is_some_and(|legacy| legacy == base_url || gateway_root.as_deref() == Some(legacy))
+  let matches_generated_shape = |candidate_base_url: &str| {
+    value
+      == &serde_json::json!({
+        "name": "tokn-router",
+        "npm": "@ai-sdk/openai-compatible",
+        "options": {
+          "apiKey": "tokn-router",
+          "baseURL": candidate_base_url
+        }
+      })
+  };
+  matches_generated_shape(base_url) || gateway_root.as_deref().is_some_and(matches_generated_shape)
 }
 
 fn gateway_root_base_url(base_url: &str) -> Option<String> {
   let uri = base_url.parse::<http::Uri>().ok()?;
   Some(format!("{}://{}/v1", uri.scheme_str()?, uri.authority()?))
-}
-
-fn legacy_router_has_models(value: &Value) -> bool {
-  match value.get("models") {
-    None => false,
-    Some(Value::Object(models)) => !models.is_empty(),
-    Some(_) => true,
-  }
 }
 
 fn config_references_legacy_router(obj: &jsonc_parser::cst::CstObject) -> bool {
@@ -683,6 +672,39 @@ mod tests {
     let json = root.to_serde_value().unwrap();
     assert_eq!(json["provider"]["tokn-router"]["name"], "my router");
     assert_eq!(json["provider"]["tokn-router"]["options"]["apiKey"], "user-key");
+  }
+
+  #[test]
+  fn rewrite_preserves_customized_legacy_provider_options() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1",
+        "timeout": false
+      }
+    }
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/v1")],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert_eq!(json["provider"]["tokn-router"]["options"]["timeout"], false);
+    assert!(json["provider"].get("openai").is_some());
   }
 
   #[test]
