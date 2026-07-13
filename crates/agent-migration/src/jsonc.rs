@@ -11,9 +11,13 @@ pub(crate) fn read_jsonc(path: &Path) -> Result<Value> {
 
 pub(crate) fn parse_jsonc(raw: &str, path: &Path) -> Result<Value> {
   let root = parse_cst(raw, path)?;
-  root
+  let value = root
     .to_serde_value()
-    .ok_or_else(|| anyhow!("{} must contain a JSON object", path.display()))
+    .ok_or_else(|| anyhow!("{} must contain a JSON object", path.display()))?;
+  if !value.is_object() {
+    return Err(anyhow!("{} must contain a JSON object", path.display()));
+  }
+  Ok(value)
 }
 
 pub(crate) fn parse_cst(raw: &str, path: &Path) -> Result<CstRootNode> {
@@ -68,6 +72,14 @@ mod tests {
   #[test]
   fn rejects_unterminated_block_comments() {
     assert!(parse_jsonc(r#"{"model":"openai/gpt-5"} /* unfinished"#, Path::new("opencode.jsonc")).is_err());
+  }
+
+  #[test]
+  fn rejects_non_object_roots() {
+    for raw in ["[]", "null", r#""openai/gpt-5""#] {
+      let error = parse_jsonc(raw, Path::new("opencode.jsonc")).unwrap_err();
+      assert!(error.to_string().contains("must contain a JSON object"));
+    }
   }
 
   #[test]

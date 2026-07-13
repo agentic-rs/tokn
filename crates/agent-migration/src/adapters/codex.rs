@@ -51,27 +51,25 @@ impl AgentAdapter for CodexAdapter {
         obj.insert("auth_mode".into(), Value::String("api_key".into()));
         obj.insert("OPENAI_API_KEY".into(), Value::String("tokn-router".into()));
       }
-      edits.push(PlannedEdit {
-        path: auth_path,
-        kind: EditKind::Json(json),
-        backup: true,
-      });
+      edits.push(PlannedEdit::new(
+        auth_path,
+        EditKind::Json(json),
+        true,
+        Some(raw.into_bytes()),
+      ));
     }
 
-    let mut doc = if config_path.exists() {
-      std::fs::read_to_string(&config_path)
-        .with_context(|| format!("reading {}", config_path.display()))?
+    let (mut doc, config_source) = if config_path.exists() {
+      let raw = std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?;
+      let doc = raw
         .parse::<toml_edit::DocumentMut>()
-        .with_context(|| format!("parsing {}", config_path.display()))?
+        .with_context(|| format!("parsing {}", config_path.display()))?;
+      (doc, Some(raw.into_bytes()))
     } else {
-      toml_edit::DocumentMut::new()
+      (toml_edit::DocumentMut::new(), None)
     };
     rewrite_config(&mut doc, base_url);
-    edits.push(PlannedEdit {
-      path: config_path,
-      kind: EditKind::Toml(doc),
-      backup: true,
-    });
+    edits.push(PlannedEdit::new(config_path, EditKind::Toml(doc), true, config_source));
     Ok(edits)
   }
 }

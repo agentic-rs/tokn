@@ -44,7 +44,8 @@ impl AgentAdapter for OpencodeAdapter {
 
   fn rewrite_config(&self, home: &Path, base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
     let config_path = self.config_path(home);
-    let raw = if config_path.exists() {
+    let config_existed = config_path.exists();
+    let raw = if config_existed {
       std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?
     } else {
       "{}\n".to_string()
@@ -52,14 +53,16 @@ impl AgentAdapter for OpencodeAdapter {
     let root = parse_cst(&raw, &config_path)?;
     rewrite_config(&root, base_url, routes)?;
 
-    let mut edits = vec![PlannedEdit {
-      path: config_path,
-      kind: EditKind::Jsonc(root.to_string()),
-      backup: true,
-    }];
+    let mut edits = Vec::new();
     if let Some(auth_edit) = remove_transferred_credentials(&self.auth_path(home), routes)? {
       edits.push(auth_edit);
     }
+    edits.push(PlannedEdit::new(
+      config_path,
+      EditKind::Jsonc(root.to_string()),
+      true,
+      config_existed.then(|| raw.into_bytes()),
+    ));
     Ok(edits)
   }
 
@@ -120,6 +123,11 @@ fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject
 }
 
 fn is_generated_legacy_router_provider(value: &Value, base_url: &str) -> bool {
+  let gateway_root = gateway_root_base_url(base_url);
+  let legacy_base_url = value
+    .get("options")
+    .and_then(|options| options.get("baseURL"))
+    .and_then(Value::as_str);
   value.get("name").and_then(Value::as_str) == Some("tokn-router")
     && value.get("npm").and_then(Value::as_str) == Some("@ai-sdk/openai-compatible")
     && value
@@ -127,11 +135,12 @@ fn is_generated_legacy_router_provider(value: &Value, base_url: &str) -> bool {
       .and_then(|options| options.get("apiKey"))
       .and_then(Value::as_str)
       == Some("tokn-router")
-    && value
-      .get("options")
-      .and_then(|options| options.get("baseURL"))
-      .and_then(Value::as_str)
-      == Some(base_url)
+    && legacy_base_url.is_some_and(|legacy| legacy == base_url || gateway_root.as_deref() == Some(legacy))
+}
+
+fn gateway_root_base_url(base_url: &str) -> Option<String> {
+  let uri = base_url.parse::<http::Uri>().ok()?;
+  Some(format!("{}://{}/v1", uri.scheme_str()?, uri.authority()?))
 }
 
 fn legacy_router_has_models(value: &Value) -> bool {
@@ -179,12 +188,15 @@ fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) ->
   for provider in providers {
     changed |= auth.remove(provider).is_some();
   }
-  Ok(changed.then(|| PlannedEdit {
-    path: auth_path.to_path_buf(),
-    kind: EditKind::Json(json),
-    // The gateway-owned credentials are the rollback source of truth. Avoid
-    // leaving adjacent plaintext token backups behind.
-    backup: false,
+  Ok(changed.then(|| {
+    PlannedEdit::new(
+      auth_path.to_path_buf(),
+      EditKind::Json(json),
+      // The gateway-owned credentials are the rollback source of truth. Avoid
+      // leaving adjacent plaintext token backups behind.
+      false,
+      Some(raw.into_bytes()),
+    )
   }))
 }
 
@@ -529,6 +541,46 @@ mod tests {
     assert_eq!(
       json["provider"]["openai"]["options"]["baseURL"],
       "http://127.0.0.1:4141/v1"
+    );
+  }
+
+  #[test]
+  fn rewrite_replaces_root_legacy_provider_when_the_new_route_is_profiled() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/opencode/v1",
+      &[route(
+        "openai",
+        "openai",
+        "opencode-openai",
+        "http://127.0.0.1:4141/opencode-openai/v1",
+      )],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert!(json["provider"].get("tokn-router").is_none());
+    assert_eq!(
+      json["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/opencode-openai/v1"
     );
   }
 
