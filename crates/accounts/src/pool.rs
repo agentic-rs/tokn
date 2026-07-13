@@ -387,77 +387,36 @@ impl AccountPool {
     route: &RouteResolution,
     requested: Endpoint,
   ) -> Option<Endpoint> {
-    fallback_order(requested)
+    route_endpoint_order(route, requested)
       .into_iter()
       .find(|endpoint| self.account_matches_route(acct, route, *endpoint))
   }
 
   fn account_matches_route(&self, acct: &AccountHandle, route: &RouteResolution, endpoint: Endpoint) -> bool {
-    match &route.selector {
-      RouteSelector::Any => acct.provider.supports(&route.upstream_model, endpoint),
-      RouteSelector::Provider(provider) => {
-        let model = if matches!(
-          route.mode,
-          tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
-        ) {
-          None
-        } else {
-          Some(route.upstream_model.as_str())
-        };
-        acct.provider.info().id == *provider && self.account_matches(acct, model, endpoint)
-      }
-      RouteSelector::Model => self.account_matches(acct, Some(&route.upstream_model), endpoint),
-      RouteSelector::Fuzzy { candidates } => candidates
-        .iter()
-        .any(|candidate| self.account_matches(acct, Some(candidate), endpoint)),
-    }
+    provider_matches_route(acct.provider.as_ref(), route, endpoint)
   }
 
   fn acquire_from_route(&self, route: &RouteResolution, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
-    match &route.selector {
-      RouteSelector::Any => self.acquire_any_convertible(requested),
-      RouteSelector::Provider(provider) => {
-        let model = if matches!(
-          route.mode,
-          tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
-        ) {
-          ""
-        } else {
-          &route.upstream_model
-        };
-        self.acquire_provider_convertible(provider, model, requested)
-      }
-      RouteSelector::Model => self.acquire_from_buckets_convertible(Some(&route.upstream_model), requested),
-      RouteSelector::Fuzzy { candidates } => {
-        for candidate in candidates {
-          if let Some((acct, endpoint)) = self.acquire_from_buckets_convertible(Some(candidate), requested) {
-            return Some((acct, endpoint));
-          }
-        }
-        None
-      }
-    }
-  }
+    for endpoint in route_endpoint_order(route, requested) {
+      let candidates = self
+        .buckets
+        .values()
+        .filter(|bucket| provider_matches_route(bucket.provider.as_ref(), route, endpoint))
+        .collect::<Vec<_>>();
 
-  fn acquire_any_convertible(&self, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
-    for endpoint in fallback_order(requested) {
-      for bucket in self.buckets.values() {
-        if bucket.provider.supports("", endpoint) {
-          if let Some(acct) = bucket.pick_healthy() {
-            return Some((acct, endpoint));
-          }
+      for bucket in &candidates {
+        if let Some(acct) = bucket.pick_healthy() {
+          return Some((acct, endpoint));
         }
       }
 
       let mut best: Option<Arc<AccountHandle>> = None;
       let mut best_t: Option<Instant> = None;
-      for bucket in self.buckets.values() {
-        if bucket.provider.supports("", endpoint) {
-          if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
-            if best.is_none() || t < best_t {
-              best = Some(acct);
-              best_t = t;
-            }
+      for bucket in candidates {
+        if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+          if best.is_none() || t < best_t {
+            best = Some(acct);
+            best_t = t;
           }
         }
       }
@@ -467,26 +426,33 @@ impl AccountPool {
     }
     None
   }
+}
 
-  fn acquire_provider_convertible(
-    &self,
-    provider: &str,
-    model: &str,
-    requested: Endpoint,
-  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
-    let bucket = self.buckets.get(provider)?;
-    for endpoint in fallback_order(requested) {
-      if !bucket.matches(Some(model), endpoint) {
-        continue;
-      }
-      if let Some(acct) = bucket.pick_healthy() {
-        return Some((acct, endpoint));
-      }
-      if let Some((acct, _)) = bucket.pick_earliest_cooldown() {
-        return Some((acct, endpoint));
+fn provider_matches_route(provider: &dyn Provider, route: &RouteResolution, endpoint: Endpoint) -> bool {
+  let verbatim = matches!(
+    route.mode,
+    tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
+  );
+  let supports = |model: &str| {
+    if verbatim {
+      // Raw routes deliberately accept models outside the local catalogue,
+      // but still must obey provider model-specific wire endpoint rules.
+      provider.has_endpoint(&route.upstream_model, endpoint)
+    } else {
+      provider.supports(model, endpoint)
+    }
+  };
+  match &route.selector {
+    RouteSelector::Any => supports(&route.upstream_model),
+    RouteSelector::Provider(provider_id) => provider.info().id == *provider_id && supports(&route.upstream_model),
+    RouteSelector::Model => supports(&route.upstream_model),
+    RouteSelector::Fuzzy { candidates } => {
+      if verbatim {
+        supports(&route.upstream_model)
+      } else {
+        candidates.iter().any(|candidate| supports(candidate))
       }
     }
-    None
   }
 }
 
@@ -496,6 +462,16 @@ fn fallback_order(requested: Endpoint) -> Vec<Endpoint> {
     Endpoint::Responses => vec![Endpoint::Responses, Endpoint::ChatCompletions, Endpoint::Messages],
     Endpoint::Messages => vec![Endpoint::Messages, Endpoint::ChatCompletions, Endpoint::Responses],
   }
+}
+
+fn route_endpoint_order(route: &RouteResolution, requested: Endpoint) -> Vec<Endpoint> {
+  if matches!(
+    route.mode,
+    tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
+  ) {
+    return vec![requested];
+  }
+  fallback_order(requested)
 }
 
 impl ProviderBucket {
@@ -546,19 +522,31 @@ fn earliest_cooldown(accounts: &[Arc<AccountHandle>]) -> Option<(Arc<AccountHand
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::routing::RouteResolver;
+  use crate::routing::{RouteResolution, RouteResolver, RouteSelector};
   use async_trait::async_trait;
   use serde_json::Value;
   use tokn_core::provider::{
-    AuthKind, Capabilities, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo, RequestCtx,
+    AuthKind, Capabilities, EndpointRule, Interleaved, Limits, Modalities, ModelCache, ModelInfo, ProviderInfo,
+    RequestCtx,
   };
 
   struct MockProvider {
     info: ProviderInfo,
+    endpoint_rules: &'static [EndpointRule],
   }
 
   impl MockProvider {
     fn new(id: &str, aliases: &'static [&'static str], models: &[&str]) -> Arc<Self> {
+      Self::with_endpoints(id, aliases, models, &[Endpoint::ChatCompletions], &[])
+    }
+
+    fn with_endpoints(
+      id: &str,
+      aliases: &'static [&'static str],
+      models: &[&str],
+      default_endpoints: &'static [Endpoint],
+      endpoint_rules: &'static [EndpointRule],
+    ) -> Arc<Self> {
       Arc::new(Self {
         info: ProviderInfo {
           id: id.into(),
@@ -567,9 +555,10 @@ mod tests {
           upstream_url: "https://mock.invalid".into(),
           auth_kind: AuthKind::StaticApiKey,
           default_models: models.iter().map(|m| model(m)).collect(),
-          default_endpoints: &[Endpoint::ChatCompletions],
+          default_endpoints,
           model_cache: Arc::new(ModelCache::default()),
         },
+        endpoint_rules,
       })
     }
   }
@@ -582,6 +571,10 @@ mod tests {
 
     fn info(&self) -> &ProviderInfo {
       &self.info
+    }
+
+    fn endpoint_rules(&self) -> Option<&'static [EndpointRule]> {
+      Some(self.endpoint_rules)
     }
 
     async fn list_models(&self, _http: &reqwest::Client) -> tokn_core::provider::Result<Value> {
@@ -686,6 +679,28 @@ mod tests {
     }
   }
 
+  fn pool_for_provider(provider: Arc<dyn Provider>) -> AccountPool {
+    let account = acct("only", provider.clone());
+    let provider_id = provider.info().id.clone();
+    let mut buckets = BTreeMap::new();
+    buckets.insert(
+      provider_id,
+      ProviderBucket {
+        provider,
+        accounts: vec![account.clone()],
+        cursor: AtomicUsize::new(0),
+        fallback_accounts: Vec::new(),
+        fallback_cursor: AtomicUsize::new(0),
+      },
+    );
+    AccountPool {
+      buckets,
+      accounts: vec![account],
+      cooldown_base: Duration::from_secs(1),
+      affinity: Affinity::new(Duration::from_secs(60), Duration::from_secs(120)),
+    }
+  }
+
   #[test]
   fn routes_by_provider_model_catalogue() {
     let p = pool();
@@ -705,6 +720,80 @@ mod tests {
       p.acquire_for_session(None, Some("unknown"), Endpoint::ChatCompletions),
       SessionAcquire::None
     ));
+  }
+
+  #[test]
+  fn verbatim_routes_require_the_requested_endpoint_and_obey_model_endpoint_rules() {
+    static RESPONSES_ONLY: &[Endpoint] = &[Endpoint::Responses];
+    static MODEL_A_RESPONSES_ONLY: &[EndpointRule] = &[EndpointRule {
+      pattern: "model-a",
+      endpoints: RESPONSES_ONLY,
+    }];
+    static PROVIDER: &[&str] = &["provider-a"];
+
+    // Route mode may convert OpenAI Chat traffic to a provider's Responses
+    // endpoint. A raw switch must not do that conversion.
+    let responses_only = MockProvider::with_endpoints("responses-only", PROVIDER, &["model-a"], RESPONSES_ONLY, &[]);
+    let pool = pool_for_provider(responses_only);
+    let route = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("model-a", None)
+      .unwrap();
+    assert!(matches!(
+      pool.acquire_for_route(None, &route, Endpoint::ChatCompletions),
+      EndpointAcquire::Account {
+        endpoint: Endpoint::Responses,
+        ..
+      }
+    ));
+    let switch =
+      RouteResolver::with_default_provider(tokn_config::RouteMode::Switch, Some("responses-only".into()), &[])
+        .resolve("model-a", None)
+        .unwrap();
+    pool.record_session("switch-session", "only");
+    assert!(matches!(
+      pool.acquire_for_route(Some("switch-session"), &switch, Endpoint::ChatCompletions),
+      EndpointAcquire::None
+    ));
+
+    // A raw provider selector intentionally skips catalogue identity checks,
+    // but its model-specific endpoint restrictions still apply.
+    let rule_bound = MockProvider::with_endpoints(
+      "rule-bound",
+      PROVIDER,
+      &[],
+      &[Endpoint::ChatCompletions],
+      MODEL_A_RESPONSES_ONLY,
+    );
+    let pool = pool_for_provider(rule_bound);
+    let provider_switch =
+      RouteResolver::with_default_provider(tokn_config::RouteMode::Switch, Some("rule-bound".into()), &[])
+        .resolve("model-a", None)
+        .unwrap();
+    assert!(matches!(
+      pool.acquire_for_route(None, &provider_switch, Endpoint::ChatCompletions),
+      EndpointAcquire::None
+    ));
+
+    // Keep manually constructed route resolutions subject to the same raw
+    // endpoint guard; future resolver changes cannot reopen conversion here.
+    for selector in [
+      RouteSelector::Model,
+      RouteSelector::Fuzzy {
+        candidates: vec!["model-a".into()],
+      },
+      RouteSelector::Any,
+    ] {
+      let route = RouteResolution {
+        mode: tokn_config::RouteMode::Switch,
+        requested_model: "model-a".into(),
+        upstream_model: "model-a".into(),
+        selector,
+      };
+      assert!(matches!(
+        pool.acquire_for_route(None, &route, Endpoint::ChatCompletions),
+        EndpointAcquire::None
+      ));
+    }
   }
 
   #[test]

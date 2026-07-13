@@ -40,6 +40,24 @@ pub struct Config {
   pub model_families: Vec<ModelFamily>,
 }
 
+/// Source files that contributed to an effective configuration.
+///
+/// Agent migration uses this to ensure no source changed between planning and
+/// applying a reversible link operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigSources {
+  pub root: PathBuf,
+  pub fragment_dir: PathBuf,
+  pub fragments: Vec<PathBuf>,
+}
+
+/// An effective configuration together with its source files.
+#[derive(Debug, Clone)]
+pub struct LoadedConfig {
+  pub config: Config,
+  pub sources: ConfigSources,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteMode {
@@ -49,6 +67,19 @@ pub enum RouteMode {
   #[default]
   Route,
   Fuzzy,
+}
+
+/// Where an agent binding obtains its accounts.
+///
+/// `Agent` preserves the original migration behavior: discover and import the
+/// linked agent's credentials. `Main` keeps the agent credentials untouched
+/// and uses the gateway's existing default account pool instead.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAccountSource {
+  #[default]
+  Agent,
+  Main,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +143,12 @@ pub struct AgentConfig {
   pub mode: Option<RouteMode>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub profile: Option<String>,
+  #[serde(default, skip_serializing_if = "is_agent_account_source")]
+  pub account_source: AgentAccountSource,
+  /// Agent-side provider identifiers redirected to this binding when it uses
+  /// the gateway's main account pool.
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub source_providers: Option<Vec<String>>,
   #[serde(default, skip_serializing_if = "is_false")]
   pub sync: bool,
 }
@@ -122,6 +159,17 @@ struct ConfigRaw {
   config: Config,
   #[serde(default)]
   copilot: Option<toml::Table>,
+}
+
+/// A deliberately narrow configuration overlay. Agent link state is kept out
+/// of the primary config so it can be backed up and restored independently.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AgentConfigFragment {
+  #[serde(default)]
+  agents: BTreeMap<String, AgentConfig>,
+  #[serde(default)]
+  profiles: BTreeMap<String, ProfileConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +315,10 @@ fn default_true() -> bool {
 
 fn is_false(value: &bool) -> bool {
   !*value
+}
+
+fn is_agent_account_source(value: &AgentAccountSource) -> bool {
+  *value == AgentAccountSource::Agent
 }
 
 fn default_body_max_bytes() -> usize {
@@ -422,24 +474,39 @@ pub enum LogTarget {
 
 impl Config {
   pub fn load(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
-    let path = match explicit {
-      Some(p) => p.to_path_buf(),
-      None => paths::config_path()?,
-    };
-    if !path.exists() {
-      return Ok((Config::default(), path));
-    }
-    let raw = std::fs::read_to_string(&path).context(error::ReadSnafu { path: path.clone() })?;
-    let raw_cfg: ConfigRaw = toml::from_str(&raw).context(error::ParseSnafu { path: path.clone() })?;
-    if raw_cfg.copilot.is_some() {
-      tracing::warn!(
-        "top-level [copilot] config is ignored by the new account schema; move values under [accounts.settings]"
-      );
-    }
-    let cfg = raw_cfg.config;
-    cfg.validate()?;
-    tracing::debug!(path = %path.display(), "config loaded");
+    let loaded = Self::load_with_sources(explicit)?;
+    Ok((loaded.config, loaded.sources.root))
+  }
+
+  /// Load the primary configuration without applying `config.d` agent
+  /// overlays. Use this only for commands which deliberately rewrite the
+  /// primary config, such as `config init`.
+  pub fn load_primary(explicit: Option<&Path>) -> Result<(Self, PathBuf)> {
+    let path = resolve_config_path(explicit)?;
+    let cfg = load_primary_config(&path)?;
     Ok((cfg, path))
+  }
+
+  /// Load the effective configuration, including the sorted agent-owned
+  /// overlays from the matching `config.d` directory.
+  pub fn load_with_sources(explicit: Option<&Path>) -> Result<LoadedConfig> {
+    let path = resolve_config_path(explicit)?;
+    let mut cfg = load_primary_config(&path)?;
+    let fragment_dir = paths::config_fragment_dir(&path);
+    let fragments = load_fragment_paths(&fragment_dir)?;
+    let sources = ConfigSources {
+      root: path.clone(),
+      fragment_dir,
+      fragments,
+    };
+    let mut fragment_profile_owners = BTreeMap::new();
+    for fragment_path in &sources.fragments {
+      let fragment = load_agent_fragment(fragment_path)?;
+      apply_agent_fragment(&mut cfg, fragment_path, fragment, &mut fragment_profile_owners)?;
+    }
+    cfg.validate()?;
+    tracing::debug!(path = %path.display(), fragments = sources.fragments.len(), "config loaded");
+    Ok(LoadedConfig { config: cfg, sources })
   }
 
   pub fn validate(&self) -> Result<()> {
@@ -458,6 +525,10 @@ impl Config {
       if let Some(profile) = agent.profile.as_deref() {
         validate_profile_name(profile)?;
       }
+      validate_providers(
+        &format!("agents.{name}.source_providers"),
+        agent.source_providers.as_deref(),
+      )?;
     }
     for (name, profile) in &self.profiles {
       validate_profile_name(name)?;
@@ -526,6 +597,188 @@ impl Config {
     }
     write_atomic(path, &serialised)
   }
+}
+
+fn resolve_config_path(explicit: Option<&Path>) -> Result<PathBuf> {
+  match explicit {
+    Some(path) => Ok(path.to_path_buf()),
+    None => paths::config_path(),
+  }
+}
+
+fn load_primary_config(path: &Path) -> Result<Config> {
+  if !path.exists() {
+    return Ok(Config::default());
+  }
+  let raw = std::fs::read_to_string(path).context(error::ReadSnafu {
+    path: path.to_path_buf(),
+  })?;
+  let raw_cfg: ConfigRaw = toml::from_str(&raw).context(error::ParseSnafu {
+    path: path.to_path_buf(),
+  })?;
+  if raw_cfg.copilot.is_some() {
+    tracing::warn!(
+      "top-level [copilot] config is ignored by the new account schema; move values under [accounts.settings]"
+    );
+  }
+  raw_cfg.config.validate()?;
+  Ok(raw_cfg.config)
+}
+
+fn load_fragment_paths(fragment_dir: &Path) -> Result<Vec<PathBuf>> {
+  let entries = match std::fs::read_dir(fragment_dir) {
+    Ok(entries) => entries,
+    Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+    Err(source) => {
+      return Err(Error::Read {
+        path: fragment_dir.to_path_buf(),
+        source,
+      });
+    }
+  };
+  let mut fragments = Vec::new();
+  for entry in entries {
+    let entry = entry.map_err(|source| Error::Read {
+      path: fragment_dir.to_path_buf(),
+      source,
+    })?;
+    let path = entry.path();
+    if path.is_file() && path.extension().is_some_and(|extension| extension == "toml") {
+      fragments.push(path);
+    }
+  }
+  fragments.sort();
+  Ok(fragments)
+}
+
+fn load_agent_fragment(path: &Path) -> Result<AgentConfigFragment> {
+  let raw = std::fs::read_to_string(path).context(error::ReadSnafu {
+    path: path.to_path_buf(),
+  })?;
+  toml::from_str(&raw).context(error::ParseSnafu {
+    path: path.to_path_buf(),
+  })
+}
+
+fn apply_agent_fragment(
+  cfg: &mut Config,
+  path: &Path,
+  fragment: AgentConfigFragment,
+  fragment_profile_owners: &mut BTreeMap<String, AgentId>,
+) -> Result<()> {
+  let agent_name = path
+    .file_stem()
+    .and_then(|name| name.to_str())
+    .filter(|name| !name.is_empty())
+    .ok_or_else(|| Error::Other {
+      message: format!("agent config fragment has no valid filename: {}", path.display()),
+    })?;
+  let agent = AgentId::from(agent_name);
+  if agent.as_str() != agent_name {
+    return Err(Error::Other {
+      message: format!(
+        "agent config fragment {} must use the canonical agent filename {}.toml",
+        path.display(),
+        agent.as_str()
+      ),
+    });
+  }
+  if fragment.agents.len() != 1 || !fragment.agents.contains_key(agent_name) {
+    return Err(Error::Other {
+      message: format!(
+        "agent config fragment {} must define exactly [agents.{agent_name}]",
+        path.display()
+      ),
+    });
+  }
+
+  for (profile_name, profile) in &fragment.profiles {
+    if profile.agent_id.as_ref() != Some(&agent) {
+      return Err(Error::Other {
+        message: format!(
+          "profile '{profile_name}' in {} must set agent_id = '{}'",
+          path.display(),
+          agent.as_str()
+        ),
+      });
+    }
+    if let Some(owner) = fragment_profile_owners.insert(profile_name.clone(), agent.clone()) {
+      return Err(Error::Other {
+        message: format!(
+          "profile '{profile_name}' is managed by both {} and {} agent fragments",
+          owner.as_str(),
+          agent.as_str()
+        ),
+      });
+    }
+    if let Some(existing) = cfg.profiles.get(profile_name) {
+      if existing.agent_id.as_ref() != Some(&agent) {
+        return Err(Error::Other {
+          message: format!(
+            "profile '{profile_name}' in {} conflicts with a profile not owned by {}",
+            path.display(),
+            agent.as_str()
+          ),
+        });
+      }
+    }
+  }
+
+  let binding = fragment
+    .agents
+    .get(agent_name)
+    .expect("fragment agent was checked above")
+    .clone();
+  if let Some(profile_name) = binding.profile.as_deref() {
+    let Some(profile) = fragment.profiles.get(profile_name) else {
+      return Err(Error::Other {
+        message: format!(
+          "agent config fragment {} must define [profiles.{profile_name}] for [agents.{agent_name}].profile",
+          path.display()
+        ),
+      });
+    };
+    if profile.agent_id.as_ref() != Some(&agent) {
+      return Err(Error::Other {
+        message: format!(
+          "profile '{profile_name}' in {} must set agent_id = '{}'",
+          path.display(),
+          agent.as_str()
+        ),
+      });
+    }
+  }
+
+  // A legacy root binding materialized its base profile and provider-specific
+  // children under the binding name. Mask precisely that set while the
+  // sidecar is active, so an old route cannot remain reachable after a
+  // relink without hiding unrelated profiles that merely share an agent
+  // persona.
+  let legacy_profile = cfg
+    .agents
+    .get(agent_name)
+    .and_then(|existing| existing.profile.as_deref())
+    .map(str::to_string);
+  if let Some(legacy_profile) = legacy_profile.as_deref() {
+    remove_legacy_agent_profiles(cfg, legacy_profile, &agent);
+  }
+  cfg.agents.insert(agent_name.to_string(), binding);
+  cfg.profiles.extend(fragment.profiles);
+  Ok(())
+}
+
+fn remove_legacy_agent_profiles(cfg: &mut Config, profile: &str, agent: &AgentId) {
+  let prefix = format!("{profile}-");
+  cfg.profiles.retain(|name, existing| {
+    // Provider children created by the old link writer always carried their
+    // account allow-list. Keep a same-persona, similarly named user profile
+    // without that migration shape visible rather than treating `agent_id`
+    // itself as ownership evidence.
+    !(name == profile
+      || (name.starts_with(&prefix)
+        && existing.agent_id.as_ref() == Some(agent)
+        && existing.accounts.as_ref().is_some_and(|accounts| !accounts.is_empty())))
+  });
 }
 
 #[allow(dead_code)] // used by AuthStore validation in a follow-up cycle
@@ -830,5 +1083,144 @@ mod tests {
     .expect("config should deserialize before validation");
     let err = cfg.validate().expect_err("empty default provider id must fail");
     assert!(err.to_string().contains("provider id must be non-empty"));
+  }
+
+  #[test]
+  fn loads_agent_fragment_without_rewriting_primary_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("config.toml");
+    let root_contents = r#"
+[server]
+port = 9911
+
+[agents.opencode]
+profile = "opencode"
+mode = "route"
+
+[profiles.opencode]
+agent_id = "opencode"
+mode = "route"
+providers = ["openai"]
+accounts = ["legacy-opencode"]
+
+[profiles.opencode-legacy]
+agent_id = "opencode"
+mode = "route"
+providers = ["codex"]
+accounts = ["legacy-opencode"]
+
+[profiles.opencode-coding]
+agent_id = "opencode"
+mode = "route"
+providers = ["openai"]
+
+[profiles.coding]
+agent_id = "opencode"
+mode = "route"
+providers = ["openai"]
+"#;
+    std::fs::write(&root, root_contents).unwrap();
+    let fragment = paths::agent_config_fragment_path(&root, "opencode");
+    std::fs::create_dir_all(fragment.parent().unwrap()).unwrap();
+    std::fs::write(
+      &fragment,
+      r#"
+[agents.opencode]
+profile = "opencode"
+mode = "switch"
+account_source = "main"
+sync = true
+
+[profiles.opencode]
+agent_id = "opencode"
+mode = "switch"
+default_provider_id = "openai"
+providers = ["openai"]
+"#,
+    )
+    .unwrap();
+
+    let loaded = Config::load_with_sources(Some(&root)).unwrap();
+    let agent = loaded.config.agents.get("opencode").unwrap();
+    let profile = loaded.config.profiles.get("opencode").unwrap();
+
+    assert_eq!(loaded.config.server.port, 9911);
+    assert_eq!(agent.mode, Some(RouteMode::Switch));
+    assert_eq!(agent.account_source, AgentAccountSource::Main);
+    assert!(agent.sync);
+    assert_eq!(profile.mode, Some(RouteMode::Switch));
+    assert_eq!(profile.default_provider_id.as_deref(), Some("openai"));
+    assert_eq!(profile.accounts, None);
+    assert!(!loaded.config.profiles.contains_key("opencode-legacy"));
+    assert!(loaded.config.profiles.contains_key("opencode-coding"));
+    assert!(loaded.config.profiles.contains_key("coding"));
+    assert_eq!(loaded.sources.fragments, vec![fragment]);
+    assert_eq!(std::fs::read_to_string(&root).unwrap(), root_contents);
+  }
+
+  #[test]
+  fn rejects_fragment_profile_owned_by_another_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("config.toml");
+    std::fs::write(
+      &root,
+      r#"
+[profiles.shared]
+agent_id = "codex-cli"
+mode = "route"
+"#,
+    )
+    .unwrap();
+    let fragment = paths::agent_config_fragment_path(&root, "opencode");
+    std::fs::create_dir_all(fragment.parent().unwrap()).unwrap();
+    std::fs::write(
+      &fragment,
+      r#"
+[agents.opencode]
+profile = "shared"
+
+[profiles.shared]
+agent_id = "opencode"
+mode = "route"
+"#,
+    )
+    .unwrap();
+
+    let err = Config::load(Some(&root)).unwrap_err();
+    assert!(err.to_string().contains("not owned by opencode"));
+  }
+
+  #[test]
+  fn rejects_non_agent_settings_in_a_fragment() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("config.toml");
+    let fragment = paths::agent_config_fragment_path(&root, "opencode");
+    std::fs::create_dir_all(fragment.parent().unwrap()).unwrap();
+    std::fs::write(
+      &fragment,
+      r#"
+[server]
+port = 9000
+
+[agents.opencode]
+profile = "opencode"
+"#,
+    )
+    .unwrap();
+
+    let err = Config::load(Some(&root)).unwrap_err();
+    assert!(err.to_string().contains("parse config"));
+  }
+
+  #[test]
+  fn explicit_config_uses_an_isolated_fragment_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let primary = dir.path().join("work.toml");
+
+    assert_eq!(paths::config_fragment_dir(&primary), dir.path().join("work.d"));
+    assert_eq!(
+      paths::agent_config_fragment_path(&primary, "opencode"),
+      dir.path().join("work.d/opencode.toml")
+    );
   }
 }

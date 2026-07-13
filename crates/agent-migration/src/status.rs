@@ -4,7 +4,7 @@ use crate::reconcile::{imported_account_ids, is_source_managed_account};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokn_auth::AuthStore;
-use tokn_config::{Config, RouteMode};
+use tokn_config::{AgentAccountSource, Config, RouteMode};
 use tokn_core::AgentId;
 
 #[derive(Debug, Clone)]
@@ -23,6 +23,8 @@ pub struct AgentStatus {
 pub struct AgentBindingStatus {
   pub profile: Option<String>,
   pub mode: RouteMode,
+  pub account_source: AgentAccountSource,
+  pub source_providers: Option<Vec<String>>,
   pub sync: bool,
 }
 
@@ -72,6 +74,8 @@ fn status_for_agent(cfg: &Config, store: &AuthStore, home: &Path, agent: AgentId
   let binding = cfg.agents.get(agent.as_str()).map(|binding| AgentBindingStatus {
     profile: binding.profile.clone(),
     mode: binding.mode.unwrap_or(RouteMode::Route),
+    account_source: binding.account_source,
+    source_providers: binding.source_providers.clone(),
     sync: binding.sync,
   });
   let imported_account_ids = imported_account_ids(store, &agent);
@@ -104,6 +108,18 @@ fn config_points_at_gateway(config_path: &Path, agent: &AgentId, cfg: &Config, s
       let Ok(json) = read_jsonc(config_path) else {
         return false;
       };
+      if binding.account_source == AgentAccountSource::Main {
+        if let Some(source_providers) = binding
+          .source_providers
+          .as_deref()
+          .filter(|providers| !providers.is_empty())
+        {
+          return source_providers
+            .iter()
+            .all(|provider| provider_base_url(&json, provider) == Some(expected.as_str()));
+        }
+        return provider_base_url(&json, tokn_core::provider::ID_OPENAI) == Some(expected.as_str());
+      }
       let accounts = binding
         .profile
         .as_deref()

@@ -42,7 +42,21 @@ impl AgentAdapter for OpencodeAdapter {
     true
   }
 
-  fn rewrite_config(&self, home: &Path, base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
+  fn supports_main_accounts(&self) -> bool {
+    true
+  }
+
+  fn switch_endpoint(&self) -> tokn_core::provider::Endpoint {
+    tokn_core::provider::Endpoint::ChatCompletions
+  }
+
+  fn rewrite_config(
+    &self,
+    home: &Path,
+    base_url: &str,
+    routes: &[ProviderRoute],
+    removed_source_provider_ids: &[String],
+  ) -> Result<Vec<PlannedEdit>> {
     let config_path = self.config_path(home);
     let config_existed = config_path.exists();
     let raw = if config_existed {
@@ -51,7 +65,7 @@ impl AgentAdapter for OpencodeAdapter {
       "{}\n".to_string()
     };
     let root = parse_cst(&raw, &config_path)?;
-    rewrite_config(&root, base_url, routes)?;
+    rewrite_config_with_removed_sources(&root, base_url, routes, removed_source_provider_ids)?;
 
     let mut edits = Vec::new();
     if let Some(auth_edit) = remove_transferred_credentials(&self.auth_path(home), routes)? {
@@ -83,7 +97,17 @@ fn opencode_config_path(home: &Path) -> PathBuf {
   jsonc
 }
 
+#[cfg(test)]
 fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, base_url: &str, routes: &[ProviderRoute]) -> Result<()> {
+  rewrite_config_with_removed_sources(root, base_url, routes, &[])
+}
+
+fn rewrite_config_with_removed_sources(
+  root: &jsonc_parser::cst::CstRootNode,
+  base_url: &str,
+  routes: &[ProviderRoute],
+  removed_source_provider_ids: &[String],
+) -> Result<()> {
   let Some(obj) = root.object_value() else {
     bail!("OpenCode config must contain a JSON object");
   };
@@ -91,6 +115,7 @@ fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, base_url: &str, routes:
     set_property(&obj, "$schema", "https://opencode.ai/config.json");
   }
   remove_unreferenced_legacy_router_provider(&obj, base_url);
+  remove_stale_generated_provider_routes(&obj, routes, removed_source_provider_ids);
   let providers = obj.object_value_or_set("provider");
   for route in routes {
     let provider = providers.object_value_or_set(&route.source_provider_id);
@@ -101,6 +126,55 @@ fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, base_url: &str, routes:
     set_property(&options, "apiKey", "tokn-router");
   }
   Ok(())
+}
+
+fn remove_stale_generated_provider_routes(
+  obj: &jsonc_parser::cst::CstObject,
+  routes: &[ProviderRoute],
+  removed_source_provider_ids: &[String],
+) {
+  let active = routes
+    .iter()
+    .map(|route| route.source_provider_id.as_str())
+    .collect::<BTreeSet<_>>();
+  let Some(providers) = obj.object_value("provider") else {
+    return;
+  };
+  for source_provider_id in removed_source_provider_ids {
+    if active.contains(source_provider_id.as_str()) {
+      continue;
+    }
+    let Some(provider) = providers.get(source_provider_id) else {
+      continue;
+    };
+    let Some(value) = provider.to_serde_value() else {
+      continue;
+    };
+    if is_generated_provider_route(&value, source_provider_id) {
+      provider.remove();
+    }
+  }
+}
+
+fn is_generated_provider_route(value: &Value, source_provider_id: &str) -> bool {
+  let Some(provider) = value.as_object() else {
+    return false;
+  };
+  if provider.len() != 3
+    || provider.get("name").and_then(Value::as_str) != Some(&format!("tokn-router ({source_provider_id})"))
+    || provider.get("npm").and_then(Value::as_str) != Some("@ai-sdk/openai-compatible")
+  {
+    return false;
+  }
+  let Some(options) = provider.get("options").and_then(Value::as_object) else {
+    return false;
+  };
+  options.len() == 2
+    && options.get("apiKey").and_then(Value::as_str) == Some("tokn-router")
+    && options
+      .get("baseURL")
+      .and_then(Value::as_str)
+      .is_some_and(|base_url| base_url.starts_with("http://") || base_url.starts_with("https://"))
 }
 
 fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject, base_url: &str) {
@@ -160,6 +234,16 @@ fn contains_legacy_router_model(value: &Value) -> bool {
 }
 
 fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) -> Result<Option<PlannedEdit>> {
+  let providers = routes
+    .iter()
+    .filter(|route| route.transfer_source_auth)
+    .map(|route| route.source_provider_id.as_str())
+    .collect::<BTreeSet<_>>();
+  // Main-account links deliberately leave OpenCode's credentials alone. Do
+  // not even parse the auth file when no source credential is being moved.
+  if providers.is_empty() {
+    return Ok(None);
+  }
   if !auth_path.exists() {
     return Ok(None);
   }
@@ -168,11 +252,6 @@ fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) ->
   let Some(auth) = json.as_object_mut() else {
     bail!("{} must contain a JSON object", auth_path.display());
   };
-  let providers = routes
-    .iter()
-    .filter(|route| route.transfer_source_auth)
-    .map(|route| route.source_provider_id.as_str())
-    .collect::<BTreeSet<_>>();
   let mut changed = false;
   for provider in providers {
     changed |= auth.remove(provider).is_some();
@@ -489,6 +568,44 @@ mod tests {
     assert_eq!(
       json["provider"]["openai"]["options"]["baseURL"],
       "http://127.0.0.1:4141/opencode-codex/v1"
+    );
+  }
+
+  #[test]
+  fn rewrite_removes_only_stale_generated_provider_routes() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "provider": {
+    "github-copilot": {
+      "name": "tokn-router (github-copilot)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/opencode/v1"
+      }
+    },
+    "anthropic": {"options": {"apiKey": "keep"}}
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config_with_removed_sources(
+      &root,
+      "http://127.0.0.1:4141/opencode/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/opencode/v1")],
+      &["github-copilot".to_string()],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert!(json["provider"].get("github-copilot").is_none());
+    assert_eq!(json["provider"]["anthropic"]["options"]["apiKey"], "keep");
+    assert_eq!(
+      json["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/opencode/v1"
     );
   }
 
@@ -830,7 +947,7 @@ mod tests {
     )];
 
     let edits = adapter
-      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1", &routes)
+      .rewrite_config(dir.path(), "http://127.0.0.1:4141/opencode/v1", &routes, &[])
       .unwrap();
 
     assert_eq!(edits.len(), 2);

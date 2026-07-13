@@ -258,14 +258,31 @@ tokn-gateway proxy ca path|show|regenerate
 tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
 tokn-gateway config get|set|unset KEY [--account ID] [--add]
 tokn-gateway config list|edit|path|init
-tokn-gateway agent migrate --agent codex-cli|opencode --profile NAME [--yes]
-tokn-gateway agent rollback --agent codex-cli|opencode [--backup-id ID]
+tokn-gateway agent list
+tokn-gateway agent show codex-cli|opencode
+tokn-gateway agent import codex-cli|opencode [--yes]
+tokn-gateway agent link codex-cli|opencode [--profile NAME] [--mode MODE] [--yes]
+tokn-gateway agent link opencode --use-main-accounts [--mode passthrough|switch] [--provider ID] [--source-provider ID]... [--yes]
+tokn-gateway agent sync codex-cli|opencode|--all [--yes]
+tokn-gateway agent unlink codex-cli|opencode [--backup-id ID]
 tokn-gateway migration [--commit|--rollback]
 tokn-gateway update
 tokn-gateway smoke provider|model|send ...
 ```
 
 Route modes are `passthrough`, `switch`, `exact`, `route`, and `fuzzy`.
+
+`agent link` writes its binding and generated profile to
+`config.d/<agent>.toml`, so the primary config remains untouched and the
+agent-specific subset can be backed up and restored independently. In
+`--use-main-accounts` mode, OpenCode keeps its local credentials unchanged and
+routes the selected provider namespaces through the gateway's existing account
+pool. `--source-provider` is repeatable and defaults to `openai`; raw
+`passthrough` and `switch` links require a target `--provider` (or a configured
+default provider) that supports OpenCode's Chat Completions endpoint. Codex CLI
+does not yet support main-account links because its credential bootstrap would
+need to be changed. To replace an existing imported agent link with a
+main-account link, unlink it first so its local credentials are restored.
 
 ## Proxy Mode
 

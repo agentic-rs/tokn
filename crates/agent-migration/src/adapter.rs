@@ -8,6 +8,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokn_config::Account;
+use tokn_core::provider::Endpoint;
 use tokn_core::AgentId;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,8 +54,27 @@ pub trait AgentAdapter {
     false
   }
 
+  /// Whether the adapter can be linked without reading or rewriting the
+  /// agent's credential store. Agents that need a local token bootstrap must
+  /// opt in only after they have a configuration-only solution.
+  fn supports_main_accounts(&self) -> bool {
+    false
+  }
+
+  /// Wire endpoint emitted by the generated agent configuration. Verbatim
+  /// modes must select a provider that supports this exact endpoint.
+  fn switch_endpoint(&self) -> Endpoint;
+
   /// Produce the edits that point the agent's own config at the gateway.
-  fn rewrite_config(&self, home: &Path, base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>>;
+  /// `removed_source_provider_ids` identifies previously generated provider
+  /// namespaces that are no longer linked and can be safely cleaned up.
+  fn rewrite_config(
+    &self,
+    home: &Path,
+    base_url: &str,
+    routes: &[ProviderRoute],
+    removed_source_provider_ids: &[String],
+  ) -> Result<Vec<PlannedEdit>>;
 
   /// Export the gateway-owned credentials back into the agent during unlink.
   fn restore_transferred_credentials(&self, _auth_path: &Path, _accounts: &[Account]) -> Result<()> {
