@@ -993,6 +993,111 @@ port = 4141
   }
 
   #[test]
+  fn opencode_v1_link_upgrades_and_unlinks_through_the_manifest_chain() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let opencode_config_path = agent_home.join(".config/opencode/opencode.json");
+    let original_backup_path = dir.path().join("opencode.json.before-v1");
+    let first_manifest_path = dir.path().join("20260604T153012Z-opencode.json");
+    let second_manifest_path = dir.path().join("20260604T153013Z-opencode.json");
+    std::fs::create_dir_all(opencode_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+
+    let original = r#"{
+  // Original user config.
+  "mcp": {"x": true}
+}"#;
+    let legacy = r#"{
+  // Original user config.
+  "mcp": {"x": true},
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#;
+    std::fs::write(&original_backup_path, original).unwrap();
+    std::fs::write(&opencode_config_path, legacy).unwrap();
+    std::fs::write(
+      &gateway_config_path,
+      r#"[server]
+host = "127.0.0.1"
+port = 4141
+
+[agents.opencode]
+mode = "route"
+sync = true
+"#,
+    )
+    .unwrap();
+    manifest::write_manifest(
+      &first_manifest_path,
+      &MigrationManifest {
+        version: 1,
+        completed: true,
+        agent: AgentId::Opencode,
+        timestamp: "20260604T153012Z".into(),
+        profile: None,
+        target_base_url: "http://127.0.0.1:4141/v1".into(),
+        gateway_auth_path: None,
+        agent_auth_path: None,
+        provider_routes: Vec::new(),
+        previous_manifest: None,
+        unlinked: false,
+        credentials_handoff_complete: false,
+        imported_account_ids: Vec::new(),
+        files: vec![FileBackup {
+          original: opencode_config_path.clone(),
+          backup: Some(original_backup_path),
+          existed: true,
+          created_by_migration: false,
+        }],
+      },
+    )
+    .unwrap();
+
+    let mut plan = plan_reconcile_with_gateway_auth_path(
+      ReconcileRequest {
+        agent: AgentId::Opencode,
+        profile: None,
+        mode: None,
+        gateway_config_path: Some(gateway_config_path),
+        agent_home: Some(agent_home),
+      },
+      gateway_auth_path,
+    )
+    .unwrap();
+    plan.timestamp = "20260604T153013Z".into();
+    plan.previous_manifest = Some(first_manifest_path.clone());
+
+    apply_reconcile_to_manifest_path(plan, second_manifest_path.clone()).unwrap();
+
+    let linked = crate::jsonc::read_jsonc(&opencode_config_path).unwrap();
+    assert!(linked["provider"].get("tokn-router").is_none());
+    assert_eq!(
+      linked["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/v1"
+    );
+
+    unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(second_manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert_eq!(std::fs::read_to_string(opencode_config_path).unwrap(), original);
+    assert!(manifest::read_manifest(&first_manifest_path).unwrap().unlinked);
+    assert!(manifest::read_manifest(&second_manifest_path).unwrap().unlinked);
+  }
+
+  #[test]
   fn validate_profile_name_rejects_empty_and_path_like_names() {
     assert!(validate_profile_name("").is_err());
     assert!(validate_profile_name("   ").is_err());

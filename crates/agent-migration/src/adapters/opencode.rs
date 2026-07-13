@@ -42,7 +42,7 @@ impl AgentAdapter for OpencodeAdapter {
     true
   }
 
-  fn rewrite_config(&self, home: &Path, _base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
+  fn rewrite_config(&self, home: &Path, base_url: &str, routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
     let config_path = self.config_path(home);
     let raw = if config_path.exists() {
       std::fs::read_to_string(&config_path).with_context(|| format!("reading {}", config_path.display()))?
@@ -50,7 +50,7 @@ impl AgentAdapter for OpencodeAdapter {
       "{}\n".to_string()
     };
     let root = parse_cst(&raw, &config_path)?;
-    rewrite_config(&root, routes)?;
+    rewrite_config(&root, base_url, routes)?;
 
     let mut edits = vec![PlannedEdit {
       path: config_path,
@@ -80,13 +80,14 @@ fn opencode_config_path(home: &Path) -> PathBuf {
   jsonc
 }
 
-fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, routes: &[ProviderRoute]) -> Result<()> {
+fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, base_url: &str, routes: &[ProviderRoute]) -> Result<()> {
   let Some(obj) = root.object_value() else {
     bail!("OpenCode config must contain a JSON object");
   };
   if obj.get("$schema").is_none() {
     set_property(&obj, "$schema", "https://opencode.ai/config.json");
   }
+  remove_unreferenced_legacy_router_provider(&obj, base_url);
   let providers = obj.object_value_or_set("provider");
   for route in routes {
     let provider = providers.object_value_or_set(&route.source_provider_id);
@@ -97,6 +98,56 @@ fn rewrite_config(root: &jsonc_parser::cst::CstRootNode, routes: &[ProviderRoute
     set_property(&options, "apiKey", "tokn-router");
   }
   Ok(())
+}
+
+fn remove_unreferenced_legacy_router_provider(obj: &jsonc_parser::cst::CstObject, base_url: &str) {
+  let Some(providers) = obj.object_value("provider") else {
+    return;
+  };
+  let Some(legacy) = providers.get("tokn-router") else {
+    return;
+  };
+  let Some(value) = legacy.to_serde_value() else {
+    return;
+  };
+  if !is_generated_legacy_router_provider(&value, base_url) || config_references_legacy_router(obj) {
+    return;
+  }
+  legacy.remove();
+}
+
+fn is_generated_legacy_router_provider(value: &Value, base_url: &str) -> bool {
+  value.get("name").and_then(Value::as_str) == Some("tokn-router")
+    && value.get("npm").and_then(Value::as_str) == Some("@ai-sdk/openai-compatible")
+    && value
+      .get("options")
+      .and_then(|options| options.get("apiKey"))
+      .and_then(Value::as_str)
+      == Some("tokn-router")
+    && value
+      .get("options")
+      .and_then(|options| options.get("baseURL"))
+      .and_then(Value::as_str)
+      == Some(base_url)
+}
+
+fn config_references_legacy_router(obj: &jsonc_parser::cst::CstObject) -> bool {
+  let Some(Value::Object(mut config)) = obj.to_serde_value() else {
+    return true;
+  };
+  if let Some(Value::Object(providers)) = config.get_mut("provider") {
+    providers.remove("tokn-router");
+  }
+  contains_legacy_router_model(&Value::Object(config))
+}
+
+fn contains_legacy_router_model(value: &Value) -> bool {
+  match value {
+    Value::String(value) => value.starts_with("tokn-router/"),
+    Value::Array(values) => values.iter().any(contains_legacy_router_model),
+    Value::Object(values) => values.values().any(contains_legacy_router_model),
+    _ => false,
+  }
 }
 
 fn remove_transferred_credentials(auth_path: &Path, routes: &[ProviderRoute]) -> Result<Option<PlannedEdit>> {
@@ -407,6 +458,7 @@ mod tests {
     .unwrap();
     rewrite_config(
       &root,
+      "http://127.0.0.1:4141/opencode/v1",
       &[route(
         "openai",
         "codex",
@@ -426,6 +478,113 @@ mod tests {
       json["provider"]["openai"]["options"]["baseURL"],
       "http://127.0.0.1:4141/opencode-codex/v1"
     );
+  }
+
+  #[test]
+  fn rewrite_replaces_unreferenced_generated_legacy_provider() {
+    let path = Path::new("opencode.json");
+    let root = parse_cst(
+      r#"{
+  // Keep the rest of the user's config.
+  "mcp": {"x": true},
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    },
+    "anthropic": {"options": {"apiKey": "keep"}}
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/v1")],
+    )
+    .unwrap();
+
+    let output = root.to_string();
+    let json = crate::jsonc::parse_jsonc(&output, path).unwrap();
+    assert!(output.contains("// Keep the rest of the user's config."));
+    assert!(json["provider"].get("tokn-router").is_none());
+    assert_eq!(json["provider"]["anthropic"]["options"]["apiKey"], "keep");
+    assert_eq!(
+      json["provider"]["openai"]["options"]["baseURL"],
+      "http://127.0.0.1:4141/v1"
+    );
+  }
+
+  #[test]
+  fn rewrite_preserves_legacy_provider_while_a_model_references_it() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "model": "tokn-router/gpt-5",
+  "provider": {
+    "tokn-router": {
+      "name": "tokn-router",
+      "npm": "@ai-sdk/openai-compatible",
+      "models": {"gpt-5": {"name": "gpt-5"}},
+      "options": {
+        "apiKey": "tokn-router",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/v1")],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert_eq!(json["model"], "tokn-router/gpt-5");
+    assert!(json["provider"].get("tokn-router").is_some());
+  }
+
+  #[test]
+  fn rewrite_preserves_user_owned_tokn_router_provider() {
+    let path = Path::new("opencode.jsonc");
+    let root = parse_cst(
+      r#"{
+  "provider": {
+    "tokn-router": {
+      "name": "my router",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "apiKey": "user-key",
+        "baseURL": "http://127.0.0.1:4141/v1"
+      }
+    }
+  }
+}"#,
+      path,
+    )
+    .unwrap();
+
+    rewrite_config(
+      &root,
+      "http://127.0.0.1:4141/v1",
+      &[route("openai", "openai", "", "http://127.0.0.1:4141/v1")],
+    )
+    .unwrap();
+
+    let json = root.to_serde_value().unwrap();
+    assert_eq!(json["provider"]["tokn-router"]["name"], "my router");
+    assert_eq!(json["provider"]["tokn-router"]["options"]["apiKey"], "user-key");
   }
 
   #[test]
