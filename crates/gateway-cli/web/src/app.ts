@@ -108,7 +108,7 @@ class RequestList extends LitElement {
     selected_key: { type: String }
   };
 
-  requests: RequestSummary[] = [];
+  declare requests: RequestSummary[];
   declare selected_key: string | undefined;
 
   createRenderRoot() {
@@ -120,12 +120,13 @@ class RequestList extends LitElement {
   }
 
   render() {
-    if (this.requests.length === 0) {
+    const requests = this.requests ?? [];
+    if (requests.length === 0) {
       return html`<p class="empty">No persisted requests match this view.</p>`;
     }
     return html`
       <div class="list" role="list">
-        ${this.requests.map(
+        ${requests.map(
           (request) => html`
             <button
               class="list-row ${this.selected_key === requestKey(request) ? "selected" : ""}"
@@ -152,7 +153,7 @@ class SessionList extends LitElement {
     selected_session_id: { type: String }
   };
 
-  sessions: SessionSummary[] = [];
+  declare sessions: SessionSummary[];
   declare selected_session_id: string | undefined;
 
   createRenderRoot() {
@@ -164,12 +165,13 @@ class SessionList extends LitElement {
   }
 
   render() {
-    if (this.sessions.length === 0) {
+    const sessions = this.sessions ?? [];
+    if (sessions.length === 0) {
       return html`<p class="empty">No request records contain a session id yet.</p>`;
     }
     return html`
       <div class="list" role="list">
-        ${this.sessions.map(
+        ${sessions.map(
           (session) => html`
             <button
               class="list-row ${this.selected_session_id === session.session_id ? "selected" : ""}"

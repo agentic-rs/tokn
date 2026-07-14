@@ -5,37 +5,37 @@
         <h3>${this.label}</h3>
         <pre>${e}</pre>
       </section>
-    `}}class je extends ${static properties={requests:{attribute:!1},selected_key:{type:String}};requests=[];createRenderRoot(){return this}selectRequest(e){this.dispatchEvent(new CustomEvent("request-select",{detail:e,bubbles:!0,composed:!0}))}render(){return this.requests.length===0?d`<p class="empty">No persisted requests match this view.</p>`:d`
+    `}}class je extends ${static properties={requests:{attribute:!1},selected_key:{type:String}};createRenderRoot(){return this}selectRequest(e){this.dispatchEvent(new CustomEvent("request-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.requests??[];return e.length===0?d`<p class="empty">No persisted requests match this view.</p>`:d`
       <div class="list" role="list">
-        ${this.requests.map(e=>d`
+        ${e.map(t=>d`
             <button
-              class="list-row ${this.selected_key===le(e)?"selected":""}"
-              @click=${()=>this.selectRequest(e)}
+              class="list-row ${this.selected_key===le(t)?"selected":""}"
+              @click=${()=>this.selectRequest(t)}
               role="listitem"
             >
-              <span class="status ${e.status!==null&&e.status>=400?"error":""}">${ae(e.status)}</span>
+              <span class="status ${t.status!==null&&t.status>=400?"error":""}">${ae(t.status)}</span>
               <span class="list-row-main">
-                <strong>${e.model??e.endpoint??"unknown request"}</strong>
-                <small>${e.provider_id??"unknown provider"} · ${w(e.ts)}</small>
+                <strong>${t.model??t.endpoint??"unknown request"}</strong>
+                <small>${t.provider_id??"unknown provider"} · ${w(t.ts)}</small>
               </span>
-              <span class="list-row-meta">${e.session_id??e.request_id}</span>
+              <span class="list-row-meta">${t.session_id??t.request_id}</span>
             </button>
           `)}
       </div>
-    `}}class Ne extends ${static properties={sessions:{attribute:!1},selected_session_id:{type:String}};sessions=[];createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){return this.sessions.length===0?d`<p class="empty">No request records contain a session id yet.</p>`:d`
+    `}}class Ne extends ${static properties={sessions:{attribute:!1},selected_session_id:{type:String}};createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.sessions??[];return e.length===0?d`<p class="empty">No request records contain a session id yet.</p>`:d`
       <div class="list" role="list">
-        ${this.sessions.map(e=>d`
+        ${e.map(t=>d`
             <button
-              class="list-row ${this.selected_session_id===e.session_id?"selected":""}"
-              @click=${()=>this.selectSession(e)}
+              class="list-row ${this.selected_session_id===t.session_id?"selected":""}"
+              @click=${()=>this.selectSession(t)}
               role="listitem"
             >
-              <span class="session-count">${e.request_count}</span>
+              <span class="session-count">${t.request_count}</span>
               <span class="list-row-main">
-                <strong>${e.model??e.endpoint??"session"}</strong>
-                <small>${e.provider_id??"unknown provider"} · ${w(e.last_ts)}</small>
+                <strong>${t.model??t.endpoint??"session"}</strong>
+                <small>${t.provider_id??"unknown provider"} · ${w(t.last_ts)}</small>
               </span>
-              <span class="list-row-meta">${e.session_id}</span>
+              <span class="list-row-meta">${t.session_id}</span>
             </button>
           `)}
       </div>
