@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::config::Config;
+use crate::config::{Config, LogTarget};
 use crate::logging::{self, RunMode};
 
 mod account;
@@ -11,6 +11,7 @@ mod config_cmd;
 mod error;
 mod headers;
 mod import;
+mod inspect;
 mod lan_bootstrap;
 mod login;
 mod migration;
@@ -51,6 +52,8 @@ pub enum Cmd {
   Proxy(proxy::ProxyArgs),
   /// Query usage statistics from the local SQLite log
   Usage(usage::UsageArgs),
+  /// Open a loopback-only viewer for persisted requests and inferred sessions
+  Inspect(inspect::InspectArgs),
   /// Inspect and build semantic session views
   #[command(subcommand)]
   Sessions(sessions::SessionsCmd),
@@ -68,7 +71,10 @@ pub enum Cmd {
 impl Cli {
   pub async fn run(self) -> Result<()> {
     let cfg_path = self.config.clone();
-    prepare_default_config_home(cfg_path.as_deref())?;
+    let is_inspect = matches!(&self.cmd, Cmd::Inspect(_));
+    if !is_inspect {
+      prepare_default_config_home(cfg_path.as_deref())?;
+    }
 
     // Initialize logging *before* dispatching: load just enough config to
     // pick up the [logging] section, then install the real subscriber. If
@@ -76,7 +82,13 @@ impl Cli {
     // subscriber so the resulting error still gets logged sanely.
     let mode = run_mode_for(&self.cmd);
     let _guard = match Config::load(cfg_path.as_deref()) {
-      Ok((cfg, _)) => Some(logging::init(&cfg.logging, mode)),
+      Ok((cfg, _)) => {
+        let mut logging_cfg = cfg.logging.clone();
+        if is_inspect {
+          logging_cfg.target = LogTarget::Stderr;
+        }
+        Some(logging::init(&logging_cfg, mode))
+      }
       Err(_) => {
         logging::init_basic();
         None
@@ -90,6 +102,7 @@ impl Cli {
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
+      Cmd::Inspect(a) => inspect::run(cfg_path, a).await,
       Cmd::Sessions(c) => sessions::run(c).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
@@ -122,6 +135,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
+    Cmd::Inspect(_) => RunMode::ReadOnlyCli,
     Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Sessions(_) => RunMode::MutatingCli,
     Cmd::Agent(c) => match c {

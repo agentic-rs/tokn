@@ -173,6 +173,21 @@ The request DBs are not a single `requests.db` file. They record request and
 response metadata, and can also persist request bodies when
 `record_request_bodies = true`. Use `body_max_bytes` to cap stored body size.
 
+### Inspect request history
+
+Run the standalone local viewer without starting `serve`:
+
+```sh
+tokn-gateway inspect
+```
+
+It binds only to `127.0.0.1`, prints an available URL, and reads the existing
+request-day databases without creating or migrating them. The Sessions view is
+inferred from request records that share a `session_id`; it does not alter the
+runtime affinity data in `sessions.db`. Use `--requests-dir PATH` to inspect a
+different request-history directory. The viewer can expose stored prompts and
+responses, so treat its URL and screen contents as sensitive.
+
 Schema migrations are applied when the databases are opened. To inspect or
 apply them explicitly:
 
@@ -261,6 +276,7 @@ tokn-gateway proxy run [--npx] codex|opencode|pi [ARGS...]
 tokn-gateway proxy exec COMMAND [ARGS...]
 tokn-gateway proxy ca path|show|regenerate
 tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
+tokn-gateway inspect [--port PORT] [--requests-dir PATH]
 tokn-gateway config get|set|unset KEY [--account ID] [--add]
 tokn-gateway config list|edit|path|init
 tokn-gateway agent list

@@ -2816,6 +2816,7 @@ dependencies = [
  "tokn-requests",
  "tokn-router",
  "tokn-router-config",
+ "tokn-router-inspect",
  "tokn-router-legacy-config",
  "toml",
  "toml_edit",
@@ -2864,6 +2865,7 @@ dependencies = [
  "lzma-rust2",
  "parking_lot",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "smol_str",
@@ -3070,6 +3072,20 @@ dependencies = [
  "toml",
  "toml_edit",
  "tracing",
+]
+
+[[package]]
+name = "tokn-router-inspect"
+version = "0.2.0-rc.4"
+dependencies = [
+ "anyhow",
+ "axum",
+ "rusqlite",
+ "serde",
+ "tempfile",
+ "tokio",
+ "tokn-persistence",
+ "tower",
 ]
 
 [[package]]

@@ -25,6 +25,7 @@ tokn-agent-migration = { workspace = true }
 tokn-catalogue = { workspace = true }
 tokn-convert = { workspace = true }
 tokn-router = { workspace = true }
+tokn-router-inspect = { workspace = true }
 tokn-requests = { workspace = true }
 tokn-persistence = { workspace = true }
 tokn-provider-copilot = { workspace = true }

@@ -1,9 +1,11 @@
 pub mod archive;
+pub mod inspect;
 pub mod migrate;
 pub mod requests;
 pub mod sessions;
 pub mod usage;
 
+pub use inspect::{get_request, get_session, list_requests, list_sessions, RequestListOptions};
 pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
