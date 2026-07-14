@@ -2864,6 +2864,7 @@ dependencies = [
  "lzma-rust2",
  "parking_lot",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "smol_str",
