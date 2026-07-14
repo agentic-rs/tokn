@@ -50,6 +50,9 @@ pub struct AgentLinkArgs {
   pub mode: Option<RouteMode>,
   /// Leave the agent's credentials untouched and use the gateway's existing
   /// main account pool instead of importing agent credentials.
+  ///
+  /// On an existing link, omitting this flag preserves the current account
+  /// source. Unlink before linking again with a different source.
   #[arg(long)]
   pub use_main_accounts: bool,
   /// Provider used by a main-account passthrough or switch link. If omitted,
@@ -129,11 +132,7 @@ fn link(cfg_path: Option<PathBuf>, args: AgentLinkArgs) -> Result<()> {
     agent: args.target.agent,
     profile: args.profile,
     mode: args.mode,
-    account_source: Some(if args.use_main_accounts {
-      AgentAccountSource::Main
-    } else {
-      AgentAccountSource::Agent
-    }),
+    account_source: requested_account_source(args.use_main_accounts),
     default_provider_id: args.provider,
     source_provider_ids: (!args.source_providers.is_empty()).then_some(args.source_providers),
     gateway_config_path: cfg_path,
@@ -318,13 +317,7 @@ fn print_plan(kind: &str, plan: &ReconcilePlan) {
   println!("agent: {}", plan.agent);
   println!("profile: {}", plan.binding_profile.as_deref().unwrap_or("(defaults)"));
   println!("mode: {}", route_mode_as_str(plan.binding_mode));
-  println!(
-    "account_source: {}",
-    match plan.account_source {
-      AgentAccountSource::Agent => "agent",
-      AgentAccountSource::Main => "main",
-    }
-  );
+  println!("account_source: {}", account_source_as_str(plan.account_source));
   println!("target_base_url: {}", plan.target_base_url);
   println!("gateway_config: {}", plan.gateway_config_path.display());
   println!(
@@ -375,6 +368,10 @@ fn route_mode_as_str(mode: RouteMode) -> &'static str {
   }
 }
 
+fn requested_account_source(use_main_accounts: bool) -> Option<AgentAccountSource> {
+  use_main_accounts.then_some(AgentAccountSource::Main)
+}
+
 fn account_source_as_str(source: AgentAccountSource) -> &'static str {
   match source {
     AgentAccountSource::Agent => "agent",
@@ -387,4 +384,15 @@ fn confirm(prompt: &str) -> Result<bool> {
     .with_default(false)
     .prompt()
     .context("confirmation prompt cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn use_main_accounts_only_requests_a_source_when_present() {
+    assert_eq!(requested_account_source(false), None);
+    assert_eq!(requested_account_source(true), Some(AgentAccountSource::Main));
+  }
 }

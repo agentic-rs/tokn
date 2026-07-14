@@ -22,8 +22,9 @@ pub struct ReconcileRequest {
   pub agent: AgentId,
   pub profile: Option<String>,
   pub mode: Option<RouteMode>,
-  /// `Some` is an explicit caller choice; `None` preserves the linked
-  /// agent's stored account source for `agent sync`.
+  /// `Some` is an explicit caller choice. `None` preserves an existing
+  /// linked agent's stored account source and defaults fresh links to agent
+  /// accounts.
   pub account_source: Option<AgentAccountSource>,
   /// Provider selected by a main-account verbatim link. This is optional
   /// when the profile or global defaults already declares one.
@@ -323,13 +324,13 @@ fn plan_reconcile_with_gateway_auth_path(
     .account_source
     .or_else(|| existing_binding.map(|binding| binding.account_source))
     .unwrap_or(AgentAccountSource::Agent);
+  reject_account_source_transition(account_source, existing_binding, &request.agent)?;
   if account_source == AgentAccountSource::Main && !adapter.supports_main_accounts() {
     bail!(
       "{} cannot use --use-main-accounts yet because its local credential bootstrap would be changed; use the default link mode or choose opencode",
       request.agent
     );
   }
-  reject_agent_account_transition(account_source, existing_binding, &request.agent)?;
   let source_provider_ids = resolve_main_source_provider_ids(
     request.source_provider_ids.as_deref(),
     existing_binding,
@@ -508,23 +509,22 @@ fn plan_reconcile_with_gateway_auth_path(
   })
 }
 
-/// A previously agent-owned binding may have imported credentials into the
-/// gateway pool. Main-account profiles deliberately use that shared pool, so
-/// changing in place would make the old agent credential eligible again while
-/// leaving its local source auth absent. Require an unlink to restore the
-/// original state before creating a no-touch main-account binding.
-fn reject_agent_account_transition(
+/// Changing an existing binding's credential boundary can transfer or
+/// re-enable credentials. Keep its account source immutable until unlink so
+/// a relink cannot perform that migration implicitly.
+fn reject_account_source_transition(
   account_source: AgentAccountSource,
   existing_binding: Option<&tokn_config::AgentConfig>,
   agent: &AgentId,
 ) -> Result<()> {
-  if account_source != AgentAccountSource::Main
-    || existing_binding.map(|binding| binding.account_source) != Some(AgentAccountSource::Agent)
-  {
+  let Some(existing_account_source) = existing_binding.map(|binding| binding.account_source) else {
+    return Ok(());
+  };
+  if account_source == existing_account_source {
     return Ok(());
   }
   bail!(
-    "{} is currently linked with agent-owned accounts; run `agent unlink {}` before linking with --use-main-accounts",
+    "{} is already linked; changing account source with `agent link` is not supported yet. Run `agent unlink {}` before linking it again.",
     agent,
     agent
   );
@@ -1844,7 +1844,7 @@ mod tests {
   }
 
   #[test]
-  fn plan_reconcile_uses_explicit_agent_home() {
+  fn plan_reconcile_uses_explicit_agent_home_and_defaults_fresh_links_to_agent_accounts() {
     let dir = tempfile::tempdir().unwrap();
     let gateway_config_path = dir.path().join("config.toml");
     let agent_home = dir.path().join("agent-home");
@@ -1878,7 +1878,7 @@ port = 4141
       agent: AgentId::Opencode,
       profile: None,
       mode: None,
-      account_source: Some(AgentAccountSource::Agent),
+      account_source: None,
       default_provider_id: None,
       source_provider_ids: None,
       gateway_config_path: Some(gateway_config_path.clone()),
@@ -1890,6 +1890,7 @@ port = 4141
     assert_eq!(plan.gateway_config_path, gateway_config_path);
     assert_eq!(plan.target_base_url, "http://127.0.0.1:4141/opencode/v1");
     assert_eq!(plan.binding_profile.as_deref(), Some("opencode"));
+    assert_eq!(plan.account_source, AgentAccountSource::Agent);
     assert_eq!(plan.imported_accounts.len(), 1);
     assert_eq!(plan.agent_auth_path.as_deref(), Some(opencode_auth_path.as_path()));
     assert!(plan.edits.iter().any(|edit| edit.path == opencode_config_path));
@@ -2021,11 +2022,11 @@ providers = ["anthropic"]
     assert!(manifest.credentials_handoff_complete);
     assert!(manifest.imported_account_ids.is_empty());
 
-    let sync_plan = plan_reconcile_with_gateway_auth_path(
+    let relink_plan = plan_reconcile_with_gateway_auth_path(
       ReconcileRequest {
         agent: AgentId::Opencode,
         profile: None,
-        mode: None,
+        mode: Some(RouteMode::Route),
         account_source: None,
         default_provider_id: None,
         source_provider_ids: None,
@@ -2035,13 +2036,22 @@ providers = ["anthropic"]
       gateway_auth_path.clone(),
     )
     .unwrap();
-    assert_eq!(sync_plan.account_source, AgentAccountSource::Main);
+    assert_eq!(relink_plan.account_source, AgentAccountSource::Main);
+    assert_eq!(relink_plan.binding_mode, RouteMode::Route);
+    assert!(relink_plan.imported_accounts.is_empty());
+    assert!(relink_plan.gateway_auth_sources_snapshot.is_none());
+    assert!(relink_plan.gateway_auth_snapshot.is_none());
+    assert!(relink_plan.gateway_auth_shard_path.is_none());
+    assert!(relink_plan.gateway_auth_shard_snapshot.is_none());
+    assert!(relink_plan.source_auth_path.is_none());
+    assert!(relink_plan.source_auth_snapshot.is_none());
+    assert!(relink_plan.agent_auth_path.is_none());
     assert_eq!(
-      sync_plan.source_provider_ids,
+      relink_plan.source_provider_ids,
       vec!["github-copilot".to_string(), "openai".to_string()]
     );
     assert_eq!(
-      sync_plan
+      relink_plan
         .provider_routes
         .iter()
         .map(|route| route.source_provider_id.as_str())
@@ -2226,7 +2236,7 @@ providers = ["anthropic"]
   }
 
   #[test]
-  fn main_account_link_requires_unlink_before_reusing_imported_agent_accounts() {
+  fn changing_from_agent_to_main_accounts_requires_unlink_before_reading_credentials() {
     let dir = tempfile::tempdir().unwrap();
     let agent_home = dir.path().join("home");
     let gateway_config_path = dir.path().join("gateway/config.toml");
@@ -2261,6 +2271,52 @@ sync = true
       gateway_auth_path.clone(),
     )
     .unwrap_err();
+    assert!(error.to_string().contains("changing account source"));
+    assert!(error.to_string().contains("agent unlink opencode"));
+    assert_eq!(std::fs::read_to_string(&gateway_config_path).unwrap(), root_config);
+    assert_eq!(std::fs::read(&gateway_auth_path).unwrap(), gateway_auth);
+    assert_eq!(
+      std::fs::read_to_string(opencode_auth_path).unwrap(),
+      "opaque local credential data"
+    );
+  }
+
+  #[test]
+  fn changing_from_main_to_agent_accounts_requires_unlink_before_reading_credentials() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_home = dir.path().join("home");
+    let gateway_config_path = dir.path().join("gateway/config.toml");
+    let gateway_auth_path = dir.path().join("gateway/auth.yaml");
+    let opencode_auth_path = agent_home.join(".local/share/opencode/auth.json");
+    std::fs::create_dir_all(gateway_config_path.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(opencode_auth_path.parent().unwrap()).unwrap();
+    let root_config = r#"
+[agents.opencode]
+account_source = "main"
+mode = "route"
+sync = true
+"#;
+    std::fs::write(&gateway_config_path, root_config).unwrap();
+    std::fs::write(&opencode_auth_path, "opaque local credential data").unwrap();
+    std::fs::write(&gateway_auth_path, "opaque gateway credential data").unwrap();
+    let gateway_auth = std::fs::read(&gateway_auth_path).unwrap();
+
+    let error = plan_reconcile_with_gateway_auth_path(
+      ReconcileRequest {
+        agent: AgentId::Opencode,
+        profile: None,
+        mode: Some(RouteMode::Switch),
+        account_source: Some(AgentAccountSource::Agent),
+        default_provider_id: None,
+        source_provider_ids: None,
+        gateway_config_path: Some(gateway_config_path.clone()),
+        agent_home: Some(agent_home),
+      },
+      gateway_auth_path.clone(),
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("changing account source"));
     assert!(error.to_string().contains("agent unlink opencode"));
     assert_eq!(std::fs::read_to_string(&gateway_config_path).unwrap(), root_config);
     assert_eq!(std::fs::read(&gateway_auth_path).unwrap(), gateway_auth);
