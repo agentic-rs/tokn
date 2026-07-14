@@ -86,7 +86,9 @@ export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
 Default files live under `~/.tokn/router/`:
 
 - `config.toml`: runtime config.
-- `auth.yaml`: stored account credentials.
+- `config.d/`: non-secret, agent-owned binding and profile overlays.
+- `auth.yaml`: user-managed and shared account credentials.
+- `auth.d/`: credential-only fragments owned by linked agents.
 - `usage.db`: usage summaries.
 - `sessions.db`: session affinity data.
 - `requests/`: archived request bodies.
@@ -222,8 +224,11 @@ credential kind, for example `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
 Provider ids are canonical config values. Z.ai and Zhipu coding-plan ids use
 coding-plan upstream paths; the non-coding ids use the regular PAAS paths.
 
-Per-account `base_url` can override the provider default. Account records live
-in `auth.yaml`; the CLI normally writes them for you.
+Per-account `base_url` can override the provider default. Manual account
+commands write account records to `auth.yaml`; linked agents keep transferred
+credentials in their own `auth.d/<agent>.yaml` fragment. The gateway loads both
+locations as one account pool, while preserving the file that owns each account
+when credentials are refreshed or removed.
 
 ```yaml
 version: 1
@@ -258,14 +263,34 @@ tokn-gateway proxy ca path|show|regenerate
 tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
 tokn-gateway config get|set|unset KEY [--account ID] [--add]
 tokn-gateway config list|edit|path|init
-tokn-gateway agent migrate --agent codex-cli|opencode --profile NAME [--yes]
-tokn-gateway agent rollback --agent codex-cli|opencode [--backup-id ID]
+tokn-gateway agent list
+tokn-gateway agent show codex-cli|opencode
+tokn-gateway agent import codex-cli|opencode [--yes]
+tokn-gateway agent link codex-cli|opencode [--profile NAME] [--mode MODE] [--yes]
+tokn-gateway agent link opencode --use-main-accounts [--mode passthrough|switch|exact|route|fuzzy] [--provider ID] [--source-provider ID]... [--yes]
+tokn-gateway agent sync codex-cli|opencode|--all [--yes]
+tokn-gateway agent unlink codex-cli|opencode [--backup-id ID]
 tokn-gateway migration [--commit|--rollback]
 tokn-gateway update
 tokn-gateway smoke provider|model|send ...
 ```
 
 Route modes are `passthrough`, `switch`, `exact`, `route`, and `fuzzy`.
+
+`agent link` writes its binding and generated profile to
+`config.d/<agent>.toml`, so the primary config remains untouched. When a normal
+agent-owned link transfers credentials, its matching `auth.d/<agent>.yaml`
+fragment forms a separately backed up and restored credential bundle; the shared
+root `auth.yaml` stays unchanged. `--use-main-accounts` creates no auth fragment:
+OpenCode keeps its local credentials unchanged and routes selected provider
+namespaces through the gateway's existing account pool. `--source-provider` is
+repeatable and defaults to `openai`; raw `passthrough` and `switch` links require
+a target `--provider` (or a configured default provider) that supports
+OpenCode's Chat Completions endpoint. Codex CLI does not yet support
+main-account links because its credential bootstrap would need to be changed.
+An existing link keeps its account source; unlink it before linking again with a
+different source. To move a pre-`auth.d` imported link, unlink it first so its
+local credentials are restored, then link it again.
 
 ## Proxy Mode
 

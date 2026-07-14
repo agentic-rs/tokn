@@ -67,7 +67,7 @@ pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
   Ok((Arc::new(bus), receiver, handlers, archive_runtime))
 }
 
-/// Load accounts from latest `auth.yaml`.
+/// Load accounts from the root `auth.yaml` and any `auth.d` fragments.
 ///
 /// `config_path` is accepted for compatibility with call sites that already
 /// have the effective config path; legacy schema migration runs before latest

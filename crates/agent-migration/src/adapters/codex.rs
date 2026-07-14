@@ -39,7 +39,17 @@ impl AgentAdapter for CodexAdapter {
     )
   }
 
-  fn rewrite_config(&self, home: &Path, base_url: &str, _routes: &[ProviderRoute]) -> Result<Vec<PlannedEdit>> {
+  fn switch_endpoint(&self) -> tokn_core::provider::Endpoint {
+    tokn_core::provider::Endpoint::Responses
+  }
+
+  fn rewrite_config(
+    &self,
+    home: &Path,
+    base_url: &str,
+    _routes: &[ProviderRoute],
+    _removed_source_provider_ids: &[String],
+  ) -> Result<Vec<PlannedEdit>> {
     let auth_path = self.auth_path(home);
     let config_path = self.config_path(home);
     let mut edits = Vec::new();
@@ -193,7 +203,7 @@ mod tests {
 
     let accounts = adapter.discover_accounts(dir.path(), "20260604T153012Z").unwrap();
     let edits = adapter
-      .rewrite_config(dir.path(), "http://127.0.0.1:4141/codex/v1", &[])
+      .rewrite_config(dir.path(), "http://127.0.0.1:4141/codex/v1", &[], &[])
       .unwrap();
 
     assert_eq!(accounts.len(), 1);

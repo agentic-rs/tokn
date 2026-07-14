@@ -7,7 +7,7 @@ use tokn_agent_migration::{
   apply_reconcile, import_accounts, list_agents, plan_reconcile, show_agent, unlink, AgentStatus, ImportRequest,
   ReconcilePlan, ReconcileRequest, UnlinkRequest,
 };
-use tokn_config::{Config, RouteMode};
+use tokn_config::{AgentAccountSource, Config, RouteMode};
 use tokn_core::AgentId;
 
 #[derive(Subcommand, Debug)]
@@ -48,6 +48,21 @@ pub struct AgentLinkArgs {
   pub profile: Option<String>,
   #[arg(long, value_parser = parse_route_mode)]
   pub mode: Option<RouteMode>,
+  /// Leave the agent's credentials untouched and use the gateway's existing
+  /// main account pool instead of importing agent credentials.
+  ///
+  /// On an existing link, omitting this flag preserves the current account
+  /// source. Unlink before linking again with a different source.
+  #[arg(long)]
+  pub use_main_accounts: bool,
+  /// Provider used by a main-account passthrough or switch link. If omitted,
+  /// a prior main-account profile target or `[defaults].default_provider_id` is used.
+  #[arg(long, requires = "use_main_accounts")]
+  pub provider: Option<String>,
+  /// OpenCode provider namespace to redirect to the gateway's main account
+  /// pool. May be supplied more than once; defaults to `openai`.
+  #[arg(long = "source-provider", requires = "use_main_accounts")]
+  pub source_providers: Vec<String>,
   #[arg(long)]
   pub yes: bool,
 }
@@ -117,6 +132,9 @@ fn link(cfg_path: Option<PathBuf>, args: AgentLinkArgs) -> Result<()> {
     agent: args.target.agent,
     profile: args.profile,
     mode: args.mode,
+    account_source: requested_account_source(args.use_main_accounts),
+    default_provider_id: args.provider,
+    source_provider_ids: (!args.source_providers.is_empty()).then_some(args.source_providers),
     gateway_config_path: cfg_path,
     agent_home: None,
   })?;
@@ -150,6 +168,9 @@ fn sync(cfg_path: Option<PathBuf>, args: AgentSyncArgs) -> Result<()> {
       agent: agent.clone(),
       profile: None,
       mode: None,
+      account_source: None,
+      default_provider_id: None,
+      source_provider_ids: None,
       gateway_config_path: cfg_path.clone(),
       agent_home: None,
     })?;
@@ -224,8 +245,17 @@ fn print_list_row(status: &AgentStatus) {
     .binding
     .as_ref()
     .map(|binding| match binding.profile.as_deref() {
-      Some(profile) => format!("{} ({})", profile, route_mode_as_str(binding.mode)),
-      None => format!("defaults ({})", route_mode_as_str(binding.mode)),
+      Some(profile) => format!(
+        "{} ({}; accounts={})",
+        profile,
+        route_mode_as_str(binding.mode),
+        account_source_as_str(binding.account_source)
+      ),
+      None => format!(
+        "defaults ({}; accounts={})",
+        route_mode_as_str(binding.mode),
+        account_source_as_str(binding.account_source)
+      ),
     })
     .unwrap_or_else(|| "unbound".into());
   let detected = if status.detected { "detected" } else { "missing" };
@@ -255,6 +285,18 @@ fn print_status(status: &AgentStatus) {
       println!("binding:");
       println!("  profile: {}", binding.profile.as_deref().unwrap_or("(defaults)"));
       println!("  mode: {}", route_mode_as_str(binding.mode));
+      println!("  account_source: {}", account_source_as_str(binding.account_source));
+      if binding.account_source == AgentAccountSource::Main {
+        println!(
+          "  source_providers: {}",
+          binding
+            .source_providers
+            .as_deref()
+            .filter(|providers| !providers.is_empty())
+            .map(|providers| providers.join(", "))
+            .unwrap_or_else(|| "openai".into())
+        );
+      }
       println!("  sync: {}", binding.sync);
     }
     None => println!("binding: (none)"),
@@ -275,9 +317,22 @@ fn print_plan(kind: &str, plan: &ReconcilePlan) {
   println!("agent: {}", plan.agent);
   println!("profile: {}", plan.binding_profile.as_deref().unwrap_or("(defaults)"));
   println!("mode: {}", route_mode_as_str(plan.binding_mode));
+  println!("account_source: {}", account_source_as_str(plan.account_source));
   println!("target_base_url: {}", plan.target_base_url);
   println!("gateway_config: {}", plan.gateway_config_path.display());
-  println!("gateway_auth: {}", plan.gateway_auth_path.display());
+  println!(
+    "gateway_config_fragment: {}",
+    plan.gateway_config_fragment_path.display()
+  );
+  if let Some(auth_shard) = &plan.gateway_auth_shard_path {
+    println!("gateway_auth_root: unchanged");
+    println!("gateway_auth_fragment: {}", auth_shard.display());
+  } else {
+    println!("gateway_auth: unchanged");
+  }
+  if plan.account_source == AgentAccountSource::Main {
+    print_string_list("source_providers", &plan.source_provider_ids);
+  }
   print_string_list(
     "imported_accounts",
     &plan
@@ -313,9 +368,31 @@ fn route_mode_as_str(mode: RouteMode) -> &'static str {
   }
 }
 
+fn requested_account_source(use_main_accounts: bool) -> Option<AgentAccountSource> {
+  use_main_accounts.then_some(AgentAccountSource::Main)
+}
+
+fn account_source_as_str(source: AgentAccountSource) -> &'static str {
+  match source {
+    AgentAccountSource::Agent => "agent",
+    AgentAccountSource::Main => "main",
+  }
+}
+
 fn confirm(prompt: &str) -> Result<bool> {
   inquire::Confirm::new(prompt)
     .with_default(false)
     .prompt()
     .context("confirmation prompt cancelled")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn use_main_accounts_only_requests_a_source_when_present() {
+    assert_eq!(requested_account_source(false), None);
+    assert_eq!(requested_account_source(true), Some(AgentAccountSource::Main));
+  }
 }

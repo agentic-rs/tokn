@@ -19,15 +19,15 @@ pub struct ConfigArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum ConfigCmd {
-  /// Print the value of a key (e.g. `copilot.user_agent`)
+  /// Print the value of a primary-config key (e.g. `copilot.user_agent`)
   Get(GetArgs),
-  /// Set a key (e.g. `copilot.user_agent "vscode/<version>"`)
+  /// Set a primary-config key (e.g. `copilot.user_agent "vscode/<version>"`)
   Set(SetArgs),
-  /// Remove a key
+  /// Remove a primary-config key
   Unset(UnsetArgs),
   /// Print effective config as TOML
   List,
-  /// Open the config file in $EDITOR; validates after save
+  /// Open the primary config file in $EDITOR; validates after save
   Edit,
   /// Print the path to the config file
   Path,
@@ -133,8 +133,9 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ConfigArgs) -> Result<()> {
 // --- get ---------------------------------------------------------------
 
 fn cmd_get(path: &std::path::Path, args: GetArgs) -> Result<()> {
-  let doc = load_doc(path)?;
   let segments = key_segments(args.account.as_deref(), &args.key);
+  ensure_root_key_is_not_fragment_managed(path, &segments)?;
+  let doc = load_doc(path)?;
   match lookup(&doc, &segments) {
     Some(item) => {
       print!("{}", render_item(item));
@@ -167,9 +168,10 @@ fn render_item(item: &Item) -> String {
 // --- set ---------------------------------------------------------------
 
 fn cmd_set(path: &std::path::Path, args: SetArgs) -> Result<()> {
+  let segments = key_segments(args.account.as_deref(), &args.key);
+  ensure_root_key_is_not_fragment_managed(path, &segments)?;
   #[allow(clippy::result_large_err)]
   Config::edit_in_place(path, |doc| {
-    let segments = key_segments(args.account.as_deref(), &args.key);
     if args.add {
       append_array(doc, &segments, &args.value)?;
     } else {
@@ -234,9 +236,10 @@ fn append_array(doc: &mut DocumentMut, segments: &[String], raw: &str) -> Result
 // --- unset -------------------------------------------------------------
 
 fn cmd_unset(path: &std::path::Path, args: UnsetArgs) -> Result<()> {
+  let segments = key_segments(args.account.as_deref(), &args.key);
+  ensure_root_key_is_not_fragment_managed(path, &segments)?;
   #[allow(clippy::result_large_err)]
   Config::edit_in_place(path, |doc| {
-    let segments = key_segments(args.account.as_deref(), &args.key);
     if !remove(doc, &segments) {
       return Err(anyhow::anyhow!("key not found: {}", args.key).into());
     }
@@ -257,6 +260,23 @@ fn cmd_list(path: &std::path::Path) -> Result<()> {
 }
 
 fn cmd_edit(path: &std::path::Path) -> Result<()> {
+  let fragment_dir = paths::config_fragment_dir(path);
+  if fragment_dir.is_dir() {
+    let has_fragments = std::fs::read_dir(&fragment_dir)
+      .ok()
+      .into_iter()
+      .flatten()
+      .filter_map(Result::ok)
+      .map(|entry| entry.path())
+      .any(|entry| entry.is_file() && entry.extension().is_some_and(|extension| extension == "toml"));
+    if has_fragments {
+      eprintln!(
+        "note: linked-agent state is managed separately under {}; this editor changes only {}",
+        fragment_dir.display(),
+        path.display()
+      );
+    }
+  }
   if let Some(parent) = path.parent() {
     std::fs::create_dir_all(parent).ok();
   }
@@ -294,7 +314,9 @@ struct AccountSpec {
 }
 
 async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
-  let (mut cfg, _) = Config::load(Some(path))?;
+  // `config init` owns the primary config file. Do not flatten managed agent
+  // overlays from `config.d` back into it when refreshing runtime settings.
+  let (mut cfg, _) = Config::load_primary(Some(path))?;
   println!("Config path: {}", path.display());
 
   apply_runtime_overrides(&mut cfg, &args);
@@ -310,7 +332,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
       let source = account_source_from_spec(&spec, false)?;
       let account =
         crate::cli::onboarding::resolve_account(&client, &spec.provider, Some(spec.id.clone()), source).await?;
-      store.upsert(account);
+      store.upsert_in_main(account)?;
     }
     cfg.save(path)?;
     store.save()?;
@@ -324,7 +346,7 @@ async fn cmd_init(path: &std::path::Path, args: InitArgs) -> Result<()> {
   let mut upserted = 0usize;
   loop {
     let account = crate::cli::onboarding::interactive_add_account(&client, None, None).await?;
-    store.upsert(account);
+    store.upsert_in_main(account)?;
     upserted += 1;
     let more = Confirm::new("Add another account?")
       .with_default(false)
@@ -550,6 +572,36 @@ fn key_segments(account: Option<&str>, key: &str) -> Vec<String> {
   out
 }
 
+/// The generic config editor operates on the primary TOML source. Agent
+/// overlays are deliberately separate and must be changed through `agent
+/// link`, `agent sync`, or `agent unlink`; silently editing their shadowed
+/// root keys would report a change that has no runtime effect.
+fn ensure_root_key_is_not_fragment_managed(path: &std::path::Path, segments: &[String]) -> Result<()> {
+  let [section, name, ..] = segments else {
+    return Ok(());
+  };
+  if section != "agents" && section != "profiles" {
+    return Ok(());
+  }
+  let loaded = Config::load_with_sources(Some(path))?;
+  for fragment_path in &loaded.sources.fragments {
+    let fragment = load_doc(fragment_path)?;
+    let managed = fragment
+      .get(section)
+      .and_then(Item::as_table_like)
+      .and_then(|items| items.get(name))
+      .is_some();
+    if managed {
+      bail!(
+        "{} is managed by {}; use `agent link`, `agent sync`, or `agent unlink` instead",
+        segments.join("."),
+        fragment_path.display()
+      );
+    }
+  }
+  Ok(())
+}
+
 fn lookup<'a>(doc: &'a DocumentMut, segments: &[String]) -> Option<&'a Item> {
   if segments.is_empty() {
     return None;
@@ -754,6 +806,35 @@ mod tests {
     let mut d = doc("[copilot]\nuser_agent = \"x\"\n");
     assert!(remove(&mut d, &["copilot".into(), "user_agent".into()]));
     assert!(!d.to_string().contains("user_agent"));
+  }
+
+  #[test]
+  fn rejects_edits_to_fragment_managed_agent_or_profile_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("config.toml");
+    std::fs::write(&root, "[server]\nport = 9911\n").unwrap();
+    let fragment = paths::agent_config_fragment_path(&root, "opencode");
+    std::fs::create_dir_all(fragment.parent().unwrap()).unwrap();
+    std::fs::write(
+      &fragment,
+      r#"
+[agents.opencode]
+profile = "opencode"
+
+[profiles.opencode]
+agent_id = "opencode"
+"#,
+    )
+    .unwrap();
+
+    let err = ensure_root_key_is_not_fragment_managed(&root, &["agents".into(), "opencode".into(), "mode".into()])
+      .unwrap_err()
+      .to_string();
+    assert!(err.contains("managed by"));
+    assert!(err.contains("agent link"));
+    assert!(
+      ensure_root_key_is_not_fragment_managed(&root, &["profiles".into(), "other".into(), "mode".into()],).is_ok()
+    );
   }
 
   #[test]

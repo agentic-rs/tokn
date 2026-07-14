@@ -37,7 +37,7 @@ pub fn migrate_home(home: &Path) -> Result<Vec<SchemaAction>> {
   let config = home.join("config.toml");
   let auth = home.join("auth.yaml");
   let mut actions = Vec::new();
-  if auth.exists() {
+  if auth.exists() || has_auth_shards(&home.join("auth.d"))? {
     return Ok(actions);
   }
   if let Some(accounts) = load_legacy_accounts(&config)? {
@@ -49,6 +49,27 @@ pub fn migrate_home(home: &Path) -> Result<Vec<SchemaAction>> {
     });
   }
   Ok(actions)
+}
+
+/// A sidecar-only credential installation is already using the current auth
+/// layout. Do not resurrect legacy `[accounts]` into a new root file: doing
+/// so could collide with an account id owned by one of the sidecars.
+fn has_auth_shards(dir: &Path) -> Result<bool> {
+  if !dir.exists() {
+    return Ok(false);
+  }
+  for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+    let path = entry?.path();
+    if path.is_file()
+      && path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension == "yaml")
+    {
+      return Ok(true);
+    }
+  }
+  Ok(false)
 }
 
 pub fn load_legacy_accounts(config_path: &Path) -> Result<Option<Vec<AccountConfig>>> {
@@ -147,6 +168,26 @@ provider = "github-copilot"
       fs::read_to_string(dir.path().join("auth.yaml")).unwrap(),
       "version: 1\naccounts: []\n"
     );
+  }
+
+  #[test]
+  fn migrate_home_keeps_sidecar_only_auth() {
+    let dir = tempfile::tempdir().unwrap();
+    let auth_dir = dir.path().join("auth.d");
+    fs::create_dir_all(&auth_dir).unwrap();
+    fs::write(auth_dir.join("opencode.yaml"), "version: 1\naccounts: []\n").unwrap();
+    fs::write(
+      dir.path().join("config.toml"),
+      r#"
+[[accounts]]
+id = "legacy"
+provider = "github-copilot"
+"#,
+    )
+    .unwrap();
+
+    assert!(migrate_home(dir.path()).unwrap().is_empty());
+    assert!(!dir.path().join("auth.yaml").exists());
   }
 
   #[test]
