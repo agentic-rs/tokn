@@ -101,19 +101,26 @@ h3 {
 
 .toolbar {
   display: flex;
-  align-items: center;
+  align-items: start;
   justify-content: space-between;
   gap: 1rem;
   padding: 1rem 0;
 }
 
-.toolbar form {
+.toolbar-controls {
+  display: grid;
+  flex: 1;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.request-search {
   display: flex;
   gap: 0.5rem;
   min-width: min(100%, 30rem);
 }
 
-.toolbar input {
+.request-search input {
   flex: 1;
   min-width: 0;
   border: 1px solid #354154;
@@ -123,13 +130,148 @@ h3 {
   background: #151c27;
 }
 
-.toolbar form button,
+.request-search input:disabled {
+  cursor: not-allowed;
+  color: #738098;
+  background: #111721;
+}
+
+.request-search button,
 .link-button {
   border: 1px solid #45649c;
   border-radius: 0.45rem;
   padding: 0.55rem 0.8rem;
   color: #dce9ff;
   background: #213452;
+}
+
+.request-search button:disabled {
+  cursor: not-allowed;
+  border-color: #354154;
+  color: #75839a;
+  background: #18202c;
+}
+
+.day-picker-group {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.day-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.day-picker-label {
+  color: #aab5c7;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.day-refresh {
+  border: 0;
+  padding: 0;
+  color: #9cbaf2;
+  background: transparent;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.day-refresh:hover:not(:disabled) {
+  color: #dce9ff;
+  text-decoration: underline;
+}
+
+.day-refresh:disabled {
+  cursor: wait;
+  color: #647086;
+}
+
+.day-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.3rem;
+  max-width: 100%;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+}
+
+.day-button {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  flex: 0 0 auto;
+  border: 1px solid #3b4b62;
+  border-radius: 999px;
+  padding: 0.38rem 0.65rem;
+  color: #c8d8f3;
+  background: #182335;
+  font-size: 0.8rem;
+}
+
+.day-button:hover:not(:disabled),
+.day-button.selected {
+  border-color: #7ba5f8;
+  color: #f0f5ff;
+  background: #263f67;
+}
+
+.day-button:disabled {
+  cursor: not-allowed;
+}
+
+.day-button.empty {
+  border-color: #2e3745;
+  color: #778397;
+  background: #161c26;
+}
+
+.day-button.unavailable {
+  border-color: #78552a;
+  color: #e7b968;
+  background: #38291a;
+}
+
+.day-button small {
+  color: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.day-picker-empty,
+.day-picker-status {
+  color: #8491a6;
+  font-size: 0.8rem;
+}
+
+.day-picker-error,
+.sidebar-warning {
+  margin: 0;
+  color: #e7b968;
+  font-size: 0.8rem;
+}
+
+.sidebar-warning {
+  padding: 1rem;
+}
+
+.sidebar-message {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  padding: 1rem;
+}
+
+.sidebar-message .sidebar-warning {
+  padding: 0;
 }
 
 .data-path {

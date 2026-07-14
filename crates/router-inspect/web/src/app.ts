@@ -45,13 +45,35 @@ interface ViewerInfo {
   requests_dir: string;
 }
 
+interface LatestRequests {
+  day: string | null;
+  requests: RequestSummary[];
+}
+
+type RequestDayState = "available" | "empty" | "unavailable";
+
+interface RequestDay {
+  day: string;
+  state: RequestDayState;
+}
+
 type ViewName = "requests" | "sessions";
+
+class HttpError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+  }
+}
 
 async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { cache: "no-store" });
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(body.error ?? `Request failed (${response.status})`);
+    throw new HttpError(response.status, body.error ?? `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
 }
@@ -320,6 +342,8 @@ class InspectApp extends LitElement {
     active_view: { type: String },
     info: { attribute: false },
     requests: { attribute: false },
+    request_days: { attribute: false },
+    selected_day: { type: String },
     sessions: { attribute: false },
     selected_request: { attribute: false },
     selected_request_detail: { attribute: false },
@@ -327,12 +351,18 @@ class InspectApp extends LitElement {
     selected_session_detail: { attribute: false },
     search_query: { type: String },
     loading: { type: Boolean },
+    request_days_loading: { type: Boolean },
+    request_days_error: { type: String },
+    sessions_loading: { type: Boolean },
+    sessions_error: { type: String },
     error_message: { type: String }
   };
 
   declare active_view: ViewName;
   declare info: ViewerInfo | undefined;
   declare requests: RequestSummary[];
+  declare request_days: RequestDay[];
+  declare selected_day: string | undefined;
   declare sessions: SessionSummary[];
   declare selected_request: RequestSummary | undefined;
   declare selected_request_detail: RequestDetail | undefined;
@@ -340,15 +370,28 @@ class InspectApp extends LitElement {
   declare selected_session_detail: SessionDetail | undefined;
   declare search_query: string;
   declare loading: boolean;
+  declare request_days_loading: boolean;
+  declare request_days_error: string | undefined;
+  declare sessions_loading: boolean;
+  declare sessions_error: string | undefined;
   declare error_message: string | undefined;
+
+  private request_load_id = 0;
+  private request_detail_load_id = 0;
+  private session_detail_load_id = 0;
+  private request_days_load_id = 0;
+  private sessions_loaded = false;
 
   constructor() {
     super();
     this.active_view = "requests";
     this.requests = [];
+    this.request_days = [];
     this.sessions = [];
     this.search_query = "";
     this.loading = true;
+    this.request_days_loading = false;
+    this.sessions_loading = false;
   }
 
   createRenderRoot() {
@@ -361,54 +404,157 @@ class InspectApp extends LitElement {
   }
 
   private async loadInitialData() {
+    const load_id = ++this.request_load_id;
     this.loading = true;
     this.error_message = undefined;
-    try {
-      const [info, requests, sessions] = await Promise.all([
-        fetchJson<ViewerInfo>("/api/info"),
-        fetchJson<RequestSummary[]>("/api/requests?limit=100"),
-        fetchJson<SessionSummary[]>("/api/sessions?limit=100")
-      ]);
-      this.info = info;
-      this.requests = requests;
-      this.sessions = sessions;
-    } catch (error) {
+    const [info_result, latest_result] = await Promise.allSettled([
+      fetchJson<ViewerInfo>("/api/info"),
+      fetchJson<LatestRequests>("/api/requests/latest?limit=100")
+    ]);
+
+    if (info_result.status === "fulfilled") {
+      this.info = info_result.value;
+    }
+    if (latest_result.status === "fulfilled" && load_id === this.request_load_id) {
+      this.selected_day = latest_result.value.day ?? undefined;
+      this.requests = latest_result.value.requests;
+      this.clearRequestSelection();
+    }
+
+    const error =
+      info_result.status === "rejected"
+        ? info_result.reason
+        : latest_result.status === "rejected"
+          ? latest_result.reason
+          : undefined;
+    if (error) {
       this.error_message = error instanceof Error ? error.message : "Unable to load persisted history";
-    } finally {
+    }
+    if (load_id === this.request_load_id) {
       this.loading = false;
     }
+
+    void this.loadRequestDays();
+  }
+
+  private async loadRequestDays() {
+    const load_id = ++this.request_days_load_id;
+    this.request_days_loading = true;
+    this.request_days_error = undefined;
+    try {
+      const request_days = await fetchJson<RequestDay[]>("/api/request-days");
+      if (load_id === this.request_days_load_id) {
+        this.request_days = request_days;
+      }
+    } catch (error) {
+      if (load_id === this.request_days_load_id) {
+        this.request_days_error = error instanceof Error ? error.message : "Unable to load request day states";
+      }
+    } finally {
+      if (load_id === this.request_days_load_id) {
+        this.request_days_loading = false;
+      }
+    }
+  }
+
+  private markRequestDayUnavailable(day: string) {
+    const request_day = this.request_days.find((candidate) => candidate.day === day);
+    if (request_day) {
+      this.request_days = this.request_days.map((candidate) =>
+        candidate.day === day ? { ...candidate, state: "unavailable" } : candidate
+      );
+      return;
+    }
+    this.request_days = [{ day, state: "unavailable" }, ...this.request_days];
+  }
+
+  private clearRequestSelection() {
+    this.request_detail_load_id += 1;
+    this.selected_request = undefined;
+    this.selected_request_detail = undefined;
   }
 
   private async loadRequests() {
+    const day = this.selected_day;
+    if (!day) {
+      this.requests = [];
+      this.clearRequestSelection();
+      return;
+    }
+
+    const load_id = ++this.request_load_id;
     this.loading = true;
     this.error_message = undefined;
+    this.clearRequestSelection();
+    this.requests = [];
     try {
+      const params = new URLSearchParams({ day, limit: "100" });
       const search = this.search_query.trim();
-      const query = search ? `&query=${encodeURIComponent(search)}` : "";
-      this.requests = await fetchJson<RequestSummary[]>(`/api/requests?limit=100${query}`);
-      this.selected_request = undefined;
-      this.selected_request_detail = undefined;
+      if (search) {
+        params.set("query", search);
+      }
+      const requests = await fetchJson<RequestSummary[]>(`/api/requests?${params.toString()}`);
+      if (load_id !== this.request_load_id) {
+        return;
+      }
+      this.requests = requests;
     } catch (error) {
-      this.error_message = error instanceof Error ? error.message : "Unable to load requests";
+      if (load_id === this.request_load_id) {
+        if (error instanceof HttpError && error.status === 503 && this.selected_day === day) {
+          this.markRequestDayUnavailable(day);
+        }
+        this.error_message = error instanceof Error ? error.message : "Unable to load requests";
+      }
     } finally {
-      this.loading = false;
+      if (load_id === this.request_load_id) {
+        this.loading = false;
+      }
     }
   }
 
+  private selectDay(day: string) {
+    this.selected_day = day;
+    void this.loadRequests();
+  }
+
   private async selectRequest(request: RequestSummary) {
+    const load_id = ++this.request_detail_load_id;
     this.selected_request = request;
     this.selected_request_detail = undefined;
     this.error_message = undefined;
     try {
-      this.selected_request_detail = await fetchJson<RequestDetail>(
+      const detail = await fetchJson<RequestDetail>(
         `/api/request?day=${encodeURIComponent(request.day)}&request_id=${encodeURIComponent(request.request_id)}`
       );
+      if (load_id === this.request_detail_load_id) {
+        this.selected_request_detail = detail;
+      }
     } catch (error) {
-      this.error_message = error instanceof Error ? error.message : "Unable to load request details";
+      if (load_id === this.request_detail_load_id) {
+        this.error_message = error instanceof Error ? error.message : "Unable to load request details";
+      }
+    }
+  }
+
+  private async ensureSessionsLoaded() {
+    if (this.sessions_loaded || this.sessions_loading) {
+      return;
+    }
+
+    this.sessions_loading = true;
+    this.sessions_error = undefined;
+    try {
+      this.sessions = await fetchJson<SessionSummary[]>("/api/sessions?limit=100");
+      this.sessions_loaded = true;
+    } catch (error) {
+      this.sessions_error = error instanceof Error ? error.message : "Unable to load sessions";
+    } finally {
+      this.sessions_loading = false;
     }
   }
 
   private async loadSession(session_id: string, session: SessionSummary | undefined) {
+    const load_id = ++this.session_detail_load_id;
     this.selected_session = session;
     this.selected_session_detail = undefined;
     this.error_message = undefined;
@@ -416,10 +562,14 @@ class InspectApp extends LitElement {
       const detail = await fetchJson<SessionDetail>(
         `/api/session?session_id=${encodeURIComponent(session_id)}&limit=500`
       );
-      this.selected_session = detail.session;
-      this.selected_session_detail = detail;
+      if (load_id === this.session_detail_load_id) {
+        this.selected_session = detail.session;
+        this.selected_session_detail = detail;
+      }
     } catch (error) {
-      this.error_message = error instanceof Error ? error.message : "Unable to load session timeline";
+      if (load_id === this.session_detail_load_id) {
+        this.error_message = error instanceof Error ? error.message : "Unable to load session timeline";
+      }
     }
   }
 
@@ -428,18 +578,28 @@ class InspectApp extends LitElement {
   }
 
   private async openSession(session_id: string) {
+    this.setActiveView("sessions", false);
     const session = this.sessions.find((candidate) => candidate.session_id === session_id);
-    this.active_view = "sessions";
     await this.loadSession(session_id, session);
   }
 
   private async openRequest(request: RequestSummary) {
-    this.active_view = "requests";
+    this.setActiveView("requests");
+    const needs_day_switch = this.selected_day !== request.day;
+    const needs_unfiltered_list = Boolean(this.search_query.trim());
+    if (needs_day_switch || needs_unfiltered_list) {
+      this.selected_day = request.day;
+      this.search_query = "";
+      await this.loadRequests();
+    }
     await this.selectRequest(request);
   }
 
-  private setActiveView(active_view: ViewName) {
+  private setActiveView(active_view: ViewName, load_sessions = true) {
     this.active_view = active_view;
+    if (active_view === "sessions" && load_sessions) {
+      void this.ensureSessionsLoaded();
+    }
   }
 
   private submitSearch(event: SubmitEvent) {
@@ -451,8 +611,93 @@ class InspectApp extends LitElement {
     this.search_query = (event.target as HTMLInputElement).value;
   }
 
+  private pickerDays(): RequestDay[] {
+    if (!this.selected_day || this.request_days.some((request_day) => request_day.day === this.selected_day)) {
+      return this.request_days;
+    }
+    return [{ day: this.selected_day, state: "available" }, ...this.request_days];
+  }
+
+  private renderDayPicker() {
+    const request_days = this.pickerDays();
+    return html`
+      <div class="day-picker-group">
+        <div class="day-picker-heading">
+          <span class="day-picker-label">Request day (UTC)</span>
+          <button
+            class="day-refresh"
+            ?disabled=${this.request_days_loading}
+            title="Refresh request day availability"
+            @click=${() => void this.loadRequestDays()}
+          >
+            Refresh
+          </button>
+        </div>
+        <div class="day-picker" role="group" aria-label="Request day">
+          ${request_days.length > 0
+            ? request_days.map((request_day) => {
+                const available = request_day.state === "available";
+                const selected = request_day.day === this.selected_day;
+                const state_label =
+                  request_day.state === "empty" ? "Empty" : request_day.state === "unavailable" ? "Unavailable" : undefined;
+                const title =
+                  request_day.state === "empty"
+                    ? "No persisted requests for this day"
+                    : request_day.state === "unavailable"
+                      ? "This request day could not be read"
+                      : `Show requests from ${request_day.day}`;
+                return html`
+                  <button
+                    class="day-button ${request_day.state} ${selected ? "selected" : ""}"
+                    ?disabled=${!available}
+                    aria-pressed=${String(selected)}
+                    title=${title}
+                    @click=${() => this.selectDay(request_day.day)}
+                  >
+                    <span>${request_day.day}</span>${state_label ? html`<small>${state_label}</small>` : nothing}
+                  </button>
+                `;
+              })
+            : html`<span class="day-picker-empty">${this.request_days_loading ? "Checking request days…" : "No persisted request days."}</span>`}
+          ${this.request_days_loading && request_days.length > 0
+            ? html`<span class="day-picker-status">Checking days…</span>`
+            : nothing}
+        </div>
+        ${this.request_days_error ? html`<p class="day-picker-error">${this.request_days_error}</p>` : nothing}
+      </div>
+    `;
+  }
+
+  private renderSessionsSidebar() {
+    if (this.sessions_loading) {
+      return html`<p class="empty">Loading sessions…</p>`;
+    }
+    if (this.sessions_error) {
+      return html`
+        <section class="sidebar-message">
+          <p class="sidebar-warning">${this.sessions_error}</p>
+          <button class="link-button" @click=${() => void this.ensureSessionsLoaded()}>Retry loading sessions</button>
+        </section>
+      `;
+    }
+    if (!this.sessions_loaded) {
+      return html`
+        <section class="sidebar-message">
+          <p class="empty">The session list has not been loaded.</p>
+          <button class="link-button" @click=${() => void this.ensureSessionsLoaded()}>Load session list</button>
+        </section>
+      `;
+    }
+    return html`<session-list
+      .sessions=${this.sessions}
+      .selected_session_id=${this.selected_session?.session_id}
+      @session-select=${(event: Event) => void this.selectSession(eventDetail<SessionSummary>(event))}
+    ></session-list>`;
+  }
+
   render() {
     const selected_key = this.selected_request ? requestKey(this.selected_request) : undefined;
+    const has_selected_day = Boolean(this.selected_day);
     return html`
       <header class="app-header">
         <div>
@@ -467,33 +712,37 @@ class InspectApp extends LitElement {
           <button class=${this.active_view === "sessions" ? "active" : ""} @click=${() => this.setActiveView("sessions")}>Sessions</button>
         </nav>
         <section class="toolbar">
-          ${this.active_view === "requests"
-            ? html`<form @submit=${this.submitSearch}>
-                <input
-                  aria-label="Search requests"
-                  .value=${this.search_query}
-                  @input=${this.updateSearch}
-                  placeholder="Search request, session, or model"
-                />
-                <button type="submit">Filter</button>
-              </form>`
-            : html`<p class="muted">Sessions are inferred from persisted request session ids.</p>`}
-          <span class="data-path">${this.info ? this.info.requests_dir : "Loading request history…"}</span>
+          <div class="toolbar-controls">
+            ${this.active_view === "requests"
+              ? html`
+                  ${this.renderDayPicker()}
+                  <form class="request-search" @submit=${this.submitSearch}>
+                    <input
+                      aria-label="Search requests"
+                      .value=${this.search_query}
+                      @input=${this.updateSearch}
+                      ?disabled=${!has_selected_day}
+                      placeholder=${has_selected_day ? "Search request, session, or model" : "Choose an available request day"}
+                    />
+                    <button type="submit" ?disabled=${!has_selected_day}>Filter</button>
+                  </form>
+                `
+              : html`<p class="muted">Sessions are inferred from persisted request session ids.</p>`}
+          </div>
+          <span class="data-path" title=${this.info?.requests_dir ?? ""}>${this.info ? this.info.requests_dir : "Loading request history…"}</span>
         </section>
         ${this.error_message ? html`<section class="error-banner">${this.error_message}</section>` : nothing}
-        <section class="viewer-grid ${this.loading ? "loading" : ""}">
+        <section class="viewer-grid ${this.loading ? "loading" : ""}" aria-busy=${String(this.loading)}>
           <aside class="sidebar">
             ${this.active_view === "requests"
-              ? html`<request-list
-                  .requests=${this.requests}
-                  .selected_key=${selected_key}
-                  @request-select=${(event: Event) => void this.selectRequest(eventDetail<RequestSummary>(event))}
-                ></request-list>`
-              : html`<session-list
-                  .sessions=${this.sessions}
-                  .selected_session_id=${this.selected_session?.session_id}
-                  @session-select=${(event: Event) => void this.selectSession(eventDetail<SessionSummary>(event))}
-                ></session-list>`}
+              ? this.loading
+                ? html`<p class="empty">Loading requests…</p>`
+                : html`<request-list
+                    .requests=${this.requests}
+                    .selected_key=${selected_key}
+                    @request-select=${(event: Event) => void this.selectRequest(eventDetail<RequestSummary>(event))}
+                  ></request-list>`
+              : this.renderSessionsSidebar()}
           </aside>
           <article class="detail-pane">
             ${this.active_view === "requests"

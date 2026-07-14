@@ -13,6 +13,7 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use time::macros::format_description;
 
 use crate::Result;
 
@@ -21,6 +22,8 @@ const MAX_LIMIT: usize = 500;
 const CURRENT_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const SPLIT_REQUESTS_SCHEMA_VERSION: u32 = 7;
 const REQUEST_ID_SCHEMA_VERSION: u32 = 2;
+const READ_BUSY_TIMEOUT: Duration = Duration::from_millis(2_500);
+const DAY_PROBE_BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 const JSON_COLUMNS: &[&str] = &[
   "ctx_json",
   "params_json",
@@ -38,6 +41,7 @@ const JSON_COLUMNS: &[&str] = &[
 /// Query options accepted by the request list and session timeline.
 #[derive(Debug, Clone, Default)]
 pub struct RequestListOptions {
+  pub day: Option<String>,
   pub limit: Option<usize>,
   pub session_id: Option<String>,
   pub provider_id: Option<String>,
@@ -49,6 +53,22 @@ impl RequestListOptions {
   fn effective_limit(&self) -> usize {
     self.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
   }
+}
+
+/// The availability of a request history database for one UTC day.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDayState {
+  Available,
+  Empty,
+  Unavailable,
+}
+
+/// A request history day and the state of its backing database.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RequestDay {
+  pub day: String,
+  pub state: RequestDayState,
 }
 
 /// A compact request row suitable for an inspector list or session timeline.
@@ -100,13 +120,27 @@ pub struct SessionDetail {
   pub requests: Vec<RequestSummary>,
 }
 
+/// The newest available request day and its latest request rows.
+#[derive(Debug, Clone, Serialize)]
+pub struct LatestRequests {
+  pub day: Option<String>,
+  pub requests: Vec<RequestSummary>,
+}
+
 /// Return the most recent request rows across every existing request-day DB.
 pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Result<Vec<RequestSummary>> {
   let limit = options.effective_limit();
   let mut requests = Vec::new();
 
-  for day_file in request_day_files(requests_dir)? {
-    requests.extend(list_day_requests_best_effort(&day_file, options, Some(limit)));
+  let day_files = request_day_files(requests_dir)?;
+  if let Some(day) = options.day.as_deref() {
+    if let Some(day_file) = day_files.iter().find(|day_file| day_file.day == day) {
+      requests.extend(read_day_requests(day_file, options, Some(limit))?);
+    }
+  } else {
+    for day_file in &day_files {
+      requests.extend(list_day_requests_best_effort(day_file, options, Some(limit)));
+    }
   }
 
   requests.sort_by(|left, right| {
@@ -118,6 +152,62 @@ pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Resul
   });
   requests.truncate(limit);
   Ok(requests)
+}
+
+/// Return whether `day` is a canonical UTC request-history day (`YYYY-MM-DD`).
+pub fn is_valid_request_day(day: &str) -> bool {
+  let bytes = day.as_bytes();
+  if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+    return false;
+  }
+  if !bytes
+    .iter()
+    .enumerate()
+    .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+  {
+    return false;
+  }
+  time::Date::parse(day, format_description!("[year]-[month]-[day]")).is_ok()
+}
+
+/// List all request-day databases from newest to oldest with their availability.
+pub fn list_request_days(requests_dir: &Path) -> Result<Vec<RequestDay>> {
+  Ok(
+    request_day_files(requests_dir)?
+      .into_iter()
+      .map(|day_file| RequestDay {
+        state: probe_request_day_state_best_effort(&day_file),
+        day: day_file.day,
+      })
+      .collect(),
+  )
+}
+
+/// Return requests from the most recent non-empty, readable request day.
+pub fn list_latest_requests(requests_dir: &Path, limit: Option<usize>) -> Result<LatestRequests> {
+  let options = RequestListOptions {
+    limit,
+    ..RequestListOptions::default()
+  };
+  let limit = options.effective_limit();
+
+  for day_file in request_day_files(requests_dir)? {
+    match read_day_requests(&day_file, &options, Some(limit)) {
+      Ok(requests) if !requests.is_empty() => {
+        return Ok(LatestRequests {
+          day: Some(day_file.day),
+          requests,
+        });
+      }
+      Ok(_) => {}
+      Err(error) => log_day_read_failure(&day_file, &error),
+    }
+  }
+
+  Ok(LatestRequests {
+    day: None,
+    requests: Vec::new(),
+  })
 }
 
 /// Return a complete request row without mutating its source database.
@@ -180,22 +270,31 @@ pub fn list_sessions(requests_dir: &Path, limit: Option<usize>) -> Result<Vec<Se
 
 /// Return a chronological, bounded timeline for one inferred session.
 pub fn get_session(requests_dir: &Path, session_id: &str, limit: Option<usize>) -> Result<Option<SessionDetail>> {
-  let Some(session) = collect_sessions(requests_dir)?
-    .into_iter()
-    .find(|session| session.session_id == session_id)
-  else {
+  let options = RequestListOptions {
+    session_id: Some(session_id.to_string()),
+    ..RequestListOptions::default()
+  };
+  let mut session = None;
+  let mut requests = Vec::new();
+
+  for day_file in request_day_files(requests_dir)? {
+    for request in list_day_requests_best_effort(&day_file, &options, None) {
+      if request.session_id.as_deref() != Some(session_id) {
+        continue;
+      }
+      if let Some(summary) = session.as_mut() {
+        update_session_summary(summary, &request);
+      } else {
+        session = Some(new_session_summary(session_id, &request));
+      }
+      requests.push(request);
+    }
+  }
+
+  let Some(session) = session else {
     return Ok(None);
   };
 
-  let requests = list_requests(
-    requests_dir,
-    &RequestListOptions {
-      limit,
-      session_id: Some(session_id.to_string()),
-      ..RequestListOptions::default()
-    },
-  )?;
-  let mut requests = requests;
   requests.sort_by(|left, right| {
     left
       .ts
@@ -203,6 +302,10 @@ pub fn get_session(requests_dir: &Path, session_id: &str, limit: Option<usize>) 
       .then_with(|| left.day.cmp(&right.day))
       .then_with(|| left.request_id.cmp(&right.request_id))
   });
+  let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+  if requests.len() > limit {
+    requests.drain(..requests.len() - limit);
+  }
 
   Ok(Some(SessionDetail { session, requests }))
 }
@@ -231,6 +334,9 @@ fn request_day_files(requests_dir: &Path) -> Result<Vec<DayFile>> {
     let Some(day) = path.file_stem().and_then(|value| value.to_str()) else {
       continue;
     };
+    if !is_valid_request_day(day) {
+      continue;
+    }
     files.push(DayFile {
       day: day.to_string(),
       path,
@@ -241,13 +347,57 @@ fn request_day_files(requests_dir: &Path) -> Result<Vec<DayFile>> {
 }
 
 fn open_readonly(path: &Path) -> Result<Option<Connection>> {
+  open_readonly_with_timeout(path, READ_BUSY_TIMEOUT)
+}
+
+fn open_readonly_with_timeout(path: &Path, busy_timeout: Duration) -> Result<Option<Connection>> {
   if !path.exists() {
     return Ok(None);
   }
   let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-  conn.busy_timeout(Duration::from_millis(2_500))?;
+  conn.busy_timeout(busy_timeout)?;
   conn.execute_batch("PRAGMA query_only = ON;")?;
   Ok(Some(conn))
+}
+
+fn probe_request_day_state_best_effort(day_file: &DayFile) -> RequestDayState {
+  let result = (|| -> Result<RequestDayState> {
+    let Some(conn) = open_readonly_with_timeout(&day_file.path, DAY_PROBE_BUSY_TIMEOUT)? else {
+      tracing::warn!(
+        path = %day_file.path.display(),
+        "request history database disappeared while checking its availability"
+      );
+      return Ok(RequestDayState::Unavailable);
+    };
+    let state = if day_has_requests(&conn)? {
+      RequestDayState::Available
+    } else {
+      RequestDayState::Empty
+    };
+    Ok(state)
+  })();
+
+  match result {
+    Ok(state) => state,
+    Err(error) => {
+      tracing::warn!(
+        path = %day_file.path.display(),
+        error = %error,
+        "marking request history database unavailable after read failure"
+      );
+      RequestDayState::Unavailable
+    }
+  }
+}
+
+fn day_has_requests(conn: &Connection) -> Result<bool> {
+  let sql = if schema_version(conn)? >= SPLIT_REQUESTS_SCHEMA_VERSION {
+    "SELECT EXISTS(SELECT 1 FROM request_connection)"
+  } else {
+    "SELECT EXISTS(SELECT 1 FROM requests)"
+  };
+  let has_requests = conn.query_row(sql, [], |row| row.get::<_, i64>(0))?;
+  Ok(has_requests != 0)
 }
 
 fn list_day_requests_best_effort(
@@ -255,24 +405,32 @@ fn list_day_requests_best_effort(
   options: &RequestListOptions,
   limit: Option<usize>,
 ) -> Vec<RequestSummary> {
-  let result = (|| -> Result<Vec<RequestSummary>> {
-    let Some(conn) = open_readonly(&day_file.path)? else {
-      return Ok(Vec::new());
-    };
-    list_day_requests(&conn, &day_file.day, options, limit)
-  })();
-
-  match result {
+  match read_day_requests(day_file, options, limit) {
     Ok(requests) => requests,
     Err(error) => {
-      tracing::warn!(
-        path = %day_file.path.display(),
-        error = %error,
-        "skipping request history database after read failure"
-      );
+      log_day_read_failure(day_file, &error);
       Vec::new()
     }
   }
+}
+
+fn read_day_requests(
+  day_file: &DayFile,
+  options: &RequestListOptions,
+  limit: Option<usize>,
+) -> Result<Vec<RequestSummary>> {
+  let Some(conn) = open_readonly(&day_file.path)? else {
+    return Ok(Vec::new());
+  };
+  list_day_requests(&conn, &day_file.day, options, limit)
+}
+
+fn log_day_read_failure(day_file: &DayFile, error: &crate::Error) {
+  tracing::warn!(
+    path = %day_file.path.display(),
+    error = %error,
+    "skipping request history database after read failure"
+  );
 }
 
 fn schema_version(conn: &Connection) -> Result<u32> {
@@ -488,6 +646,43 @@ fn collect_sessions(requests_dir: &Path) -> Result<Vec<SessionSummary>> {
   Ok(sessions.into_values().collect())
 }
 
+fn new_session_summary(session_id: &str, request: &RequestSummary) -> SessionSummary {
+  SessionSummary {
+    session_id: session_id.to_string(),
+    first_ts: request.ts,
+    last_ts: request.ts,
+    request_count: 1,
+    last_request_day: request.day.clone(),
+    last_request_id: request.request_id.clone(),
+    endpoint: request.endpoint.clone(),
+    status: request.status,
+    account_id: request.account_id.clone(),
+    provider_id: request.provider_id.clone(),
+    model: request.model.clone(),
+  }
+}
+
+fn update_session_summary(summary: &mut SessionSummary, request: &RequestSummary) {
+  summary.first_ts = summary.first_ts.min(request.ts);
+  summary.request_count += 1;
+  if (request.ts, request.day.as_str(), request.request_id.as_str())
+    > (
+      summary.last_ts,
+      summary.last_request_day.as_str(),
+      summary.last_request_id.as_str(),
+    )
+  {
+    summary.last_ts = request.ts;
+    summary.last_request_day = request.day.clone();
+    summary.last_request_id = request.request_id.clone();
+    summary.endpoint = request.endpoint.clone();
+    summary.status = request.status;
+    summary.account_id = request.account_id.clone();
+    summary.provider_id = request.provider_id.clone();
+    summary.model = request.model.clone();
+  }
+}
+
 fn normalized_timestamp(ts: i64, schema_version: u32) -> i64 {
   if schema_version < CURRENT_TS_MILLIS_SCHEMA_VERSION {
     ts.saturating_mul(1_000)
@@ -625,6 +820,11 @@ mod tests {
     assert_eq!(detail.requests.len(), 2);
     assert_eq!(detail.requests[0].request_id, "request-old");
     assert_eq!(detail.requests[1].request_id, "request-new");
+
+    let limited_detail = get_session(&dir, "session-1", Some(1)).unwrap().unwrap();
+    assert_eq!(limited_detail.session.request_count, 2);
+    assert_eq!(limited_detail.requests.len(), 1);
+    assert_eq!(limited_detail.requests[0].request_id, "request-new");
   }
 
   #[test]
@@ -671,7 +871,128 @@ mod tests {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].session_id, "session-valid");
 
+    assert!(list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-15".to_string()),
+        ..RequestListOptions::default()
+      }
+    )
+    .is_err());
     assert!(get_request(&dir, "2026-07-15", "missing").is_err());
+  }
+
+  #[test]
+  fn lists_request_day_states_newest_first() {
+    let dir = tempdir();
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-available",
+      1_784_444_800_000,
+      Some("session-available"),
+      Some("openai"),
+    );
+    drop(open_day_db(&dir.join("2026-07-15.db")).unwrap());
+    std::fs::write(dir.join("2026-07-16.db"), b"not a sqlite database").unwrap();
+    drop(open_day_db(&dir.join("not-a-day.db")).unwrap());
+    drop(open_day_db(&dir.join("2026-02-30.db")).unwrap());
+
+    let days = list_request_days(&dir).unwrap();
+    assert_eq!(
+      days,
+      vec![
+        RequestDay {
+          day: "2026-07-16".to_string(),
+          state: RequestDayState::Unavailable,
+        },
+        RequestDay {
+          day: "2026-07-15".to_string(),
+          state: RequestDayState::Empty,
+        },
+        RequestDay {
+          day: "2026-07-14".to_string(),
+          state: RequestDayState::Available,
+        },
+      ]
+    );
+    assert_eq!(
+      serde_json::to_value(RequestDayState::Unavailable).unwrap(),
+      serde_json::json!("unavailable")
+    );
+    assert!(is_valid_request_day("2026-07-14"));
+    assert!(!is_valid_request_day("2026-7-14"));
+    assert!(!is_valid_request_day("2026-02-30"));
+  }
+
+  #[test]
+  fn latest_requests_skip_empty_and_unavailable_days() {
+    let dir = tempdir();
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-old",
+      1_784_444_800_000,
+      Some("session-old"),
+      Some("openai"),
+    );
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-latest",
+      1_784_444_801_000,
+      Some("session-old"),
+      Some("openai"),
+    );
+    drop(open_day_db(&dir.join("2026-07-15.db")).unwrap());
+    std::fs::write(dir.join("2026-07-16.db"), b"not a sqlite database").unwrap();
+
+    let latest = list_latest_requests(&dir, Some(1)).unwrap();
+    assert_eq!(latest.day.as_deref(), Some("2026-07-14"));
+    assert_eq!(latest.requests.len(), 1);
+    assert_eq!(latest.requests[0].request_id, "request-latest");
+  }
+
+  #[test]
+  fn lists_requests_from_only_the_selected_day() {
+    let dir = tempdir();
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-old",
+      1_784_444_800_000,
+      Some("session-old"),
+      Some("openai"),
+    );
+    write_request(
+      &dir,
+      "2026-07-15",
+      "request-new",
+      1_784_531_200_000,
+      Some("session-new"),
+      Some("zai"),
+    );
+
+    let requests = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].request_id, "request-old");
+
+    let missing_day_requests = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-13".to_string()),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert!(missing_day_requests.is_empty());
   }
 
   #[test]
@@ -740,6 +1061,13 @@ mod tests {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].request_id, "legacy:1");
     assert_eq!(requests[0].ts, 1_784_444_800_000);
+    assert_eq!(
+      list_request_days(&dir).unwrap(),
+      vec![RequestDay {
+        day: "2026-07-14".to_string(),
+        state: RequestDayState::Available,
+      }]
+    );
 
     let detail = get_request(&dir, "2026-07-14", "legacy:1").unwrap().unwrap();
     assert_eq!(detail.request["request_id"], "legacy:1");

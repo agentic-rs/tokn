@@ -5,7 +5,10 @@ pub mod requests;
 pub mod sessions;
 pub mod usage;
 
-pub use inspect::{get_request, get_session, list_requests, list_sessions, RequestListOptions};
+pub use inspect::{
+  get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
+  list_sessions, LatestRequests, RequestDay, RequestDayState, RequestListOptions,
+};
 pub use requests::{read_request_row, RequestEventHandler};
 
 use bytes::Bytes;
