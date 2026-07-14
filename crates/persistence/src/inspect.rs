@@ -106,10 +106,7 @@ pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Resul
   let mut requests = Vec::new();
 
   for day_file in request_day_files(requests_dir)? {
-    let Some(conn) = open_readonly(&day_file.path)? else {
-      continue;
-    };
-    requests.extend(list_day_requests(&conn, &day_file.day, options, Some(limit))?);
+    requests.extend(list_day_requests_best_effort(&day_file, options, Some(limit)));
   }
 
   requests.sort_by(|left, right| {
@@ -253,6 +250,31 @@ fn open_readonly(path: &Path) -> Result<Option<Connection>> {
   Ok(Some(conn))
 }
 
+fn list_day_requests_best_effort(
+  day_file: &DayFile,
+  options: &RequestListOptions,
+  limit: Option<usize>,
+) -> Vec<RequestSummary> {
+  let result = (|| -> Result<Vec<RequestSummary>> {
+    let Some(conn) = open_readonly(&day_file.path)? else {
+      return Ok(Vec::new());
+    };
+    list_day_requests(&conn, &day_file.day, options, limit)
+  })();
+
+  match result {
+    Ok(requests) => requests,
+    Err(error) => {
+      tracing::warn!(
+        path = %day_file.path.display(),
+        error = %error,
+        "skipping request history database after read failure"
+      );
+      Vec::new()
+    }
+  }
+}
+
 fn schema_version(conn: &Connection) -> Result<u32> {
   migrate::read_current_version(conn)
 }
@@ -320,22 +342,7 @@ fn list_split_day_requests(
   let mut stmt = conn.prepare(&sql)?;
   let rows = stmt
     .query_map(params_from_iter(values.iter()), |row| {
-      Ok(RequestSummary {
-        day: day.to_string(),
-        request_id: row.get(0)?,
-        ts: normalized_timestamp(row.get(1)?, version),
-        endpoint: row.get(2)?,
-        status: sqlite_status(row.get(3)?),
-        request_error: row.get(4)?,
-        session_id: row.get(5)?,
-        account_id: row.get(6)?,
-        provider_id: row.get(7)?,
-        model: row.get(8)?,
-        inbound_req_method: row.get(9)?,
-        inbound_req_url: row.get(10)?,
-        outbound_resp_status: sqlite_status(row.get(11)?),
-        inbound_resp_status: sqlite_status(row.get(12)?),
-      })
+      request_summary_from_row(row, day, version)
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?;
   Ok(rows)
@@ -394,25 +401,29 @@ fn list_legacy_day_requests(
   let mut stmt = conn.prepare(&sql)?;
   let rows = stmt
     .query_map(params_from_iter(values.iter()), |row| {
-      Ok(RequestSummary {
-        day: day.to_string(),
-        request_id: row.get(0)?,
-        ts: normalized_timestamp(row.get(1)?, version),
-        endpoint: row.get(2)?,
-        status: sqlite_status(row.get(3)?),
-        request_error: row.get(4)?,
-        session_id: row.get(5)?,
-        account_id: row.get(6)?,
-        provider_id: row.get(7)?,
-        model: row.get(8)?,
-        inbound_req_method: row.get(9)?,
-        inbound_req_url: row.get(10)?,
-        outbound_resp_status: sqlite_status(row.get(11)?),
-        inbound_resp_status: sqlite_status(row.get(12)?),
-      })
+      request_summary_from_row(row, day, version)
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?;
   Ok(rows)
+}
+
+fn request_summary_from_row(row: &rusqlite::Row<'_>, day: &str, version: u32) -> rusqlite::Result<RequestSummary> {
+  Ok(RequestSummary {
+    day: day.to_string(),
+    request_id: row.get(0)?,
+    ts: normalized_timestamp(row.get(1)?, version),
+    endpoint: row.get(2)?,
+    status: sqlite_status(row.get(3)?),
+    request_error: row.get(4)?,
+    session_id: row.get(5)?,
+    account_id: row.get(6)?,
+    provider_id: row.get(7)?,
+    model: row.get(8)?,
+    inbound_req_method: row.get(9)?,
+    inbound_req_url: row.get(10)?,
+    outbound_resp_status: sqlite_status(row.get(11)?),
+    inbound_resp_status: sqlite_status(row.get(12)?),
+  })
 }
 
 fn legacy_request_id_sql(version: u32) -> &'static str {
@@ -427,10 +438,7 @@ fn collect_sessions(requests_dir: &Path) -> Result<Vec<SessionSummary>> {
   let mut sessions = HashMap::<String, SessionSummary>::new();
 
   for day_file in request_day_files(requests_dir)? {
-    let Some(conn) = open_readonly(&day_file.path)? else {
-      continue;
-    };
-    for request in list_day_requests(&conn, &day_file.day, &RequestListOptions::default(), None)? {
+    for request in list_day_requests_best_effort(&day_file, &RequestListOptions::default(), None) {
       let Some(session_id) = request.session_id else {
         continue;
       };
@@ -514,7 +522,10 @@ fn sqlite_value_to_json(value: ValueRef<'_>, name: &str) -> Value {
       Err(_) => Value::Array(value.iter().copied().map(Value::from).collect()),
     },
     ValueRef::Blob(value) => match std::str::from_utf8(value) {
-      Ok(value) => serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string())),
+      Ok(value) if JSON_COLUMNS.contains(&name) => {
+        serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
+      }
+      Ok(value) => Value::String(value.to_string()),
       Err(_) => Value::Array(value.iter().copied().map(Value::from).collect()),
     },
   }
@@ -637,6 +648,48 @@ mod tests {
     );
     assert!(get_request(&dir, "2026-07-14", "missing").unwrap().is_none());
     assert!(get_request(&dir, "../../outside", "request-detail").unwrap().is_none());
+  }
+
+  #[test]
+  fn aggregate_queries_skip_corrupt_request_day_databases() {
+    let dir = tempdir();
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-valid",
+      1_784_444_800_000,
+      Some("session-valid"),
+      Some("openai"),
+    );
+    std::fs::write(dir.join("2026-07-15.db"), b"not a sqlite database").unwrap();
+
+    let requests = list_requests(&dir, &RequestListOptions::default()).unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].request_id, "request-valid");
+
+    let sessions = list_sessions(&dir, None).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "session-valid");
+
+    assert!(get_request(&dir, "2026-07-15", "missing").is_err());
+  }
+
+  #[test]
+  fn decodes_json_blobs_only_for_json_columns() {
+    let json = br#"{"route":"default"}"#;
+
+    assert_eq!(
+      sqlite_value_to_json(ValueRef::Blob(json), "ctx_json"),
+      serde_json::json!({"route": "default"})
+    );
+    assert_eq!(
+      sqlite_value_to_json(ValueRef::Blob(json), "non_json_column"),
+      Value::String("{\"route\":\"default\"}".to_string())
+    );
+    assert_eq!(
+      sqlite_value_to_json(ValueRef::Blob(b"plain value"), "ctx_json"),
+      Value::String("plain value".to_string())
+    );
   }
 
   #[test]

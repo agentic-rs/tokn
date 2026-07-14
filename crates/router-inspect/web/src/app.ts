@@ -408,27 +408,29 @@ class InspectApp extends LitElement {
     }
   }
 
-  private async selectSession(session: SessionSummary) {
+  private async loadSession(session_id: string, session: SessionSummary | undefined) {
     this.selected_session = session;
     this.selected_session_detail = undefined;
     this.error_message = undefined;
     try {
-      this.selected_session_detail = await fetchJson<SessionDetail>(
-        `/api/session?session_id=${encodeURIComponent(session.session_id)}&limit=500`
+      const detail = await fetchJson<SessionDetail>(
+        `/api/session?session_id=${encodeURIComponent(session_id)}&limit=500`
       );
+      this.selected_session = detail.session;
+      this.selected_session_detail = detail;
     } catch (error) {
       this.error_message = error instanceof Error ? error.message : "Unable to load session timeline";
     }
   }
 
+  private async selectSession(session: SessionSummary) {
+    await this.loadSession(session.session_id, session);
+  }
+
   private async openSession(session_id: string) {
     const session = this.sessions.find((candidate) => candidate.session_id === session_id);
-    if (!session) {
-      this.error_message = "This request references a session that is no longer available in the request history.";
-      return;
-    }
     this.active_view = "sessions";
-    await this.selectSession(session);
+    await this.loadSession(session_id, session);
   }
 
   private async openRequest(request: RequestSummary) {

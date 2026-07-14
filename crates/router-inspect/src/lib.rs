@@ -151,7 +151,12 @@ async fn info(State(state): State<InspectState>) -> Response {
 }
 
 async fn requests(State(state): State<InspectState>, Query(query): Query<RequestsQuery>) -> Result<Response, ApiError> {
-  let requests = list_requests(&state.requests_dir, &query.into()).map_err(ApiError::internal)?;
+  let requests_dir = state.requests_dir;
+  let options = query.into();
+  let requests = tokio::task::spawn_blocking(move || list_requests(&requests_dir, &options))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
   Ok(json_response(StatusCode::OK, requests))
 }
 
@@ -159,13 +164,24 @@ async fn request_detail(
   State(state): State<InspectState>,
   Query(query): Query<RequestDetailQuery>,
 ) -> Result<Response, ApiError> {
-  let request = get_request(&state.requests_dir, &query.day, &query.request_id).map_err(ApiError::internal)?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let request_id = query.request_id;
+  let request = tokio::task::spawn_blocking(move || get_request(&requests_dir, &day, &request_id))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
   let request = request.ok_or_else(|| ApiError::not_found("request"))?;
   Ok(json_response(StatusCode::OK, request))
 }
 
 async fn sessions(State(state): State<InspectState>, Query(query): Query<LimitQuery>) -> Result<Response, ApiError> {
-  let sessions = list_sessions(&state.requests_dir, query.limit).map_err(ApiError::internal)?;
+  let requests_dir = state.requests_dir;
+  let limit = query.limit;
+  let sessions = tokio::task::spawn_blocking(move || list_sessions(&requests_dir, limit))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
   Ok(json_response(StatusCode::OK, sessions))
 }
 
@@ -173,7 +189,13 @@ async fn session_detail(
   State(state): State<InspectState>,
   Query(query): Query<SessionDetailQuery>,
 ) -> Result<Response, ApiError> {
-  let session = get_session(&state.requests_dir, &query.session_id, query.limit).map_err(ApiError::internal)?;
+  let requests_dir = state.requests_dir;
+  let session_id = query.session_id;
+  let limit = query.limit;
+  let session = tokio::task::spawn_blocking(move || get_session(&requests_dir, &session_id, limit))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(ApiError::internal)?;
   let session = session.ok_or_else(|| ApiError::not_found("session"))?;
   Ok(json_response(StatusCode::OK, session))
 }
@@ -235,36 +257,41 @@ mod tests {
       .unwrap();
   }
 
+  async fn get_response(requests_dir: &std::path::Path, uri: &str) -> Response {
+    router(InspectState {
+      requests_dir: requests_dir.to_path_buf(),
+    })
+    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    .await
+    .unwrap()
+  }
+
   #[tokio::test]
-  async fn detail_endpoints_accept_encoded_request_and_session_ids() {
+  async fn history_endpoints_preserve_success_and_not_found_statuses() {
     let tempdir = tempfile::tempdir().unwrap();
     write_request(tempdir.path(), "request/one", "session/one");
 
-    let request_response = router(InspectState {
-      requests_dir: tempdir.path().to_path_buf(),
-    })
-    .oneshot(
-      Request::builder()
-        .uri("/api/request?day=2026-07-14&request_id=request%2Fone")
-        .body(Body::empty())
-        .unwrap(),
-    )
-    .await
-    .unwrap();
-    assert_eq!(request_response.status(), StatusCode::OK);
-    assert_eq!(request_response.headers()[CACHE_CONTROL], "no-store");
+    let requests_response = get_response(tempdir.path(), "/api/requests").await;
+    assert_eq!(requests_response.status(), StatusCode::OK);
+    assert_eq!(requests_response.headers()[CACHE_CONTROL], "no-store");
 
-    let session_response = router(InspectState {
-      requests_dir: tempdir.path().to_path_buf(),
-    })
-    .oneshot(
-      Request::builder()
-        .uri("/api/session?session_id=session%2Fone")
-        .body(Body::empty())
-        .unwrap(),
-    )
-    .await
-    .unwrap();
+    let request_response = get_response(tempdir.path(), "/api/request?day=2026-07-14&request_id=request%2Fone").await;
+    assert_eq!(request_response.status(), StatusCode::OK);
+
+    let sessions_response = get_response(tempdir.path(), "/api/sessions").await;
+    assert_eq!(sessions_response.status(), StatusCode::OK);
+
+    let session_response = get_response(tempdir.path(), "/api/session?session_id=session%2Fone").await;
     assert_eq!(session_response.status(), StatusCode::OK);
+
+    let missing_request_response = get_response(
+      tempdir.path(),
+      "/api/request?day=2026-07-14&request_id=request%2Fmissing",
+    )
+    .await;
+    assert_eq!(missing_request_response.status(), StatusCode::NOT_FOUND);
+
+    let missing_session_response = get_response(tempdir.path(), "/api/session?session_id=session%2Fmissing").await;
+    assert_eq!(missing_session_response.status(), StatusCode::NOT_FOUND);
   }
 }
