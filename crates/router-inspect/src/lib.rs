@@ -17,9 +17,9 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tokn_persistence::{get_request, get_session, list_requests, list_sessions, RequestListOptions};
 
-const INDEX_HTML: &str = include_str!("../../web/dist/index.html");
-const VIEWER_JS: &str = include_str!("../../web/dist/viewer.js");
-const VIEWER_CSS: &str = include_str!("../../web/dist/viewer.css");
+const INDEX_HTML: &str = include_str!("../web/dist/index.html");
+const VIEWER_JS: &str = include_str!("../web/dist/viewer.js");
+const VIEWER_CSS: &str = include_str!("../web/dist/viewer.css");
 const CONTENT_SECURITY_POLICY_VALUE: &str =
   "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 

@@ -16,6 +16,7 @@ members = [
   "crates/endpoint-messages",
   "crates/headers",
   "crates/router",
+  "crates/router-inspect",
   "crates/requests",
   "crates/accounts",
   "crates/gateway-cli",
@@ -53,6 +54,7 @@ tokn-endpoint-responses = { version = "0.2.0-rc.4", path = "crates/endpoint-resp
 tokn-endpoint-messages = { version = "0.2.0-rc.4", path = "crates/endpoint-messages" }
 tokn-headers = { version = "0.2.0-rc.4", path = "crates/headers" }
 tokn-router = { version = "0.2.0-rc.4", path = "crates/router" }
+tokn-router-inspect = { version = "0.2.0-rc.4", path = "crates/router-inspect" }
 tokn-requests = { version = "0.2.0-rc.4", path = "crates/requests" }
 tokn-persistence = { version = "0.2.0-rc.4", path = "crates/persistence" }
 tokn-accounts = { version = "0.2.0-rc.4", path = "crates/accounts" }

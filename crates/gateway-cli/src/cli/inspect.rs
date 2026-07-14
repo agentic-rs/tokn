@@ -19,7 +19,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: InspectArgs) -> Result<()> {
   if let Some(requests_dir) = args.requests_dir {
     paths.requests_dir = requests_dir;
   }
-  crate::inspect::serve(paths.requests_dir, args.port)
+  tokn_router_inspect::serve(paths.requests_dir, args.port)
     .await
     .context("run inspect viewer")
 }

@@ -7,7 +7,6 @@ mod auth_registry;
 mod cli;
 use tokn_persistence as db;
 mod error;
-mod inspect;
 mod logging;
 mod progress;
 mod provider;

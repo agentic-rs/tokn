@@ -1,0 +1,21 @@
+[package]
+name = "tokn-router-inspect"
+version.workspace = true
+edition.workspace = true
+description = "Loopback-only request and session history viewer for tokn"
+documentation.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+tokn-persistence = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+rusqlite = { workspace = true }
+tempfile = "3"
+tower = { workspace = true }
