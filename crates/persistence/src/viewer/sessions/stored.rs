@@ -17,6 +17,7 @@ const MAX_RESPONSE_MESSAGES: usize = 100;
 const MAX_PARTS_PER_SIDE: usize = 256;
 const MAX_PART_CONTENT_BYTES: usize = 64 * 1024;
 const MAX_INLINE_CONTENT_BYTES_PER_SIDE: usize = 256 * 1024;
+const MAX_SESSION_LINEAGE_DEPTH: usize = 4_096;
 
 const NORMALIZED_FIRST_TS_SQL: &str =
   "CASE WHEN s.first_seen_ts > -10000000000 AND s.first_seen_ts < 10000000000 THEN s.first_seen_ts * 1000 ELSE s.first_seen_ts END";
@@ -317,6 +318,9 @@ fn select_lineage(conn: &Connection, session_id: &str, node_id: &str) -> Result<
   let mut current = Some(node_id.to_string());
 
   while let Some(current_id) = current {
+    if lineage.len() >= MAX_SESSION_LINEAGE_DEPTH {
+      return Err(crate::Error::InvalidSessionLineage { node_id: current_id });
+    }
     if !seen.insert(current_id.clone()) {
       return Err(crate::Error::InvalidSessionLineage { node_id: current_id });
     }

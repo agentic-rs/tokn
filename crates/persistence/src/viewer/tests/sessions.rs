@@ -737,6 +737,49 @@ fn stored_node_rejects_a_cyclic_lineage() {
   ));
 }
 
+#[test]
+fn stored_node_rejects_a_lineage_beyond_the_depth_limit() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  write_session(
+    &sessions_db,
+    "too-deep",
+    "node-0",
+    1_800_000_001_000,
+    "openai",
+    "gpt-test",
+  );
+
+  let mut conn = Connection::open(&sessions_db).unwrap();
+  let transaction = conn.transaction().unwrap();
+  {
+    let mut insert = transaction
+      .prepare(
+        "INSERT INTO session_nodes (
+           id, session_id, parent_id, request_id, ts, endpoint, status,
+           reduction_kind, parent_source
+         ) VALUES (?1, 'too-deep', ?2, ?1, ?3, 'responses', 200, 'suffix_append', 'explicit')",
+      )
+      .unwrap();
+    for depth in 1..=4_096 {
+      insert
+        .execute(params![
+          format!("node-{depth}"),
+          format!("node-{}", depth - 1),
+          1_800_000_001_000_i64 + depth as i64,
+        ])
+        .unwrap();
+    }
+  }
+  transaction.commit().unwrap();
+  drop(conn);
+
+  assert!(matches!(
+    get_session_node_from_db(&sessions_db, "too-deep", "node-4096"),
+    Err(crate::Error::InvalidSessionLineage { .. })
+  ));
+}
+
 fn semantic_record(
   session_id: &str,
   request_id: &str,

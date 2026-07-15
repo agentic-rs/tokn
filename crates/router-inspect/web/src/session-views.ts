@@ -377,7 +377,9 @@ export class SessionDetailView extends LitElement {
             <span aria-hidden="true">·</span>
             <span>${node.response_message_count.toLocaleString()} output</span>
           </span>
-          <span class="session-node-id" title=${node.request_id}>request ${shortId(node.request_id)}</span>
+          <span class="session-node-id" title=${node.request_id}>
+            request ${shortId(node.request_id)} · ${node.parent_node_id ? `parent ${shortId(node.parent_node_id)}` : "root"}
+          </span>
         </button>
         ${this.renderNodeContent(node)}
       </li>
@@ -467,7 +469,7 @@ export class SessionDetailView extends LitElement {
         <section class="session-activity">
           <header class="session-section-header">
             <div>
-              <p class="eyebrow">Semantic tree</p>
+              <p class="eyebrow">Recent semantic nodes</p>
               <h3>Session activity</h3>
             </div>
             <span>${nodes.length.toLocaleString()} loaded · latest first${this.detail.nodes_truncated ? " · bounded" : ""}</span>

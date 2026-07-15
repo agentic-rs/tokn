@@ -67,10 +67,10 @@ fn collect_sessions(requests_dir: &Path) -> Result<Vec<SessionSummary>> {
 
   for day_file in request_day_files(requests_dir)? {
     for request in list_day_requests_best_effort(&day_file, &RequestListOptions::default(), None) {
-      let Some(session_id) = request.session_id.clone() else {
+      let Some(session_id) = request.session_id.as_deref() else {
         continue;
       };
-      match sessions.get_mut(&session_id) {
+      match sessions.get_mut(session_id) {
         Some(summary) => {
           summary.first_ts = summary.first_ts.min(request.ts);
           summary.request_count += 1;
@@ -92,7 +92,7 @@ fn collect_sessions(requests_dir: &Path) -> Result<Vec<SessionSummary>> {
           }
         }
         None => {
-          sessions.insert(session_id.clone(), new_session_summary(&session_id, &request));
+          sessions.insert(session_id.to_string(), new_session_summary(session_id, &request));
         }
       }
     }

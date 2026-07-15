@@ -953,13 +953,28 @@ class InspectApp extends LitElement {
   }
 
   private async selectSession(session: SessionSummary) {
-    ++this.navigation_workflow_id;
-    const loading = this.loadSession(session.session_id, session, false, "push");
-    if (window.matchMedia("(max-width: 680px)").matches) {
-      await this.updateComplete;
-      this.querySelector<HTMLButtonElement>("session-detail-view .mobile-back-button")?.focus();
+    const workflow_id = ++this.navigation_workflow_id;
+    const loaded = await this.loadSession(session.session_id, session, false, "push");
+    if (
+      !loaded
+      || workflow_id !== this.navigation_workflow_id
+      || this.active_view !== "sessions"
+      || this.selected_session_detail?.session.session_id !== session.session_id
+      || !window.matchMedia("(max-width: 680px)").matches
+    ) {
+      return;
     }
-    await loading;
+
+    await this.updateComplete;
+    const detail_view = this.querySelector<LitElement>("session-detail-view");
+    await detail_view?.updateComplete;
+    if (
+      workflow_id === this.navigation_workflow_id
+      && this.active_view === "sessions"
+      && this.selected_session_detail?.session.session_id === session.session_id
+    ) {
+      detail_view?.querySelector<HTMLButtonElement>(".mobile-back-button")?.focus();
+    }
   }
 
   private selectSessionNode(node: SessionNodeSummary) {
