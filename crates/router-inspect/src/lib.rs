@@ -1,8 +1,8 @@
-//! Standalone, loopback-only inspector for persisted request history.
+//! Standalone, loopback-only inspector for persisted requests and semantic sessions.
 //!
 //! The inspector intentionally stays out of the main API router. Its request
 //! data can include prompts and responses, so it gets a separate local listener
-//! and reads existing day databases without changing them.
+//! and reads existing databases without changing them.
 
 use axum::extract::{Query, State};
 use axum::http::header::{
@@ -17,8 +17,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tokn_persistence::viewer::{get_request_payload, RequestCursor, RequestPayloadField};
 use tokn_persistence::{
-  get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
-  list_sessions_from_db, RequestListOptions,
+  get_request, get_session_from_db, get_session_node_from_db, is_valid_request_day, list_latest_requests,
+  list_request_days, list_requests, list_sessions_from_db, RequestListOptions,
 };
 
 const INDEX_HTML: &str = include_str!("../web/dist/index.html");
@@ -91,6 +91,12 @@ struct RequestPayloadQuery {
 struct SessionDetailQuery {
   session_id: String,
   limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionNodeDetailQuery {
+  session_id: String,
+  node_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -184,6 +190,7 @@ fn router(state: InspectState) -> Router {
     .route("/api/request-payload", get(request_payload))
     .route("/api/sessions", get(sessions))
     .route("/api/session", get(session_detail))
+    .route("/api/session-node", get(session_node_detail))
     .with_state(state)
 }
 
@@ -319,12 +326,7 @@ async fn sessions(State(state): State<InspectState>, Query(query): Query<LimitQu
   let sessions = tokio::task::spawn_blocking(move || list_sessions_from_db(&sessions_db, limit))
     .await
     .map_err(ApiError::internal)?
-    .map_err(|error| match error {
-      tokn_persistence::Error::UnsupportedSessionSchema { .. } => ApiError::unavailable_message(
-        "sessions database requires migration; migrate the selected database before opening the sessions view",
-      ),
-      _ => ApiError::unavailable("session database"),
-    })?;
+    .map_err(session_database_error)?;
   Ok(json_response(StatusCode::OK, sessions))
 }
 
@@ -332,15 +334,39 @@ async fn session_detail(
   State(state): State<InspectState>,
   Query(query): Query<SessionDetailQuery>,
 ) -> Result<Response, ApiError> {
-  let requests_dir = state.requests_dir;
+  let sessions_db = state.sessions_db;
   let session_id = query.session_id;
   let limit = query.limit;
-  let session = tokio::task::spawn_blocking(move || get_session(&requests_dir, &session_id, limit))
+  let session = tokio::task::spawn_blocking(move || get_session_from_db(&sessions_db, &session_id, limit))
     .await
     .map_err(ApiError::internal)?
-    .map_err(ApiError::internal)?;
+    .map_err(session_database_error)?;
   let session = session.ok_or_else(|| ApiError::not_found("session"))?;
   Ok(json_response(StatusCode::OK, session))
+}
+
+async fn session_node_detail(
+  State(state): State<InspectState>,
+  Query(query): Query<SessionNodeDetailQuery>,
+) -> Result<Response, ApiError> {
+  let sessions_db = state.sessions_db;
+  let session_id = query.session_id;
+  let node_id = query.node_id;
+  let node = tokio::task::spawn_blocking(move || get_session_node_from_db(&sessions_db, &session_id, &node_id))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(session_database_error)?;
+  let node = node.ok_or_else(|| ApiError::not_found("session node"))?;
+  Ok(json_response(StatusCode::OK, node))
+}
+
+fn session_database_error(error: tokn_persistence::Error) -> ApiError {
+  match error {
+    tokn_persistence::Error::UnsupportedSessionSchema { .. } => ApiError::unavailable_message(
+      "sessions database requires migration; migrate the selected database before opening the sessions view",
+    ),
+    _ => ApiError::unavailable("session database"),
+  }
 }
 
 fn text_response(content_type: &'static str, body: &'static str) -> Response {
@@ -498,7 +524,7 @@ mod tests {
     assert_eq!(response_body(sessions_response).await, "[]");
 
     let session_response = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=session%2Fone").await;
-    assert_eq!(session_response.status(), StatusCode::OK);
+    assert_eq!(session_response.status(), StatusCode::NOT_FOUND);
 
     let missing_request_response = get_response(
       tempdir.path(),
@@ -774,14 +800,69 @@ mod tests {
   #[tokio::test]
   async fn sessions_endpoint_succeeds_without_request_history() {
     let tempdir = tempfile::tempdir().unwrap();
-    let requests_dir = tempdir.path().join("requests");
+    let requests_dir = tempdir.path().join("not-a-directory");
+    std::fs::write(&requests_dir, b"session endpoints must not read this path").unwrap();
     let sessions_db = tempdir.path().join("sessions.db");
     write_session(&sessions_db, "stored-session", "stored-request");
 
     let response = get_response(&requests_dir, &sessions_db, "/api/sessions").await;
     assert_eq!(response.status(), StatusCode::OK);
     assert!(response_body(response).await.contains("stored-session"));
-    assert!(!requests_dir.exists());
+
+    let detail = get_response(
+      &requests_dir,
+      &sessions_db,
+      "/api/session?session_id=stored-session&limit=20",
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = response_body(detail).await;
+    assert!(detail.contains(r#""head_node_id":"stored-request""#));
+    assert!(detail.contains(r#""node_id":"stored-request""#));
+    assert!(detail.contains(r#""nodes_truncated":false"#));
+
+    let node = get_response(
+      &requests_dir,
+      &sessions_db,
+      "/api/session-node?session_id=stored-session&node_id=stored-request",
+    )
+    .await;
+    assert_eq!(node.status(), StatusCode::OK);
+    let node = response_body(node).await;
+    assert!(node.contains(r#""request_messages":[{"role":"user""#));
+    assert!(node.contains(r#""response_messages":[]"#));
+    assert!(node.contains(r#""parts_total":0"#));
+    assert!(node.contains(r#""messages_total":1,"messages_returned":1"#));
+    assert!(node.contains(r#""parts_omitted":0"#));
+  }
+
+  #[tokio::test]
+  async fn stored_session_endpoints_preserve_missing_session_and_node_statuses() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+
+    let missing_database_session = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=missing").await;
+    assert_eq!(missing_database_session.status(), StatusCode::NOT_FOUND);
+    let missing_database_node = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/session-node?session_id=missing&node_id=missing-node",
+    )
+    .await;
+    assert_eq!(missing_database_node.status(), StatusCode::NOT_FOUND);
+    assert!(!sessions_db.exists());
+
+    write_session(&sessions_db, "stored-session", "stored-request");
+    let missing_session = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=missing").await;
+    assert_eq!(missing_session.status(), StatusCode::NOT_FOUND);
+    let missing_node = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/session-node?session_id=stored-session&node_id=missing-node",
+    )
+    .await;
+    assert_eq!(missing_node.status(), StatusCode::NOT_FOUND);
+    assert!(response_body(missing_node).await.contains("session node not found"));
   }
 
   #[tokio::test]
@@ -792,6 +873,10 @@ mod tests {
 
     let response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let detail = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=stored").await;
+    assert_eq!(detail.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(response_body(detail).await.contains("session database unavailable"));
   }
 
   #[tokio::test]
@@ -814,5 +899,18 @@ mod tests {
     let response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(response_body(response).await.contains("migration"));
+
+    let detail = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=stored").await;
+    assert_eq!(detail.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(response_body(detail).await.contains("migration"));
+
+    let node = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/session-node?session_id=stored&node_id=node",
+    )
+    .await;
+    assert_eq!(node.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(response_body(node).await.contains("migration"));
   }
 }

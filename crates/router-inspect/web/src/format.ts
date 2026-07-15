@@ -1,4 +1,4 @@
-import type { RequestSummary, TimezoneMode } from "./types";
+import type { RequestSummary, SessionSummary, TimezoneMode } from "./types";
 
 export interface RequestOutcome {
   label: string;
@@ -14,6 +14,47 @@ export function formatTimestamp(ts: number, timezone: TimezoneMode, compact = fa
     options.timeZone = "UTC";
   }
   return new Intl.DateTimeFormat(undefined, options).format(new Date(ts));
+}
+
+export function formatCompactTimestamp(ts: number, timezone: TimezoneMode): string {
+  const date = new Date(ts);
+  const now = new Date();
+  const year = timezone === "utc" ? date.getUTCFullYear() : date.getFullYear();
+  const current_year = timezone === "utc" ? now.getUTCFullYear() : now.getFullYear();
+  const options: Intl.DateTimeFormatOptions = {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  };
+  if (year !== current_year) {
+    options.year = "numeric";
+  }
+  if (timezone === "utc") {
+    options.timeZone = "UTC";
+  }
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+export function formatDuration(first_ts: number, last_ts: number): string {
+  const duration_ms = Math.max(0, last_ts - first_ts);
+  if (duration_ms < 1_000) {
+    return `${duration_ms.toLocaleString()} ms`;
+  }
+  const seconds = Math.floor(duration_ms / 1_000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${seconds % 60}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ${minutes % 60}m`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
 }
 
 export function requestKey(request: Pick<RequestSummary, "day" | "row_id">): string {
@@ -91,6 +132,20 @@ export function requestOutcome(request: RequestSummary): RequestOutcome {
     return { label: String(status), tone: "warning", title: `${source}: ${status}` };
   }
   return { label: String(status), tone: "success", title: `${source}: ${status}` };
+}
+
+export function sessionOutcome(session: SessionSummary): RequestOutcome {
+  const status = session.status;
+  if (status === null) {
+    return { label: "—", tone: "neutral", title: "No status stored for the current session head" };
+  }
+  if (status >= 400) {
+    return { label: String(status), tone: "error", title: `Current head status: ${status}` };
+  }
+  if (status >= 300) {
+    return { label: String(status), tone: "warning", title: `Current head status: ${status}` };
+  }
+  return { label: String(status), tone: "success", title: `Current head status: ${status}` };
 }
 
 export function eventDetail<T>(event: Event): T {

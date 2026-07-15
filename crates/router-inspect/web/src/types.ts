@@ -38,6 +38,7 @@ export interface LatestRequests extends RequestPage {
 
 export interface SessionSummary {
   session_id: string;
+  source: string | null;
   first_ts: number;
   last_ts: number;
   request_count: number;
@@ -50,9 +51,78 @@ export interface SessionSummary {
   model: string | null;
 }
 
+export interface SessionNodeSummary {
+  node_id: string;
+  parent_node_id: string | null;
+  request_id: string;
+  ts: number;
+  endpoint: string;
+  status: number | null;
+  account_id: string | null;
+  provider_id: string | null;
+  model: string | null;
+  reduction_kind: string;
+  parent_source: string;
+  common_prefix_messages: number;
+  request_message_count: number;
+  response_message_count: number;
+  is_head: boolean;
+}
+
+export type SessionPartContent =
+  | { encoding: "text"; value: string; truncated: boolean }
+  | { encoding: "json"; value: unknown }
+  | { encoding: "binary"; byte_length: number }
+  | {
+      encoding: "omitted";
+      original_encoding: "text" | "json" | "binary" | "unknown";
+      reason: "part_limit" | "aggregate_limit";
+    };
+
+export interface SessionPart {
+  part_type: string;
+  byte_length: number;
+  content: SessionPartContent;
+}
+
+export interface SessionMessage {
+  role: string;
+  status: number | null;
+  parts: SessionPart[];
+  parts_total: number;
+}
+
+export interface SessionMessageTruncation {
+  messages_total: number;
+  messages_returned: number;
+  messages_omitted_before: number;
+  messages_omitted_after: number;
+}
+
+export interface SessionNodeTruncation {
+  request_messages: SessionMessageTruncation;
+  response_messages: SessionMessageTruncation;
+  parts_total: number;
+  parts_returned: number;
+  parts_omitted: number;
+  content_bytes_total: number;
+  content_bytes_returned: number;
+  content_parts_truncated: number;
+  binary_parts_elided: number;
+}
+
 export interface SessionDetail {
   session: SessionSummary;
-  requests: RequestSummary[];
+  head_node_id: string | null;
+  nodes: SessionNodeSummary[];
+  nodes_truncated: boolean;
+}
+
+export interface SessionNodeDetail {
+  node: SessionNodeSummary;
+  request_messages: SessionMessage[];
+  response_messages: SessionMessage[];
+  truncation: SessionNodeTruncation;
 }
 
 export interface ViewerInfo {
