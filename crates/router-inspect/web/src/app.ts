@@ -43,6 +43,7 @@ interface SessionDetail {
 
 interface ViewerInfo {
   requests_dir: string;
+  sessions_db: string;
 }
 
 interface LatestRequests {
@@ -189,7 +190,7 @@ class SessionList extends LitElement {
   render() {
     const sessions = this.sessions ?? [];
     if (sessions.length === 0) {
-      return html`<p class="empty">No request records contain a session id yet.</p>`;
+      return html`<p class="empty">No stored sessions yet.</p>`;
     }
     return html`
       <div class="list" role="list">
@@ -308,7 +309,7 @@ class SessionTimeline extends LitElement {
     return html`
       <section class="detail-header">
         <div>
-          <p class="eyebrow">inferred session</p>
+          <p class="eyebrow">request-history timeline</p>
           <h2>${session.model ?? session.endpoint ?? "session"}</h2>
           <p class="muted">${session.session_id}</p>
         </div>
@@ -698,6 +699,8 @@ class InspectApp extends LitElement {
   render() {
     const selected_key = this.selected_request ? requestKey(this.selected_request) : undefined;
     const has_selected_day = Boolean(this.selected_day);
+    const data_path = this.active_view === "sessions" ? this.info?.sessions_db : this.info?.requests_dir;
+    const data_path_label = this.active_view === "sessions" ? "Loading sessions database…" : "Loading request history…";
     return html`
       <header class="app-header">
         <div>
@@ -727,9 +730,9 @@ class InspectApp extends LitElement {
                     <button type="submit" ?disabled=${!has_selected_day}>Filter</button>
                   </form>
                 `
-              : html`<p class="muted">Sessions are inferred from persisted request session ids.</p>`}
+              : html`<p class="muted">Session lists come from sessions.db; timelines use request history.</p>`}
           </div>
-          <span class="data-path" title=${this.info?.requests_dir ?? ""}>${this.info ? this.info.requests_dir : "Loading request history…"}</span>
+          <span class="data-path" title=${data_path ?? ""}>${data_path ?? data_path_label}</span>
         </section>
         ${this.error_message ? html`<section class="error-banner">${this.error_message}</section>` : nothing}
         <section class="viewer-grid ${this.loading ? "loading" : ""}" aria-busy=${String(this.loading)}>

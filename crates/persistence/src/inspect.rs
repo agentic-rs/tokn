@@ -1,4 +1,4 @@
-//! Read-only queries for the local request history.
+//! Read-only queries for locally persisted request and session history.
 //!
 //! The gateway writes request history into one SQLite database per UTC day.
 //! This module deliberately opens those files in read-only mode: an inspector
@@ -22,6 +22,7 @@ const MAX_LIMIT: usize = 500;
 const CURRENT_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const SPLIT_REQUESTS_SCHEMA_VERSION: u32 = 7;
 const REQUEST_ID_SCHEMA_VERSION: u32 = 2;
+const SESSION_TREE_SCHEMA_VERSION: u32 = 2;
 const READ_BUSY_TIMEOUT: Duration = Duration::from_millis(2_500);
 const DAY_PROBE_BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 const JSON_COLUMNS: &[&str] = &[
@@ -265,6 +266,47 @@ pub fn list_sessions(requests_dir: &Path, limit: Option<usize>) -> Result<Vec<Se
       .then_with(|| left.session_id.cmp(&right.session_id))
   });
   sessions.truncate(limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT));
+  Ok(sessions)
+}
+
+/// Return the most recently active sessions stored in one `sessions.db` file.
+///
+/// Unlike [`list_sessions`], this does not scan request-day databases. A
+/// missing database is normal when session recording has not been enabled, so
+/// it returns an empty list without creating the file. The database must use
+/// the tree-shaped session schema introduced in version 2.
+pub fn list_sessions_from_db(sessions_db: &Path, limit: Option<usize>) -> Result<Vec<SessionSummary>> {
+  let Some(conn) = open_readonly(sessions_db)? else {
+    return Ok(Vec::new());
+  };
+
+  let version = schema_version(&conn)?;
+  if version < SESSION_TREE_SCHEMA_VERSION {
+    return Err(crate::Error::UnsupportedSessionSchema { version });
+  }
+
+  let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+  let mut stmt = conn.prepare(
+    "SELECT
+       s.id,
+       s.first_seen_ts,
+       COALESCE(head.ts, s.last_seen_ts),
+       (SELECT COUNT(*) FROM session_nodes AS node_count WHERE node_count.session_id = s.id),
+       head.request_id,
+       head.endpoint,
+       head.status,
+       COALESCE(head.account_id, s.account_id),
+       COALESCE(head.provider_id, s.provider_id),
+       COALESCE(head.model, s.model)
+     FROM sessions AS s
+     LEFT JOIN session_heads AS head_ref ON head_ref.session_id = s.id
+     LEFT JOIN session_nodes AS head ON head.id = head_ref.node_id
+     ORDER BY COALESCE(head.ts, s.last_seen_ts) DESC, s.id ASC
+     LIMIT ?1",
+  )?;
+  let sessions = stmt
+    .query_map(params![limit as i64], session_summary_from_db_row)?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
   Ok(sessions)
 }
 
@@ -584,6 +626,24 @@ fn request_summary_from_row(row: &rusqlite::Row<'_>, day: &str, version: u32) ->
   })
 }
 
+fn session_summary_from_db_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionSummary> {
+  let last_ts: i64 = row.get(2)?;
+  let request_count = row.get::<_, i64>(3)?.max(0) as u64;
+  Ok(SessionSummary {
+    session_id: row.get(0)?,
+    first_ts: row.get(1)?,
+    last_ts,
+    request_count,
+    last_request_day: crate::requests::day_key(last_ts),
+    last_request_id: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+    endpoint: row.get(5)?,
+    status: sqlite_status(row.get(6)?),
+    account_id: row.get(7)?,
+    provider_id: row.get(8)?,
+    model: row.get(9)?,
+  })
+}
+
 fn legacy_request_id_sql(version: u32) -> &'static str {
   if version >= REQUEST_ID_SCHEMA_VERSION {
     "CASE WHEN request_id IS NULL OR request_id = '' THEN 'legacy:' || id ELSE request_id END"
@@ -730,6 +790,9 @@ fn sqlite_value_to_json(value: ValueRef<'_>, name: &str) -> Value {
 mod tests {
   use super::*;
   use crate::requests::open_day_db;
+  use crate::sessions::{SessionsDb, TreeRequestRecord};
+  use crate::{MessageRecord, PartRecord};
+  use bytes::Bytes;
 
   fn tempdir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("tokn-router-inspect-{}", uuid::Uuid::new_v4()));
@@ -767,6 +830,190 @@ mod tests {
         params![request_id],
       )
       .unwrap();
+  }
+
+  fn write_session(sessions_db: &Path, session_id: &str, request_id: &str, ts: i64, provider_id: &str, model: &str) {
+    let mut sessions = SessionsDb::open(sessions_db).unwrap();
+    sessions
+      .record_tree(&TreeRequestRecord {
+        ts,
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        request_id: request_id.to_string(),
+        endpoint: "responses".to_string(),
+        status: Some(200),
+        account_id: Some("account-1".to_string()),
+        provider_id: Some(provider_id.to_string()),
+        model: Some(model.to_string()),
+        request_messages: vec![MessageRecord {
+          role: "user".to_string(),
+          status: None,
+          parts: vec![PartRecord {
+            part_type: "text".to_string(),
+            content: Bytes::from_static(b"hello"),
+          }],
+        }],
+        response_messages: Vec::new(),
+      })
+      .unwrap();
+  }
+
+  #[test]
+  fn lists_sessions_from_the_sessions_database() {
+    let dir = tempdir();
+    let sessions_db = dir.join("sessions.db");
+    write_session(
+      &sessions_db,
+      "session-1",
+      "request-new",
+      1_783_987_200_000,
+      "openai",
+      "gpt-test",
+    );
+    write_session(
+      &sessions_db,
+      "session-1",
+      "request-old",
+      1_783_900_800_000,
+      "openai",
+      "gpt-test",
+    );
+    write_session(
+      &sessions_db,
+      "session-2",
+      "request-latest",
+      1_784_073_600_000,
+      "zai",
+      "glm-test",
+    );
+
+    let sessions = list_sessions_from_db(&sessions_db, None).unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].session_id, "session-2");
+    let session = sessions
+      .iter()
+      .find(|session| session.session_id == "session-1")
+      .unwrap();
+    assert_eq!(session.first_ts, 1_783_987_200_000);
+    assert_eq!(session.last_ts, 1_783_987_200_000);
+    assert_eq!(session.request_count, 2);
+    assert_eq!(session.last_request_day, "2026-07-14");
+    assert_eq!(session.last_request_id, "request-new");
+    assert_eq!(session.endpoint.as_deref(), Some("responses"));
+    assert_eq!(session.status, Some(200));
+    assert_eq!(session.provider_id.as_deref(), Some("openai"));
+
+    let limited = list_sessions_from_db(&sessions_db, Some(1)).unwrap();
+    assert_eq!(limited.len(), 1);
+    assert_eq!(limited[0].session_id, "session-2");
+  }
+
+  #[test]
+  fn missing_sessions_database_is_empty_without_creating_a_file() {
+    let dir = tempdir();
+    let sessions_db = dir.join("sessions.db");
+
+    assert!(list_sessions_from_db(&sessions_db, None).unwrap().is_empty());
+    assert!(!sessions_db.exists());
+  }
+
+  #[test]
+  fn legacy_sessions_database_is_not_migrated_for_inspection() {
+    let dir = tempdir();
+    let sessions_db = dir.join("sessions.db");
+    let conn = Connection::open(&sessions_db).unwrap();
+    conn
+      .execute_batch(include_str!("../schemas/snapshot/sessions/v0.0.0.sql"))
+      .unwrap();
+    conn
+      .execute_batch(
+        "CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );
+         INSERT INTO schema_migrations (version, name, applied_ts) VALUES (1, 'initial', 0);",
+      )
+      .unwrap();
+    drop(conn);
+
+    assert!(matches!(
+      list_sessions_from_db(&sessions_db, None),
+      Err(crate::Error::UnsupportedSessionSchema { version: 1 })
+    ));
+
+    let conn = Connection::open(sessions_db).unwrap();
+    let version: i64 = conn
+      .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(version, 1);
+    let tree_table_count: i64 = conn
+      .query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'session_nodes'",
+        [],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(tree_table_count, 0);
+  }
+
+  #[test]
+  fn reads_tree_sessions_without_requiring_session_views() {
+    let dir = tempdir();
+    let sessions_db = dir.join("sessions.db");
+    let conn = Connection::open(&sessions_db).unwrap();
+    conn
+      .execute_batch(include_str!("../schemas/snapshot/sessions/v0.0.0.sql"))
+      .unwrap();
+    conn
+      .execute_batch(include_str!("../schemas/migrations/sessions/0002_tree_nodes.sql"))
+      .unwrap();
+    conn
+      .execute_batch(
+        "CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );
+         INSERT INTO schema_migrations (version, name, applied_ts) VALUES
+           (1, 'initial', 0),
+           (2, 'tree_nodes', 0);",
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
+         VALUES ('session-v2', 1783987200000, 1784073600000, 'header', 'account-v2', 'openai', 'gpt-v2')",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO session_nodes (
+           id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
+           reduction_kind, parent_source, common_prefix_messages, request_message_count, response_message_count
+         ) VALUES (
+           'node-v2', 'session-v2', NULL, 'request-v2', 1784073600000, 'responses', 201,
+           'account-v2', 'openai', 'gpt-v2', 'root_snapshot', 'none', 0, 1, 0
+         )",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO session_heads (session_id, node_id, updated_ts)
+         VALUES ('session-v2', 'node-v2', 1784073600000)",
+        [],
+      )
+      .unwrap();
+    drop(conn);
+
+    let sessions = list_sessions_from_db(&sessions_db, None).unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, "session-v2");
+    assert_eq!(sessions[0].request_count, 1);
+    assert_eq!(sessions[0].last_request_id, "request-v2");
+    assert_eq!(sessions[0].status, Some(201));
   }
 
   #[test]

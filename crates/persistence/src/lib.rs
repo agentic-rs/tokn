@@ -7,7 +7,7 @@ pub mod usage;
 
 pub use inspect::{
   get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
-  list_sessions, LatestRequests, RequestDay, RequestDayState, RequestListOptions,
+  list_sessions, list_sessions_from_db, LatestRequests, RequestDay, RequestDayState, RequestListOptions,
 };
 pub use requests::{read_request_row, RequestEventHandler};
 
@@ -49,6 +49,11 @@ pub enum Error {
 
   #[snafu(display("sqlite"))]
   Sqlite { source: rusqlite::Error },
+
+  #[snafu(display(
+    "sessions database schema version {version} does not support session inspection; version 2 or newer is required"
+  ))]
+  UnsupportedSessionSchema { version: u32 },
 
   #[snafu(display("db writer channel closed"))]
   ChannelClosed,

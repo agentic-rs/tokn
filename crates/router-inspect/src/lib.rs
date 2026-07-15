@@ -17,7 +17,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tokn_persistence::{
   get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
-  list_sessions, RequestListOptions,
+  list_sessions_from_db, RequestListOptions,
 };
 
 const INDEX_HTML: &str = include_str!("../web/dist/index.html");
@@ -29,6 +29,7 @@ const CONTENT_SECURITY_POLICY_VALUE: &str =
 #[derive(Clone)]
 struct InspectState {
   requests_dir: PathBuf,
+  sessions_db: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +75,7 @@ struct SessionDetailQuery {
 #[derive(Debug, Serialize)]
 struct ViewerInfo {
   requests_dir: String,
+  sessions_db: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +116,13 @@ impl ApiError {
       message: format!("{kind} unavailable"),
     }
   }
+
+  fn unavailable_message(message: impl Into<String>) -> Self {
+    Self {
+      status: StatusCode::SERVICE_UNAVAILABLE,
+      message: message.into(),
+    }
+  }
 }
 
 impl IntoResponse for ApiError {
@@ -123,15 +132,21 @@ impl IntoResponse for ApiError {
 }
 
 /// Serve the viewer on a separate loopback listener until Ctrl-C.
-pub async fn serve(requests_dir: PathBuf, port: u16) -> anyhow::Result<()> {
+pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, port: u16) -> anyhow::Result<()> {
   let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
   let address = listener.local_addr()?;
   println!("Inspect viewer: http://{address}");
   println!("Request history may contain sensitive prompts and responses. Press Ctrl-C to stop.");
 
-  axum::serve(listener, router(InspectState { requests_dir }))
-    .with_graceful_shutdown(wait_for_shutdown())
-    .await?;
+  axum::serve(
+    listener,
+    router(InspectState {
+      requests_dir,
+      sessions_db,
+    }),
+  )
+  .with_graceful_shutdown(wait_for_shutdown())
+  .await?;
   Ok(())
 }
 
@@ -167,6 +182,7 @@ async fn info(State(state): State<InspectState>) -> Response {
     StatusCode::OK,
     ViewerInfo {
       requests_dir: state.requests_dir.display().to_string(),
+      sessions_db: state.sessions_db.display().to_string(),
     },
   )
 }
@@ -238,12 +254,17 @@ fn validate_request_day(day: &str) -> Result<(), ApiError> {
 }
 
 async fn sessions(State(state): State<InspectState>, Query(query): Query<LimitQuery>) -> Result<Response, ApiError> {
-  let requests_dir = state.requests_dir;
+  let sessions_db = state.sessions_db;
   let limit = query.limit;
-  let sessions = tokio::task::spawn_blocking(move || list_sessions(&requests_dir, limit))
+  let sessions = tokio::task::spawn_blocking(move || list_sessions_from_db(&sessions_db, limit))
     .await
     .map_err(ApiError::internal)?
-    .map_err(ApiError::internal)?;
+    .map_err(|error| match error {
+      tokn_persistence::Error::UnsupportedSessionSchema { .. } => ApiError::unavailable_message(
+        "sessions database requires migration; migrate the selected database before opening the sessions view",
+      ),
+      _ => ApiError::unavailable("session database"),
+    })?;
   Ok(json_response(StatusCode::OK, sessions))
 }
 
@@ -299,6 +320,8 @@ mod tests {
   use axum::http::Request;
   use rusqlite::params;
   use tokn_persistence::requests::open_day_db;
+  use tokn_persistence::sessions::{SessionsDb, TreeRequestRecord};
+  use tokn_persistence::MessageRecord;
   use tower::ServiceExt;
 
   fn write_request(dir: &std::path::Path, day: &str, request_id: &str, session_id: &str) {
@@ -319,9 +342,33 @@ mod tests {
       .unwrap();
   }
 
-  async fn get_response(requests_dir: &std::path::Path, uri: &str) -> Response {
+  fn write_session(sessions_db: &std::path::Path, session_id: &str, request_id: &str) {
+    let mut sessions = SessionsDb::open(sessions_db).unwrap();
+    sessions
+      .record_tree(&TreeRequestRecord {
+        ts: 1_783_987_200_000,
+        session_id: session_id.to_string(),
+        parent_session_id: None,
+        request_id: request_id.to_string(),
+        endpoint: "responses".to_string(),
+        status: Some(200),
+        account_id: Some("account-1".to_string()),
+        provider_id: Some("openai".to_string()),
+        model: Some("gpt-test".to_string()),
+        request_messages: vec![MessageRecord {
+          role: "user".to_string(),
+          status: None,
+          parts: Vec::new(),
+        }],
+        response_messages: Vec::new(),
+      })
+      .unwrap();
+  }
+
+  async fn get_response(requests_dir: &std::path::Path, sessions_db: &std::path::Path, uri: &str) -> Response {
     router(InspectState {
       requests_dir: requests_dir.to_path_buf(),
+      sessions_db: sessions_db.to_path_buf(),
     })
     .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
     .await
@@ -336,61 +383,139 @@ mod tests {
   #[tokio::test]
   async fn history_endpoints_preserve_success_and_not_found_statuses() {
     let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
     write_request(tempdir.path(), "2026-07-14", "request/one", "session/one");
     write_request(tempdir.path(), "2026-07-13", "request/two", "session/two");
     drop(open_day_db(&tempdir.path().join("2026-07-15.db")).unwrap());
     std::fs::write(tempdir.path().join("2026-07-16.db"), b"not a sqlite database").unwrap();
 
-    let requests_response = get_response(tempdir.path(), "/api/requests").await;
+    let requests_response = get_response(tempdir.path(), &sessions_db, "/api/requests").await;
     assert_eq!(requests_response.status(), StatusCode::OK);
     assert_eq!(requests_response.headers()[CACHE_CONTROL], "no-store");
 
-    let day_requests_response = get_response(tempdir.path(), "/api/requests?day=2026-07-14").await;
+    let day_requests_response = get_response(tempdir.path(), &sessions_db, "/api/requests?day=2026-07-14").await;
     assert_eq!(day_requests_response.status(), StatusCode::OK);
     let day_requests_body = response_body(day_requests_response).await;
     assert!(day_requests_body.contains("request/one"));
     assert!(!day_requests_body.contains("request/two"));
 
-    let request_days_response = get_response(tempdir.path(), "/api/request-days").await;
+    let request_days_response = get_response(tempdir.path(), &sessions_db, "/api/request-days").await;
     assert_eq!(request_days_response.status(), StatusCode::OK);
     let request_days_body = response_body(request_days_response).await;
     assert!(request_days_body.contains(r#"{"day":"2026-07-14","state":"available"}"#));
     assert!(request_days_body.contains(r#"{"day":"2026-07-15","state":"empty"}"#));
     assert!(request_days_body.contains(r#"{"day":"2026-07-16","state":"unavailable"}"#));
 
-    let latest_requests_response = get_response(tempdir.path(), "/api/requests/latest?limit=1").await;
+    let latest_requests_response = get_response(tempdir.path(), &sessions_db, "/api/requests/latest?limit=1").await;
     assert_eq!(latest_requests_response.status(), StatusCode::OK);
     let latest_requests_body = response_body(latest_requests_response).await;
     assert!(latest_requests_body.contains("2026-07-14"));
     assert!(latest_requests_body.contains("request/one"));
 
-    let request_response = get_response(tempdir.path(), "/api/request?day=2026-07-14&request_id=request%2Fone").await;
+    let request_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-07-14&request_id=request%2Fone",
+    )
+    .await;
     assert_eq!(request_response.status(), StatusCode::OK);
 
-    let sessions_response = get_response(tempdir.path(), "/api/sessions").await;
+    let sessions_response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
     assert_eq!(sessions_response.status(), StatusCode::OK);
+    assert_eq!(response_body(sessions_response).await, "[]");
 
-    let session_response = get_response(tempdir.path(), "/api/session?session_id=session%2Fone").await;
+    let session_response = get_response(tempdir.path(), &sessions_db, "/api/session?session_id=session%2Fone").await;
     assert_eq!(session_response.status(), StatusCode::OK);
 
     let missing_request_response = get_response(
       tempdir.path(),
+      &sessions_db,
       "/api/request?day=2026-07-14&request_id=request%2Fmissing",
     )
     .await;
     assert_eq!(missing_request_response.status(), StatusCode::NOT_FOUND);
 
-    let invalid_day_response = get_response(tempdir.path(), "/api/requests?day=not-a-day").await;
+    let invalid_day_response = get_response(tempdir.path(), &sessions_db, "/api/requests?day=not-a-day").await;
     assert_eq!(invalid_day_response.status(), StatusCode::BAD_REQUEST);
 
-    let unavailable_day_response = get_response(tempdir.path(), "/api/requests?day=2026-07-16").await;
+    let unavailable_day_response = get_response(tempdir.path(), &sessions_db, "/api/requests?day=2026-07-16").await;
     assert_eq!(unavailable_day_response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
-    let invalid_detail_day_response =
-      get_response(tempdir.path(), "/api/request?day=2026-02-30&request_id=request%2Fone").await;
+    let invalid_detail_day_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-02-30&request_id=request%2Fone",
+    )
+    .await;
     assert_eq!(invalid_detail_day_response.status(), StatusCode::BAD_REQUEST);
 
-    let missing_session_response = get_response(tempdir.path(), "/api/session?session_id=session%2Fmissing").await;
+    let missing_session_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/session?session_id=session%2Fmissing",
+    )
+    .await;
     assert_eq!(missing_session_response.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  async fn sessions_endpoint_reads_only_the_sessions_database() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let requests_dir = tempdir.path().join("requests");
+    std::fs::create_dir(&requests_dir).unwrap();
+    write_request(&requests_dir, "2026-07-14", "request-only", "request-only-session");
+    let sessions_db = tempdir.path().join("sessions.db");
+    write_session(&sessions_db, "stored-session", "stored-request");
+
+    let response = get_response(&requests_dir, &sessions_db, "/api/sessions").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_body(response).await;
+    assert!(body.contains("stored-session"));
+    assert!(!body.contains("request-only-session"));
+  }
+
+  #[tokio::test]
+  async fn sessions_endpoint_succeeds_without_request_history() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let requests_dir = tempdir.path().join("requests");
+    let sessions_db = tempdir.path().join("sessions.db");
+    write_session(&sessions_db, "stored-session", "stored-request");
+
+    let response = get_response(&requests_dir, &sessions_db, "/api/sessions").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response_body(response).await.contains("stored-session"));
+    assert!(!requests_dir.exists());
+  }
+
+  #[tokio::test]
+  async fn sessions_endpoint_reports_an_unavailable_sessions_database() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    std::fs::write(&sessions_db, b"not a sqlite database").unwrap();
+
+    let response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+  }
+
+  #[tokio::test]
+  async fn sessions_endpoint_explains_when_the_database_needs_migration() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    let conn = rusqlite::Connection::open(&sessions_db).unwrap();
+    conn
+      .execute_batch(
+        "CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );
+         INSERT INTO schema_migrations (version, name, applied_ts) VALUES (1, 'initial', 0);",
+      )
+      .unwrap();
+    drop(conn);
+
+    let response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(response_body(response).await.contains("migration"));
   }
 }
