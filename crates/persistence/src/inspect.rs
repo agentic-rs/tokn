@@ -6,6 +6,7 @@
 //! writer connection just to display history.
 
 use crate::migrate;
+use base64::Engine;
 use rusqlite::types::{Value as SqlValue, ValueRef};
 use rusqlite::{params, params_from_iter, Connection, OpenFlags};
 use serde::Serialize;
@@ -38,15 +39,27 @@ const JSON_COLUMNS: &[&str] = &[
   "outbound_resp_headers",
   "outbound_resp_body",
 ];
+const REQUEST_PAYLOAD_FIELDS: &[&str] = &[
+  "inbound_req_headers",
+  "inbound_req_body",
+  "inbound_resp_headers",
+  "inbound_resp_body",
+  "outbound_req_headers",
+  "outbound_req_body",
+  "outbound_resp_headers",
+  "outbound_resp_body",
+];
 
 /// Query options accepted by the request list and session timeline.
 #[derive(Debug, Clone, Default)]
 pub struct RequestListOptions {
   pub day: Option<String>,
   pub limit: Option<usize>,
+  pub cursor: Option<RequestCursor>,
   pub session_id: Option<String>,
   pub provider_id: Option<String>,
   pub status: Option<u16>,
+  pub errors_only: bool,
   pub query: Option<String>,
 }
 
@@ -75,6 +88,8 @@ pub struct RequestDay {
 /// A compact request row suitable for an inspector list or session timeline.
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestSummary {
+  #[serde(serialize_with = "serialize_i64_as_string")]
+  pub row_id: i64,
   pub day: String,
   pub request_id: String,
   pub ts: i64,
@@ -91,11 +106,159 @@ pub struct RequestSummary {
   pub inbound_resp_status: Option<u16>,
 }
 
-/// The complete, decoded row for one request identity (`day`, `request_id`).
+/// One page of request summaries in stable, newest-first order.
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestPage {
+  pub requests: Vec<RequestSummary>,
+  pub next_cursor: Option<String>,
+}
+
+/// An opaque position in the newest-first request history ordering.
+///
+/// Cursors include the day because SQLite row identities are scoped to a day
+/// database. Callers should persist and replay the encoded value rather than
+/// constructing one themselves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestCursor {
+  day: String,
+  ts: i64,
+  row_id: i64,
+}
+
+impl RequestCursor {
+  const VERSION: &'static str = "v2";
+
+  pub fn decode(value: &str) -> std::result::Result<Self, InvalidRequestCursor> {
+    let mut parts = value.split('.');
+    let version = parts.next().ok_or(InvalidRequestCursor)?;
+    let day = parts.next().ok_or(InvalidRequestCursor)?;
+    let ts = parts
+      .next()
+      .ok_or(InvalidRequestCursor)?
+      .parse::<i64>()
+      .map_err(|_| InvalidRequestCursor)?;
+    let row_id = parts
+      .next()
+      .ok_or(InvalidRequestCursor)?
+      .parse::<i64>()
+      .map_err(|_| InvalidRequestCursor)?;
+    if parts.next().is_some() || version != Self::VERSION || !is_valid_request_day(day) {
+      return Err(InvalidRequestCursor);
+    }
+    Ok(Self {
+      day: day.to_string(),
+      ts,
+      row_id,
+    })
+  }
+
+  pub fn day(&self) -> &str {
+    &self.day
+  }
+
+  fn from_request(request: &RequestSummary) -> Self {
+    Self {
+      day: request.day.clone(),
+      ts: request.ts,
+      row_id: request.row_id,
+    }
+  }
+
+  fn encode(&self) -> String {
+    format!("{}.{}.{}.{}", Self::VERSION, self.day, self.ts, self.row_id)
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidRequestCursor;
+
+impl std::fmt::Display for InvalidRequestCursor {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("invalid request cursor")
+  }
+}
+
+impl std::error::Error for InvalidRequestCursor {}
+
+/// Decoded request metadata for one identity (`day`, `request_id`), excluding
+/// large network header/body payloads.
 #[derive(Debug, Clone, Serialize)]
 pub struct RequestDetail {
   pub day: String,
+  #[serde(serialize_with = "serialize_i64_as_string")]
+  pub row_id: i64,
   pub request: Map<String, Value>,
+}
+
+/// One lazily fetched request payload field.
+#[derive(Debug, Clone, Serialize)]
+pub struct RequestPayload {
+  pub field: String,
+  pub value: Value,
+}
+
+/// Payload fields that may be fetched separately from the request overview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestPayloadField {
+  InboundReqHeaders,
+  InboundReqBody,
+  InboundRespHeaders,
+  InboundRespBody,
+  OutboundReqHeaders,
+  OutboundReqBody,
+  OutboundRespHeaders,
+  OutboundRespBody,
+}
+
+impl RequestPayloadField {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::InboundReqHeaders => "inbound_req_headers",
+      Self::InboundReqBody => "inbound_req_body",
+      Self::InboundRespHeaders => "inbound_resp_headers",
+      Self::InboundRespBody => "inbound_resp_body",
+      Self::OutboundReqHeaders => "outbound_req_headers",
+      Self::OutboundReqBody => "outbound_req_body",
+      Self::OutboundRespHeaders => "outbound_resp_headers",
+      Self::OutboundRespBody => "outbound_resp_body",
+    }
+  }
+}
+
+impl std::str::FromStr for RequestPayloadField {
+  type Err = InvalidRequestPayloadField;
+
+  fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+    match value {
+      "inbound_req_headers" => Ok(Self::InboundReqHeaders),
+      "inbound_req_body" => Ok(Self::InboundReqBody),
+      "inbound_resp_headers" => Ok(Self::InboundRespHeaders),
+      "inbound_resp_body" => Ok(Self::InboundRespBody),
+      "outbound_req_headers" => Ok(Self::OutboundReqHeaders),
+      "outbound_req_body" => Ok(Self::OutboundReqBody),
+      "outbound_resp_headers" => Ok(Self::OutboundRespHeaders),
+      "outbound_resp_body" => Ok(Self::OutboundRespBody),
+      _ => Err(InvalidRequestPayloadField),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidRequestPayloadField;
+
+impl std::fmt::Display for InvalidRequestPayloadField {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter.write_str("invalid request payload field")
+  }
+}
+
+impl std::error::Error for InvalidRequestPayloadField {}
+
+fn serialize_i64_as_string<S>(value: &i64, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+  S: serde::Serializer,
+{
+  serializer.serialize_str(&value.to_string())
 }
 
 /// A session inferred from request records sharing a `session_id`.
@@ -126,21 +289,23 @@ pub struct SessionDetail {
 pub struct LatestRequests {
   pub day: Option<String>,
   pub requests: Vec<RequestSummary>,
+  pub next_cursor: Option<String>,
 }
 
 /// Return the most recent request rows across every existing request-day DB.
-pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Result<Vec<RequestSummary>> {
+pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Result<RequestPage> {
   let limit = options.effective_limit();
   let mut requests = Vec::new();
+  let fetch_limit = limit.saturating_add(1);
 
   let day_files = request_day_files(requests_dir)?;
   if let Some(day) = options.day.as_deref() {
     if let Some(day_file) = day_files.iter().find(|day_file| day_file.day == day) {
-      requests.extend(read_day_requests(day_file, options, Some(limit))?);
+      requests.extend(read_day_requests(day_file, options, Some(fetch_limit))?);
     }
   } else {
     for day_file in &day_files {
-      requests.extend(list_day_requests_best_effort(day_file, options, Some(limit)));
+      requests.extend(list_day_requests_best_effort(day_file, options, Some(fetch_limit)));
     }
   }
 
@@ -149,10 +314,9 @@ pub fn list_requests(requests_dir: &Path, options: &RequestListOptions) -> Resul
       .ts
       .cmp(&left.ts)
       .then_with(|| right.day.cmp(&left.day))
-      .then_with(|| right.request_id.cmp(&left.request_id))
+      .then_with(|| right.row_id.cmp(&left.row_id))
   });
-  requests.truncate(limit);
-  Ok(requests)
+  Ok(request_page(requests, limit))
 }
 
 /// Return whether `day` is a canonical UTC request-history day (`YYYY-MM-DD`).
@@ -185,19 +349,44 @@ pub fn list_request_days(requests_dir: &Path) -> Result<Vec<RequestDay>> {
 }
 
 /// Return requests from the most recent non-empty, readable request day.
-pub fn list_latest_requests(requests_dir: &Path, limit: Option<usize>) -> Result<LatestRequests> {
+pub fn list_latest_requests(
+  requests_dir: &Path,
+  limit: Option<usize>,
+  cursor: Option<RequestCursor>,
+) -> Result<LatestRequests> {
+  if let Some(cursor) = cursor {
+    let day = cursor.day.clone();
+    let page = list_requests(
+      requests_dir,
+      &RequestListOptions {
+        day: Some(day.clone()),
+        limit,
+        cursor: Some(cursor),
+        ..RequestListOptions::default()
+      },
+    )?;
+    return Ok(LatestRequests {
+      day: Some(day),
+      requests: page.requests,
+      next_cursor: page.next_cursor,
+    });
+  }
+
   let options = RequestListOptions {
     limit,
     ..RequestListOptions::default()
   };
   let limit = options.effective_limit();
+  let fetch_limit = limit.saturating_add(1);
 
   for day_file in request_day_files(requests_dir)? {
-    match read_day_requests(&day_file, &options, Some(limit)) {
+    match read_day_requests(&day_file, &options, Some(fetch_limit)) {
       Ok(requests) if !requests.is_empty() => {
+        let page = request_page(requests, limit);
         return Ok(LatestRequests {
           day: Some(day_file.day),
-          requests,
+          requests: page.requests,
+          next_cursor: page.next_cursor,
         });
       }
       Ok(_) => {}
@@ -208,11 +397,17 @@ pub fn list_latest_requests(requests_dir: &Path, limit: Option<usize>) -> Result
   Ok(LatestRequests {
     day: None,
     requests: Vec::new(),
+    next_cursor: None,
   })
 }
 
-/// Return a complete request row without mutating its source database.
-pub fn get_request(requests_dir: &Path, day: &str, request_id: &str) -> Result<Option<RequestDetail>> {
+/// Return request metadata without eagerly loading large network payloads.
+pub fn get_request(
+  requests_dir: &Path,
+  day: &str,
+  request_id: &str,
+  row_id: Option<i64>,
+) -> Result<Option<RequestDetail>> {
   let Some(day_file) = request_day_files(requests_dir)?
     .into_iter()
     .find(|file| file.day == day)
@@ -224,24 +419,28 @@ pub fn get_request(requests_dir: &Path, day: &str, request_id: &str) -> Result<O
   };
 
   let version = schema_version(&conn)?;
-  let request_id_condition = if version >= SPLIT_REQUESTS_SCHEMA_VERSION {
-    "request_id = ?1".to_string()
-  } else {
-    format!("{} = ?1", legacy_request_id_sql(version))
-  };
-  let mut stmt = conn.prepare(&format!("SELECT * FROM requests WHERE {request_id_condition} LIMIT 1"))?;
-  let column_count = stmt.column_count();
-  let column_names = (0..column_count)
-    .map(|index| stmt.column_name(index).unwrap_or_default().to_string())
-    .collect::<Vec<_>>();
-  let mut rows = stmt.query(params![request_id])?;
+  let request_condition = request_lookup_condition(version, row_id.is_some());
+  let row_id_column = request_row_id_column(version);
+  let overview_columns = request_overview_columns(&conn)?;
+  let mut projection = vec![quote_identifier(row_id_column)];
+  projection.extend(overview_columns.iter().map(|column| quote_identifier(column)));
+  let projection = projection.join(", ");
+  let mut stmt = conn.prepare(&format!(
+    "SELECT {projection} FROM requests WHERE {request_condition} LIMIT 1"
+  ))?;
+  let mut values = vec![SqlValue::Text(request_id.to_string())];
+  if let Some(row_id) = row_id {
+    values.push(SqlValue::Integer(row_id));
+  }
+  let mut rows = stmt.query(params_from_iter(values.iter()))?;
   let Some(row) = rows.next()? else {
     return Ok(None);
   };
+  let row_id = row.get(0)?;
 
-  let mut request = Map::with_capacity(column_count);
-  for (index, name) in column_names.iter().enumerate() {
-    request.insert(name.clone(), sqlite_value_to_json(row.get_ref(index)?, name));
+  let mut request = Map::with_capacity(overview_columns.len());
+  for (index, name) in overview_columns.iter().enumerate() {
+    request.insert(name.clone(), sqlite_value_to_json(row.get_ref(index + 1)?, name));
   }
   if version < SPLIT_REQUESTS_SCHEMA_VERSION
     && !matches!(request.get("request_id"), Some(Value::String(value)) if !value.is_empty())
@@ -252,7 +451,48 @@ pub fn get_request(requests_dir: &Path, day: &str, request_id: &str) -> Result<O
 
   Ok(Some(RequestDetail {
     day: day_file.day,
+    row_id,
     request,
+  }))
+}
+
+/// Return one explicitly selected request payload field without mutating its database.
+pub fn get_request_payload(
+  requests_dir: &Path,
+  day: &str,
+  request_id: &str,
+  row_id: Option<i64>,
+  field: RequestPayloadField,
+) -> Result<Option<RequestPayload>> {
+  let Some(day_file) = request_day_files(requests_dir)?
+    .into_iter()
+    .find(|file| file.day == day)
+  else {
+    return Ok(None);
+  };
+  let Some(conn) = open_readonly(&day_file.path)? else {
+    return Ok(None);
+  };
+
+  let version = schema_version(&conn)?;
+  let request_condition = request_lookup_condition(version, row_id.is_some());
+  let field_name = field.as_str();
+  let mut stmt = conn.prepare(&format!(
+    "SELECT {} FROM requests WHERE {request_condition} LIMIT 1",
+    quote_identifier(field_name)
+  ))?;
+  let mut values = vec![SqlValue::Text(request_id.to_string())];
+  if let Some(row_id) = row_id {
+    values.push(SqlValue::Integer(row_id));
+  }
+  let mut rows = stmt.query(params_from_iter(values.iter()))?;
+  let Some(row) = rows.next()? else {
+    return Ok(None);
+  };
+
+  Ok(Some(RequestPayload {
+    field: field_name.to_string(),
+    value: sqlite_value_to_json(row.get_ref(0)?, field_name),
   }))
 }
 
@@ -479,6 +719,43 @@ fn schema_version(conn: &Connection) -> Result<u32> {
   migrate::read_current_version(conn)
 }
 
+fn request_overview_columns(conn: &Connection) -> Result<Vec<String>> {
+  let stmt = conn.prepare("SELECT * FROM requests LIMIT 0")?;
+  Ok(
+    stmt
+      .column_names()
+      .into_iter()
+      .filter(|column| !REQUEST_PAYLOAD_FIELDS.contains(column))
+      .map(str::to_string)
+      .collect(),
+  )
+}
+
+fn request_row_id_column(version: u32) -> &'static str {
+  if version >= SPLIT_REQUESTS_SCHEMA_VERSION {
+    "idx"
+  } else {
+    "id"
+  }
+}
+
+fn request_lookup_condition(version: u32, include_row_id: bool) -> String {
+  let request_id = if version >= SPLIT_REQUESTS_SCHEMA_VERSION {
+    "request_id".to_string()
+  } else {
+    legacy_request_id_sql(version).to_string()
+  };
+  if include_row_id {
+    format!("{request_id} = ?1 AND {} = ?2", request_row_id_column(version))
+  } else {
+    format!("{request_id} = ?1")
+  }
+}
+
+fn quote_identifier(identifier: &str) -> String {
+  format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
 fn list_day_requests(
   conn: &Connection,
   day: &str,
@@ -503,7 +780,7 @@ fn list_split_day_requests(
   let mut sql = String::from(
     "SELECT c.request_id, c.ts, c.endpoint, c.status, c.request_error, m.session_id, m.account_id,
             m.provider_id, m.model, d.inbound_req_method, d.inbound_req_url, u.outbound_resp_status,
-            d.inbound_resp_status
+            d.inbound_resp_status, c.rowid
      FROM request_connection c
      LEFT JOIN request_metadata m ON m.request_id = c.request_id
      LEFT JOIN request_downstream d ON d.request_id = c.request_id
@@ -521,8 +798,14 @@ fn list_split_day_requests(
     values.push(SqlValue::Text(provider_id.to_string()));
   }
   if let Some(status) = options.status {
-    sql.push_str(" AND c.status = ?");
+    sql.push_str(" AND COALESCE(d.inbound_resp_status, u.outbound_resp_status, c.status) = ?");
     values.push(SqlValue::Integer(i64::from(status)));
+  }
+  if options.errors_only {
+    sql.push_str(
+      " AND (c.request_error IS NOT NULL OR c.status >= 400 OR u.outbound_resp_status >= 400
+             OR d.inbound_resp_status >= 400)",
+    );
   }
   if let Some(query) = options.query.as_deref().filter(|value| !value.is_empty()) {
     sql.push_str(" AND (c.request_id LIKE ? OR m.session_id LIKE ? OR m.model LIKE ?)");
@@ -533,6 +816,15 @@ fn list_split_day_requests(
       SqlValue::Text(pattern),
     ]);
   }
+  append_cursor_condition(
+    &mut sql,
+    &mut values,
+    "c.ts",
+    "c.rowid",
+    day,
+    version,
+    options.cursor.as_ref(),
+  );
   sql.push_str(" ORDER BY c.ts DESC, c.rowid DESC");
   if let Some(limit) = limit {
     sql.push_str(" LIMIT ?");
@@ -563,7 +855,7 @@ fn list_legacy_day_requests(
   };
   let mut sql = format!(
     "SELECT {request_id}, ts, endpoint, status, {request_error}, session_id, account_id, provider_id,
-            model, inbound_req_method, inbound_req_url, outbound_resp_status, inbound_resp_status
+            model, inbound_req_method, inbound_req_url, outbound_resp_status, inbound_resp_status, id
      FROM requests
      WHERE 1 = 1"
   );
@@ -578,8 +870,14 @@ fn list_legacy_day_requests(
     values.push(SqlValue::Text(provider_id.to_string()));
   }
   if let Some(status) = options.status {
-    sql.push_str(" AND status = ?");
+    sql.push_str(" AND COALESCE(inbound_resp_status, outbound_resp_status, status) = ?");
     values.push(SqlValue::Integer(i64::from(status)));
+  }
+  if options.errors_only {
+    sql.push_str(&format!(
+      " AND ({request_error} IS NOT NULL OR status >= 400 OR outbound_resp_status >= 400
+             OR inbound_resp_status >= 400)"
+    ));
   }
   if let Some(query) = options.query.as_deref().filter(|value| !value.is_empty()) {
     sql.push_str(&format!(
@@ -592,6 +890,7 @@ fn list_legacy_day_requests(
       SqlValue::Text(pattern),
     ]);
   }
+  append_cursor_condition(&mut sql, &mut values, "ts", "id", day, version, options.cursor.as_ref());
   sql.push_str(" ORDER BY ts DESC, id DESC");
   if let Some(limit) = limit {
     sql.push_str(" LIMIT ?");
@@ -607,8 +906,65 @@ fn list_legacy_day_requests(
   Ok(rows)
 }
 
+fn append_cursor_condition(
+  sql: &mut String,
+  values: &mut Vec<SqlValue>,
+  ts_sql: &str,
+  row_id_sql: &str,
+  day: &str,
+  version: u32,
+  cursor: Option<&RequestCursor>,
+) {
+  let Some(cursor) = cursor else {
+    return;
+  };
+  // Legacy schemas persisted whole seconds. Compare in the normalized
+  // millisecond domain so a cursor can also safely traverse mixed-version
+  // day files in the aggregate listing.
+  let ts_sql = if version < CURRENT_TS_MILLIS_SCHEMA_VERSION {
+    format!("({ts_sql} * 1000)")
+  } else {
+    ts_sql.to_string()
+  };
+  let cursor_ts = cursor.ts;
+
+  match day.cmp(cursor.day.as_str()) {
+    // At the cursor timestamp, a newer day sorts before the cursor and must
+    // not be returned. Only strictly older timestamps remain eligible.
+    std::cmp::Ordering::Greater => {
+      sql.push_str(&format!(" AND {ts_sql} < ?"));
+      values.push(SqlValue::Integer(cursor_ts));
+    }
+    // On the cursor day, the SQLite row identity is the stable tie-breaker.
+    std::cmp::Ordering::Equal => {
+      sql.push_str(&format!(" AND ({ts_sql} < ? OR ({ts_sql} = ? AND {row_id_sql} < ?))"));
+      values.extend([
+        SqlValue::Integer(cursor_ts),
+        SqlValue::Integer(cursor_ts),
+        SqlValue::Integer(cursor.row_id),
+      ]);
+    }
+    // An older day sorts after the cursor when timestamps are equal.
+    std::cmp::Ordering::Less => {
+      sql.push_str(&format!(" AND {ts_sql} <= ?"));
+      values.push(SqlValue::Integer(cursor_ts));
+    }
+  }
+}
+
+fn request_page(mut requests: Vec<RequestSummary>, limit: usize) -> RequestPage {
+  let has_more = requests.len() > limit;
+  requests.truncate(limit);
+  let next_cursor = has_more
+    .then(|| requests.last().map(RequestCursor::from_request))
+    .flatten()
+    .map(|cursor| cursor.encode());
+  RequestPage { requests, next_cursor }
+}
+
 fn request_summary_from_row(row: &rusqlite::Row<'_>, day: &str, version: u32) -> rusqlite::Result<RequestSummary> {
   Ok(RequestSummary {
+    row_id: row.get(13)?,
     day: day.to_string(),
     request_id: row.get(0)?,
     ts: normalized_timestamp(row.get(1)?, version),
@@ -774,16 +1130,23 @@ fn sqlite_value_to_json(value: ValueRef<'_>, name: &str) -> Value {
         serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
       }
       Ok(value) => Value::String(value.to_string()),
-      Err(_) => Value::Array(value.iter().copied().map(Value::from).collect()),
+      Err(_) => base64_json(value),
     },
     ValueRef::Blob(value) => match std::str::from_utf8(value) {
       Ok(value) if JSON_COLUMNS.contains(&name) => {
         serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.to_string()))
       }
       Ok(value) => Value::String(value.to_string()),
-      Err(_) => Value::Array(value.iter().copied().map(Value::from).collect()),
+      Err(_) => base64_json(value),
     },
   }
+}
+
+fn base64_json(value: &[u8]) -> Value {
+  serde_json::json!({
+    "encoding": "base64",
+    "data": base64::engine::general_purpose::STANDARD.encode(value),
+  })
 }
 
 #[cfg(test)]
@@ -830,6 +1193,10 @@ mod tests {
         params![request_id],
       )
       .unwrap();
+  }
+
+  fn request_ids(requests: &[RequestSummary]) -> Vec<&str> {
+    requests.iter().map(|request| request.request_id.as_str()).collect()
   }
 
   fn write_session(sessions_db: &Path, session_id: &str, request_id: &str, ts: i64, provider_id: &str, model: &str) {
@@ -1044,9 +1411,10 @@ mod tests {
       Some("zai"),
     );
 
-    let requests = list_requests(&dir, &RequestListOptions::default()).unwrap();
+    let page = list_requests(&dir, &RequestListOptions::default()).unwrap();
     assert_eq!(
-      requests
+      page
+        .requests
         .iter()
         .map(|request| request.request_id.as_str())
         .collect::<Vec<_>>(),
@@ -1075,7 +1443,63 @@ mod tests {
   }
 
   #[test]
-  fn gets_a_request_by_day_and_decodes_json_fields() {
+  fn paginates_a_request_day_without_duplicates_at_equal_timestamps() {
+    let dir = tempdir();
+    for request_id in ["request-a", "request-b", "request-c", "request-d", "request-e"] {
+      write_request(
+        &dir,
+        "2026-07-14",
+        request_id,
+        1_784_444_800_000,
+        Some("session-1"),
+        Some("openai"),
+      );
+    }
+
+    let mut options = RequestListOptions {
+      day: Some("2026-07-14".to_string()),
+      limit: Some(2),
+      ..RequestListOptions::default()
+    };
+    let first = list_requests(&dir, &options).unwrap();
+    assert_eq!(request_ids(&first.requests), ["request-e", "request-d"]);
+    options.cursor = Some(RequestCursor::decode(first.next_cursor.as_deref().unwrap()).unwrap());
+
+    let second = list_requests(&dir, &options).unwrap();
+    assert_eq!(request_ids(&second.requests), ["request-c", "request-b"]);
+    options.cursor = Some(RequestCursor::decode(second.next_cursor.as_deref().unwrap()).unwrap());
+
+    let third = list_requests(&dir, &options).unwrap();
+    assert_eq!(request_ids(&third.requests), ["request-a"]);
+    assert!(third.next_cursor.is_none());
+
+    let all_ids = first
+      .requests
+      .iter()
+      .chain(&second.requests)
+      .chain(&third.requests)
+      .map(|request| request.request_id.as_str())
+      .collect::<std::collections::HashSet<_>>();
+    assert_eq!(all_ids.len(), 5);
+  }
+
+  #[test]
+  fn rejects_malformed_request_cursors() {
+    for cursor in [
+      "",
+      "v1.2026-07-14.1784444800000.1",
+      "v2.not-a-day.1784444800000.1",
+      "v2.2026-07-14.not-a-timestamp.1",
+      "v2.2026-07-14.1784444800000.not-a-rowid",
+      "v2.2026-07-14.1784444800000",
+      "v2.2026-07-14.1784444800000.1.extra",
+    ] {
+      assert_eq!(RequestCursor::decode(cursor), Err(InvalidRequestCursor));
+    }
+  }
+
+  #[test]
+  fn request_overview_omits_payloads_and_payloads_are_loaded_separately() {
     let dir = tempdir();
     write_request(
       &dir,
@@ -1085,16 +1509,173 @@ mod tests {
       Some("session-1"),
       Some("openai"),
     );
+    let conn = open_day_db(&dir.join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_upstream (request_id, outbound_resp_body) VALUES (?1, ?2)",
+        params!["request-detail", &[0xff_u8, 0x00]],
+      )
+      .unwrap();
 
-    let detail = get_request(&dir, "2026-07-14", "request-detail").unwrap().unwrap();
+    let detail = get_request(&dir, "2026-07-14", "request-detail", None)
+      .unwrap()
+      .unwrap();
     assert_eq!(detail.request["ctx_json"], serde_json::json!({"route": "default"}));
     assert_eq!(detail.request["params_json"], serde_json::json!({"stream": false}));
+    for field in REQUEST_PAYLOAD_FIELDS {
+      assert!(!detail.request.contains_key(*field));
+    }
+
+    let inbound_body = get_request_payload(
+      &dir,
+      "2026-07-14",
+      "request-detail",
+      None,
+      RequestPayloadField::InboundReqBody,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(inbound_body.field, "inbound_req_body");
+    assert_eq!(inbound_body.value, serde_json::json!({"input": "hello"}));
+
+    let binary_body = get_request_payload(
+      &dir,
+      "2026-07-14",
+      "request-detail",
+      None,
+      RequestPayloadField::OutboundRespBody,
+    )
+    .unwrap()
+    .unwrap();
     assert_eq!(
-      detail.request["inbound_req_body"],
-      serde_json::json!({"input": "hello"})
+      binary_body.value,
+      serde_json::json!({"encoding": "base64", "data": "/wA="})
     );
-    assert!(get_request(&dir, "2026-07-14", "missing").unwrap().is_none());
-    assert!(get_request(&dir, "../../outside", "request-detail").unwrap().is_none());
+    assert!("endpoint".parse::<RequestPayloadField>().is_err());
+    assert!(get_request(&dir, "2026-07-14", "missing", None).unwrap().is_none());
+    assert!(get_request(&dir, "../../outside", "request-detail", None)
+      .unwrap()
+      .is_none());
+  }
+
+  #[test]
+  fn errors_only_includes_all_split_request_failure_signals() {
+    let dir = tempdir();
+    for request_id in [
+      "healthy",
+      "request-error",
+      "lifecycle-error",
+      "upstream-error",
+      "downstream-error",
+    ] {
+      write_request(
+        &dir,
+        "2026-07-14",
+        request_id,
+        1_784_444_800_000,
+        Some("session-1"),
+        Some("openai"),
+      );
+    }
+    let conn = open_day_db(&dir.join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "UPDATE request_connection SET request_error = 'failed' WHERE request_id = 'request-error'",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "UPDATE request_connection SET status = 500 WHERE request_id = 'lifecycle-error'",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_upstream (request_id, outbound_resp_status) VALUES ('upstream-error', 502)",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "UPDATE request_downstream SET inbound_resp_status = 404 WHERE request_id = 'downstream-error'",
+        [],
+      )
+      .unwrap();
+
+    let page = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        errors_only: true,
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    let ids = request_ids(&page.requests)
+      .into_iter()
+      .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ids.len(), 4);
+    assert!(ids.contains("request-error"));
+    assert!(ids.contains("lifecycle-error"));
+    assert!(ids.contains("upstream-error"));
+    assert!(ids.contains("downstream-error"));
+    assert!(!ids.contains("healthy"));
+  }
+
+  #[test]
+  fn exact_status_filter_uses_downstream_then_upstream_then_lifecycle_precedence() {
+    let dir = tempdir();
+    write_request(
+      &dir,
+      "2026-07-14",
+      "request-status",
+      1_784_444_800_000,
+      Some("session-1"),
+      Some("openai"),
+    );
+    let conn = open_day_db(&dir.join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "UPDATE request_connection SET status = 500 WHERE request_id = 'request-status'",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_upstream (request_id, outbound_resp_status) VALUES ('request-status', 502)",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "UPDATE request_downstream SET inbound_resp_status = 201 WHERE request_id = 'request-status'",
+        [],
+      )
+      .unwrap();
+
+    let matching = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        status: Some(201),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(request_ids(&matching.requests), ["request-status"]);
+    for shadowed_status in [500, 502] {
+      let page = list_requests(
+        &dir,
+        &RequestListOptions {
+          day: Some("2026-07-14".to_string()),
+          status: Some(shadowed_status),
+          ..RequestListOptions::default()
+        },
+      )
+      .unwrap();
+      assert!(page.requests.is_empty());
+    }
   }
 
   #[test]
@@ -1110,9 +1691,9 @@ mod tests {
     );
     std::fs::write(dir.join("2026-07-15.db"), b"not a sqlite database").unwrap();
 
-    let requests = list_requests(&dir, &RequestListOptions::default()).unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].request_id, "request-valid");
+    let page = list_requests(&dir, &RequestListOptions::default()).unwrap();
+    assert_eq!(page.requests.len(), 1);
+    assert_eq!(page.requests[0].request_id, "request-valid");
 
     let sessions = list_sessions(&dir, None).unwrap();
     assert_eq!(sessions.len(), 1);
@@ -1126,7 +1707,7 @@ mod tests {
       }
     )
     .is_err());
-    assert!(get_request(&dir, "2026-07-15", "missing").is_err());
+    assert!(get_request(&dir, "2026-07-15", "missing", None).is_err());
   }
 
   #[test]
@@ -1194,10 +1775,15 @@ mod tests {
     drop(open_day_db(&dir.join("2026-07-15.db")).unwrap());
     std::fs::write(dir.join("2026-07-16.db"), b"not a sqlite database").unwrap();
 
-    let latest = list_latest_requests(&dir, Some(1)).unwrap();
+    let latest = list_latest_requests(&dir, Some(1), None).unwrap();
     assert_eq!(latest.day.as_deref(), Some("2026-07-14"));
     assert_eq!(latest.requests.len(), 1);
     assert_eq!(latest.requests[0].request_id, "request-latest");
+    let cursor = RequestCursor::decode(latest.next_cursor.as_deref().unwrap()).unwrap();
+    let next = list_latest_requests(&dir, Some(1), Some(cursor)).unwrap();
+    assert_eq!(next.day.as_deref(), Some("2026-07-14"));
+    assert_eq!(request_ids(&next.requests), ["request-old"]);
+    assert!(next.next_cursor.is_none());
   }
 
   #[test]
@@ -1220,7 +1806,7 @@ mod tests {
       Some("zai"),
     );
 
-    let requests = list_requests(
+    let page = list_requests(
       &dir,
       &RequestListOptions {
         day: Some("2026-07-14".to_string()),
@@ -1228,10 +1814,10 @@ mod tests {
       },
     )
     .unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].request_id, "request-old");
+    assert_eq!(page.requests.len(), 1);
+    assert_eq!(page.requests[0].request_id, "request-old");
 
-    let missing_day_requests = list_requests(
+    let missing_day_page = list_requests(
       &dir,
       &RequestListOptions {
         day: Some("2026-07-13".to_string()),
@@ -1239,7 +1825,7 @@ mod tests {
       },
     )
     .unwrap();
-    assert!(missing_day_requests.is_empty());
+    assert!(missing_day_page.requests.is_empty());
   }
 
   #[test]
@@ -1258,6 +1844,102 @@ mod tests {
       sqlite_value_to_json(ValueRef::Blob(b"plain value"), "ctx_json"),
       Value::String("plain value".to_string())
     );
+  }
+
+  #[test]
+  fn legacy_pagination_uses_numeric_row_id_with_duplicate_and_null_request_ids() {
+    let dir = tempdir();
+    let path = dir.join("2026-07-14.db");
+    let conn = Connection::open(&path).unwrap();
+    conn
+      .execute_batch(include_str!("../schemas/snapshot/requests/v0.0.0.sql"))
+      .unwrap();
+    conn
+      .execute_batch(include_str!(
+        "../schemas/migrations/requests/0002_add_correlation_and_error.sql"
+      ))
+      .unwrap();
+    for (id, request_id, model) in [
+      (9_i64, None, "model-9"),
+      (10_i64, None, "model-10"),
+      (11_i64, Some("duplicate"), "model-11"),
+      (12_i64, Some("duplicate"), "model-12"),
+    ] {
+      let body = format!("{{\"row_id\":{id}}}");
+      conn
+        .execute(
+          "INSERT INTO requests (
+             id, ts, session_id, endpoint, account_id, provider_id, model, initiator, status, stream,
+             latency_ms, inbound_req_headers, inbound_req_body, request_id
+           ) VALUES (?1, 1784444800, 'session', 'responses', 'account', 'openai', ?2, 'test', 200, 0,
+                     1, '{}', ?3, ?4)",
+          params![id, model, body, request_id],
+        )
+        .unwrap();
+    }
+    conn
+      .execute_batch(
+        "CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );
+         INSERT INTO schema_migrations (version, name, applied_ts) VALUES
+           (1, 'initial', 0),
+           (2, 'correlation_and_error', 0);",
+      )
+      .unwrap();
+    drop(conn);
+
+    let mut options = RequestListOptions {
+      day: Some("2026-07-14".to_string()),
+      limit: Some(1),
+      ..RequestListOptions::default()
+    };
+    let mut request_ids = Vec::new();
+    let mut models = Vec::new();
+    loop {
+      let page = list_requests(&dir, &options).unwrap();
+      request_ids.extend(page.requests.iter().map(|request| request.request_id.clone()));
+      models.extend(page.requests.iter().map(|request| request.model.clone().unwrap()));
+      let Some(cursor) = page.next_cursor else {
+        break;
+      };
+      options.cursor = Some(RequestCursor::decode(&cursor).unwrap());
+    }
+
+    assert_eq!(models, ["model-12", "model-11", "model-10", "model-9"]);
+    assert_eq!(request_ids, ["duplicate", "duplicate", "legacy:10", "legacy:9"]);
+
+    let detail = get_request(&dir, "2026-07-14", "duplicate", Some(11)).unwrap().unwrap();
+    assert_eq!(detail.row_id, 11);
+    assert_eq!(detail.request["model"], "model-11");
+    assert_eq!(serde_json::to_value(&detail).unwrap()["row_id"], "11");
+
+    let payload = get_request_payload(
+      &dir,
+      "2026-07-14",
+      "duplicate",
+      Some(12),
+      RequestPayloadField::InboundReqBody,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(payload.value, serde_json::json!({"row_id": 12}));
+    assert!(get_request(&dir, "2026-07-14", "duplicate", Some(10))
+      .unwrap()
+      .is_none());
+
+    let page = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        limit: Some(1),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_value(&page.requests[0]).unwrap()["row_id"], "12");
   }
 
   #[test]
@@ -1293,6 +1975,39 @@ mod tests {
       )
       .unwrap();
     conn
+      .execute(
+        "INSERT INTO requests (
+           ts, session_id, endpoint, account_id, provider_id, model, initiator,
+           status, stream, latency_ms, inbound_req_headers, inbound_req_body
+         ) VALUES (
+           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+         )",
+        params![
+          1_784_444_800_i64,
+          "legacy-session",
+          "chat.completions",
+          "account-1",
+          "openai",
+          "gpt-legacy",
+          "test",
+          200_i64,
+          0_i64,
+          12_i64,
+          br#"{"content-type":"application/json"}"#,
+          br#"{"messages":["second"]}"#,
+        ],
+      )
+      .unwrap();
+    conn
+      .execute("UPDATE requests SET outbound_resp_status = 502 WHERE id = 2", [])
+      .unwrap();
+    conn
+      .execute(
+        "UPDATE requests SET outbound_resp_status = 202, inbound_resp_status = 201 WHERE id = 1",
+        [],
+      )
+      .unwrap();
+    conn
       .execute_batch(
         "CREATE TABLE schema_migrations (
            version INTEGER PRIMARY KEY,
@@ -1304,10 +2019,48 @@ mod tests {
       .unwrap();
     drop(conn);
 
-    let requests = list_requests(&dir, &RequestListOptions::default()).unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].request_id, "legacy:1");
-    assert_eq!(requests[0].ts, 1_784_444_800_000);
+    let mut options = RequestListOptions {
+      day: Some("2026-07-14".to_string()),
+      limit: Some(1),
+      ..RequestListOptions::default()
+    };
+    let page = list_requests(&dir, &options).unwrap();
+    assert_eq!(request_ids(&page.requests), ["legacy:2"]);
+    assert_eq!(page.requests[0].ts, 1_784_444_800_000);
+    options.cursor = Some(RequestCursor::decode(page.next_cursor.as_deref().unwrap()).unwrap());
+    let next_page = list_requests(&dir, &options).unwrap();
+    assert_eq!(request_ids(&next_page.requests), ["legacy:1"]);
+    assert!(next_page.next_cursor.is_none());
+    let error_page = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        errors_only: true,
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(request_ids(&error_page.requests), ["legacy:2"]);
+    let downstream_status_page = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        status: Some(201),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert_eq!(request_ids(&downstream_status_page.requests), ["legacy:1"]);
+    let shadowed_upstream_status_page = list_requests(
+      &dir,
+      &RequestListOptions {
+        day: Some("2026-07-14".to_string()),
+        status: Some(202),
+        ..RequestListOptions::default()
+      },
+    )
+    .unwrap();
+    assert!(shadowed_upstream_status_page.requests.is_empty());
     assert_eq!(
       list_request_days(&dir).unwrap(),
       vec![RequestDay {
@@ -1316,12 +2069,21 @@ mod tests {
       }]
     );
 
-    let detail = get_request(&dir, "2026-07-14", "legacy:1").unwrap().unwrap();
+    let detail = get_request(&dir, "2026-07-14", "legacy:1", None).unwrap().unwrap();
     assert_eq!(detail.request["request_id"], "legacy:1");
-    assert_eq!(
-      detail.request["inbound_req_body"],
-      serde_json::json!({"messages": ["hello"]})
-    );
+    for field in REQUEST_PAYLOAD_FIELDS {
+      assert!(!detail.request.contains_key(*field));
+    }
+    let payload = get_request_payload(
+      &dir,
+      "2026-07-14",
+      "legacy:1",
+      None,
+      RequestPayloadField::InboundReqBody,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(payload.value, serde_json::json!({"messages": ["hello"]}));
 
     let sessions = list_sessions(&dir, None).unwrap();
     assert_eq!(sessions[0].session_id, "legacy-session");

@@ -15,6 +15,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
+use tokn_persistence::inspect::{get_request_payload, RequestCursor, RequestPayloadField};
 use tokn_persistence::{
   get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
   list_sessions_from_db, RequestListOptions,
@@ -36,9 +37,12 @@ struct InspectState {
 struct RequestsQuery {
   day: Option<String>,
   limit: Option<usize>,
+  cursor: Option<String>,
   session_id: Option<String>,
   provider_id: Option<String>,
   status: Option<u16>,
+  #[serde(default)]
+  errors_only: bool,
   query: Option<String>,
 }
 
@@ -47,9 +51,11 @@ impl From<RequestsQuery> for RequestListOptions {
     Self {
       day: query.day,
       limit: query.limit,
+      cursor: None,
       session_id: query.session_id,
       provider_id: query.provider_id,
       status: query.status,
+      errors_only: query.errors_only,
       query: query.query,
     }
   }
@@ -61,9 +67,24 @@ struct LimitQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct RequestPageQuery {
+  limit: Option<usize>,
+  cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RequestDetailQuery {
   day: String,
   request_id: String,
+  row_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestPayloadQuery {
+  day: String,
+  request_id: String,
+  row_id: Option<i64>,
+  field: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +181,7 @@ fn router(state: InspectState) -> Router {
     .route("/api/requests", get(requests))
     .route("/api/requests/latest", get(latest_requests))
     .route("/api/request", get(request_detail))
+    .route("/api/request-payload", get(request_payload))
     .route("/api/sessions", get(sessions))
     .route("/api/session", get(session_detail))
     .with_state(state)
@@ -200,9 +222,16 @@ async fn requests(State(state): State<InspectState>, Query(query): Query<Request
   if let Some(day) = query.day.as_deref() {
     validate_request_day(day)?;
   }
+  let cursor = parse_request_cursor(query.cursor.as_deref())?;
+  if let (Some(day), Some(cursor)) = (query.day.as_deref(), cursor.as_ref()) {
+    if cursor.day() != day {
+      return Err(ApiError::bad_request("cursor does not belong to the selected day"));
+    }
+  }
   let selected_day = query.day.is_some();
   let requests_dir = state.requests_dir;
-  let options = query.into();
+  let mut options: RequestListOptions = query.into();
+  options.cursor = cursor;
   let requests = tokio::task::spawn_blocking(move || list_requests(&requests_dir, &options))
     .await
     .map_err(ApiError::internal)?;
@@ -218,15 +247,23 @@ async fn requests(State(state): State<InspectState>, Query(query): Query<Request
 
 async fn latest_requests(
   State(state): State<InspectState>,
-  Query(query): Query<LimitQuery>,
+  Query(query): Query<RequestPageQuery>,
 ) -> Result<Response, ApiError> {
   let requests_dir = state.requests_dir;
   let limit = query.limit;
-  let requests = tokio::task::spawn_blocking(move || list_latest_requests(&requests_dir, limit))
+  let cursor = parse_request_cursor(query.cursor.as_deref())?;
+  let requests = tokio::task::spawn_blocking(move || list_latest_requests(&requests_dir, limit, cursor))
     .await
     .map_err(ApiError::internal)?
     .map_err(ApiError::internal)?;
   Ok(json_response(StatusCode::OK, requests))
+}
+
+fn parse_request_cursor(cursor: Option<&str>) -> Result<Option<RequestCursor>, ApiError> {
+  cursor
+    .map(RequestCursor::decode)
+    .transpose()
+    .map_err(|_| ApiError::bad_request("cursor is malformed or unsupported"))
 }
 
 async fn request_detail(
@@ -237,12 +274,35 @@ async fn request_detail(
   let requests_dir = state.requests_dir;
   let day = query.day;
   let request_id = query.request_id;
-  let request = tokio::task::spawn_blocking(move || get_request(&requests_dir, &day, &request_id))
+  let row_id = query.row_id;
+  let request = tokio::task::spawn_blocking(move || get_request(&requests_dir, &day, &request_id, row_id))
     .await
     .map_err(ApiError::internal)?
     .map_err(|_| ApiError::unavailable("request day"))?;
   let request = request.ok_or_else(|| ApiError::not_found("request"))?;
   Ok(json_response(StatusCode::OK, request))
+}
+
+async fn request_payload(
+  State(state): State<InspectState>,
+  Query(query): Query<RequestPayloadQuery>,
+) -> Result<Response, ApiError> {
+  validate_request_day(&query.day)?;
+  let field = query
+    .field
+    .parse::<RequestPayloadField>()
+    .map_err(|_| ApiError::bad_request("field is not a supported request payload field"))?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let request_id = query.request_id;
+  let row_id = query.row_id;
+  let payload =
+    tokio::task::spawn_blocking(move || get_request_payload(&requests_dir, &day, &request_id, row_id, field))
+      .await
+      .map_err(ApiError::internal)?
+      .map_err(|_| ApiError::unavailable("request day"))?;
+  let payload = payload.ok_or_else(|| ApiError::not_found("request payload"))?;
+  Ok(json_response(StatusCode::OK, payload))
 }
 
 fn validate_request_day(day: &str) -> Result<(), ApiError> {
@@ -340,6 +400,12 @@ mod tests {
         params![request_id, session_id],
       )
       .unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_downstream (request_id, inbound_req_body) VALUES (?1, '{\"input\":\"hello\"}')",
+        params![request_id],
+      )
+      .unwrap();
   }
 
   fn write_session(sessions_db: &std::path::Path, session_id: &str, request_id: &str) {
@@ -378,6 +444,12 @@ mod tests {
   async fn response_body(response: Response) -> String {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     String::from_utf8(body.to_vec()).unwrap()
+  }
+
+  fn json_string_field(body: &str, field: &str) -> Option<String> {
+    let prefix = format!(r#""{field}":""#);
+    let value = body.split_once(&prefix)?.1.split_once('"')?.0;
+    Some(value.to_string())
   }
 
   #[tokio::test]
@@ -419,6 +491,7 @@ mod tests {
     )
     .await;
     assert_eq!(request_response.status(), StatusCode::OK);
+    assert!(!response_body(request_response).await.contains("inbound_req_body"));
 
     let sessions_response = get_response(tempdir.path(), &sessions_db, "/api/sessions").await;
     assert_eq!(sessions_response.status(), StatusCode::OK);
@@ -456,6 +529,230 @@ mod tests {
     )
     .await;
     assert_eq!(missing_session_response.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  async fn request_endpoints_page_without_duplicates_and_validate_cursors() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    for request_id in ["request-a", "request-b", "request-c"] {
+      write_request(tempdir.path(), "2026-07-14", request_id, "session/one");
+    }
+
+    let first_response = get_response(tempdir.path(), &sessions_db, "/api/requests?day=2026-07-14&limit=2").await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+    let first_body = response_body(first_response).await;
+    assert!(first_body.starts_with(r#"{"requests":["#));
+    assert!(first_body.contains("request-c"));
+    assert!(first_body.contains("request-b"));
+    assert!(!first_body.contains("request-a"));
+    assert!(first_body.contains(r#""row_id":"3""#));
+    let cursor = json_string_field(&first_body, "next_cursor").unwrap();
+
+    let second_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      &format!("/api/requests?day=2026-07-14&limit=2&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(second_response.status(), StatusCode::OK);
+    let second_body = response_body(second_response).await;
+    assert!(second_body.contains("request-a"));
+    assert!(!second_body.contains("request-b"));
+    assert!(!second_body.contains("request-c"));
+    assert!(second_body.contains(r#""next_cursor":null"#));
+
+    let latest_response = get_response(tempdir.path(), &sessions_db, "/api/requests/latest?limit=2").await;
+    assert_eq!(latest_response.status(), StatusCode::OK);
+    let latest_body = response_body(latest_response).await;
+    assert!(latest_body.contains(r#""day":"2026-07-14""#));
+    let latest_cursor = json_string_field(&latest_body, "next_cursor").unwrap();
+    let latest_next_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      &format!("/api/requests/latest?limit=2&cursor={latest_cursor}"),
+    )
+    .await;
+    assert_eq!(latest_next_response.status(), StatusCode::OK);
+    let latest_next_body = response_body(latest_next_response).await;
+    assert!(latest_next_body.contains("request-a"));
+    assert!(!latest_next_body.contains("request-b"));
+
+    let malformed_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/requests?day=2026-07-14&cursor=not-a-cursor",
+    )
+    .await;
+    assert_eq!(malformed_response.status(), StatusCode::BAD_REQUEST);
+
+    let wrong_day_response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      &format!("/api/requests?day=2026-07-13&cursor={cursor}"),
+    )
+    .await;
+    assert_eq!(wrong_day_response.status(), StatusCode::BAD_REQUEST);
+  }
+
+  #[tokio::test]
+  async fn request_payload_endpoint_is_lazy_strict_and_base64_safe() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    write_request(tempdir.path(), "2026-07-14", "request/one", "session/one");
+    let conn = open_day_db(&tempdir.path().join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "INSERT INTO request_upstream (request_id, outbound_resp_body) VALUES (?1, ?2)",
+        params!["request/one", &[0xff_u8, 0x00]],
+      )
+      .unwrap();
+
+    let overview = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-07-14&request_id=request%2Fone&row_id=1",
+    )
+    .await;
+    assert_eq!(overview.status(), StatusCode::OK);
+    let overview_body = response_body(overview).await;
+    assert!(overview_body.contains("request/one"));
+    assert!(overview_body.contains(r#""row_id":"1""#));
+    assert!(!overview_body.contains("inbound_req_body"));
+    assert!(!overview_body.contains("outbound_resp_body"));
+
+    let json_payload = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-payload?day=2026-07-14&request_id=request%2Fone&row_id=1&field=inbound_req_body",
+    )
+    .await;
+    assert_eq!(json_payload.status(), StatusCode::OK);
+    let json_payload_body = response_body(json_payload).await;
+    assert!(json_payload_body.contains(r#""field":"inbound_req_body""#));
+    assert!(json_payload_body.contains(r#""input":"hello""#));
+
+    let binary_payload = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-payload?day=2026-07-14&request_id=request%2Fone&row_id=1&field=outbound_resp_body",
+    )
+    .await;
+    assert_eq!(binary_payload.status(), StatusCode::OK);
+    let binary_payload_body = response_body(binary_payload).await;
+    assert!(binary_payload_body.contains(r#""encoding":"base64""#));
+    assert!(binary_payload_body.contains(r#""data":"/wA=""#));
+
+    let invalid_field = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-payload?day=2026-07-14&request_id=request%2Fone&field=endpoint",
+    )
+    .await;
+    assert_eq!(invalid_field.status(), StatusCode::BAD_REQUEST);
+
+    let missing_request = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-payload?day=2026-07-14&request_id=missing&field=inbound_req_body",
+    )
+    .await;
+    assert_eq!(missing_request.status(), StatusCode::NOT_FOUND);
+
+    let mismatched_identity = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-07-14&request_id=request%2Fone&row_id=2",
+    )
+    .await;
+    assert_eq!(mismatched_identity.status(), StatusCode::NOT_FOUND);
+  }
+
+  #[tokio::test]
+  async fn row_id_disambiguates_duplicate_legacy_request_ids() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    let requests_db = tempdir.path().join("2026-07-14.db");
+    let conn = rusqlite::Connection::open(requests_db).unwrap();
+    conn
+      .execute_batch(
+        "CREATE TABLE requests (
+           id INTEGER PRIMARY KEY,
+           ts INTEGER NOT NULL,
+           request_id TEXT,
+           model TEXT,
+           inbound_req_body BLOB
+         );
+         CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );
+         INSERT INTO schema_migrations (version, name, applied_ts) VALUES
+           (1, 'initial', 0),
+           (2, 'correlation_and_error', 0);
+         INSERT INTO requests (id, ts, request_id, model, inbound_req_body) VALUES
+           (11, 1784444800, 'duplicate', 'model-11', '{\"row_id\":11}'),
+           (12, 1784444800, 'duplicate', 'model-12', '{\"row_id\":12}');",
+      )
+      .unwrap();
+    drop(conn);
+
+    let overview = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-07-14&request_id=duplicate&row_id=11",
+    )
+    .await;
+    assert_eq!(overview.status(), StatusCode::OK);
+    let overview_body = response_body(overview).await;
+    assert!(overview_body.contains(r#""row_id":"11""#));
+    assert!(overview_body.contains("model-11"));
+    assert!(!overview_body.contains("model-12"));
+
+    let payload = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-payload?day=2026-07-14&request_id=duplicate&row_id=12&field=inbound_req_body",
+    )
+    .await;
+    assert_eq!(payload.status(), StatusCode::OK);
+    let payload_body = response_body(payload).await;
+    assert!(payload_body.contains(r#""row_id":12"#));
+
+    let fallback = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request?day=2026-07-14&request_id=duplicate",
+    )
+    .await;
+    assert_eq!(fallback.status(), StatusCode::OK);
+  }
+
+  #[tokio::test]
+  async fn requests_endpoint_filters_errors_only() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    write_request(tempdir.path(), "2026-07-14", "healthy", "session/one");
+    write_request(tempdir.path(), "2026-07-14", "failed", "session/one");
+    let conn = open_day_db(&tempdir.path().join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "UPDATE request_connection SET request_error = 'failed' WHERE request_id = 'failed'",
+        [],
+      )
+      .unwrap();
+
+    let response = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/requests?day=2026-07-14&errors_only=true",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_body(response).await;
+    assert!(body.contains("failed"));
+    assert!(!body.contains("healthy"));
   }
 
   #[tokio::test]

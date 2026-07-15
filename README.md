@@ -190,8 +190,13 @@ databases, so that timeline is unavailable when those files are absent. Use
 paths. The viewer can expose stored prompts and responses, so treat its URL and
 screen contents as sensitive.
 
-Schema migrations are applied when the databases are opened. To inspect or
-apply them explicitly:
+The Requests view opens on the most recent non-empty UTC day. It pages through
+large days, supports provider, status, error, and text filters, and loads stored
+headers or bodies only when their panel is opened. Empty or unreadable day files
+remain visible in the day picker but cannot be selected.
+
+The inspector never applies migrations. The writable gateway runtime migrates
+databases when it opens them; to review or apply those migrations explicitly:
 
 ```sh
 tokn-gateway migration
