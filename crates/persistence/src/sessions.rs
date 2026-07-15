@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 use tokn_core::db::SessionSource;
 use tracing::debug;
 
+mod live;
+mod semantic;
+
+pub use live::SessionEventHandler;
+use semantic::{request_messages_from_json, response_messages_from_body};
+
 const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
 const REQUESTS_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const MIGRATIONS: &[migrate::Migration] = &[
@@ -838,172 +844,6 @@ fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
 
 fn parse_json_bytes(bytes: &[u8]) -> Option<Value> {
   serde_json::from_slice(bytes).ok()
-}
-
-fn request_messages_from_json(endpoint: &str, value: &Value) -> Vec<MessageRecord> {
-  let mut out = Vec::new();
-  if let Some(instructions) = value.get("instructions").and_then(Value::as_str) {
-    if !instructions.is_empty() {
-      out.push(text_message("system", instructions));
-    }
-  }
-  match endpoint {
-    "chat_completions" | "chat/completions" => {
-      if let Some(messages) = value.get("messages").and_then(Value::as_array) {
-        out.extend(messages.iter().filter_map(message_from_value));
-      }
-    }
-    "responses" => {
-      if let Some(input) = value.get("input") {
-        out.extend(input_messages(input));
-      }
-    }
-    _ => {}
-  }
-  out
-}
-
-fn input_messages(input: &Value) -> Vec<MessageRecord> {
-  match input {
-    Value::String(text) => vec![text_message("user", text)],
-    Value::Array(items) => items.iter().filter_map(message_from_value).collect(),
-    Value::Object(_) => message_from_value(input).into_iter().collect(),
-    _ => Vec::new(),
-  }
-}
-
-fn message_from_value(value: &Value) -> Option<MessageRecord> {
-  let obj = value.as_object()?;
-  let role = obj
-    .get("role")
-    .and_then(Value::as_str)
-    .or_else(|| obj.get("type").and_then(Value::as_str))
-    .unwrap_or("user");
-  let parts = obj
-    .get("content")
-    .map(parts_from_value)
-    .filter(|parts| !parts.is_empty())
-    .unwrap_or_else(|| vec![json_part(value)]);
-  Some(MessageRecord {
-    role: role.to_string(),
-    status: None,
-    parts,
-  })
-}
-
-fn parts_from_value(value: &Value) -> Vec<PartRecord> {
-  match value {
-    Value::String(text) => vec![PartRecord {
-      part_type: "text".to_string(),
-      content: Bytes::from(text.to_string()),
-    }],
-    Value::Array(parts) => parts.iter().map(part_from_value).collect(),
-    Value::Object(_) => vec![part_from_value(value)],
-    _ => Vec::new(),
-  }
-}
-
-fn part_from_value(value: &Value) -> PartRecord {
-  if let Some(text) = value
-    .get("text")
-    .and_then(Value::as_str)
-    .or_else(|| value.get("input_text").and_then(Value::as_str))
-    .or_else(|| value.get("output_text").and_then(Value::as_str))
-  {
-    return PartRecord {
-      part_type: "text".to_string(),
-      content: Bytes::from(text.to_string()),
-    };
-  }
-  json_part(value)
-}
-
-fn json_part(value: &Value) -> PartRecord {
-  let part_type = value.get("type").and_then(Value::as_str).unwrap_or("json").to_string();
-  PartRecord {
-    part_type,
-    content: Bytes::from(serde_json::to_vec(value).unwrap_or_default()),
-  }
-}
-
-fn text_message(role: &str, text: &str) -> MessageRecord {
-  MessageRecord {
-    role: role.to_string(),
-    status: None,
-    parts: vec![PartRecord {
-      part_type: "text".to_string(),
-      content: Bytes::from(text.to_string()),
-    }],
-  }
-}
-
-fn response_messages_from_body(body: &[u8]) -> Vec<MessageRecord> {
-  if body.is_empty() {
-    return Vec::new();
-  }
-  if let Ok(value) = serde_json::from_slice::<Value>(body) {
-    return response_messages_from_json(&value);
-  }
-  let Ok(text) = std::str::from_utf8(body) else {
-    return Vec::new();
-  };
-  response_messages_from_sse(text)
-}
-
-fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
-  let mut completed = None;
-  let mut deltas = String::new();
-  for event in text.split("\n\n") {
-    let mut event_name = "";
-    let mut data = String::new();
-    for line in event.lines() {
-      if let Some(value) = line.strip_prefix("event:") {
-        event_name = value.trim();
-      } else if let Some(value) = line.strip_prefix("data:") {
-        if !data.is_empty() {
-          data.push('\n');
-        }
-        data.push_str(value.trim());
-      }
-    }
-    if data.is_empty() || data == "[DONE]" {
-      continue;
-    }
-    let Ok(value) = serde_json::from_str::<Value>(&data) else {
-      continue;
-    };
-    if event_name == "response.completed" {
-      completed = value.get("response").cloned().or(Some(value));
-    } else if event_name.ends_with(".delta") {
-      if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-        deltas.push_str(delta);
-      }
-    }
-  }
-  if let Some(value) = completed {
-    let messages = response_messages_from_json(&value);
-    if !messages.is_empty() {
-      return messages;
-    }
-  }
-  if deltas.is_empty() {
-    Vec::new()
-  } else {
-    vec![text_message("assistant", &deltas)]
-  }
-}
-
-fn response_messages_from_json(value: &Value) -> Vec<MessageRecord> {
-  if let Some(output) = value.get("output").and_then(Value::as_array) {
-    let messages: Vec<_> = output.iter().filter_map(message_from_value).collect();
-    if !messages.is_empty() {
-      return messages;
-    }
-  }
-  if let Some(text) = value.get("output_text").and_then(Value::as_str) {
-    return vec![text_message("assistant", text)];
-  }
-  Vec::new()
 }
 
 fn hash_part(part_type: &str, content: &[u8]) -> String {

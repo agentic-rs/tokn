@@ -6,6 +6,7 @@ pub mod usage;
 pub mod viewer;
 
 pub use requests::{read_request_row, RequestEventHandler};
+pub use sessions::SessionEventHandler;
 pub use viewer::{
   get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
   list_sessions, list_sessions_from_db, LatestRequests, RequestDay, RequestDayState, RequestListOptions,

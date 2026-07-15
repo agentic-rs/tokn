@@ -90,7 +90,7 @@ Default files live under `~/.tokn/router/`:
 - `auth.yaml`: user-managed and shared account credentials.
 - `auth.d/`: credential-only fragments owned by linked agents.
 - `usage.db`: usage summaries.
-- `sessions.db`: session affinity data.
+- `sessions.db`: semantic message trees captured from live sessions.
 - `requests/`: archived request bodies.
 - `ca/`: proxy CA material.
 - `logs/`: file logs when enabled.
@@ -165,9 +165,11 @@ When `[db].enabled` is true, the gateway writes local SQLite state under
 `~/.tokn/router/` unless paths are overridden:
 
 - `usage.db` stores aggregate request usage for `tokn-gateway usage`.
-- `sessions.db` stores session affinity and routing state.
+- `sessions.db` stores semantic message trees for successful live requests with a session id.
 - `requests/` stores day-rotated request databases named like
   `2026-06-09.db`.
+
+Set `record_sessions = false` to disable live semantic capture without disabling request or usage persistence.
 
 The request DBs are not a single `requests.db` file. They record request and
 response metadata, and can also persist request bodies when

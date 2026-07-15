@@ -21,9 +21,7 @@ type EventBusParts = (
   Option<ArchiveRuntime>,
 );
 
-/// Build the event bus and its handlers. The requests-event persistence
-/// handler is included when usage recording is enabled. A TTY progress handler is attached
-/// automatically when stdout is a terminal.
+/// Build the event bus and its persistence/progress handlers.
 pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
   let capacity = cfg.db.write_queue_capacity.max(256);
   let bus = EventBus::new(capacity);
@@ -38,6 +36,10 @@ pub fn build_event_bus(cfg: &Config) -> Result<EventBusParts> {
     let usage_handler = tokn_persistence::UsageEventHandler::new(paths.usage_db)?;
     handlers.push(Box::new(request_handler));
     handlers.push(Box::new(usage_handler));
+    if cfg.db.record_sessions {
+      let session_handler = tokn_persistence::SessionEventHandler::new(paths.sessions_db)?;
+      handlers.push(Box::new(session_handler));
+    }
   }
 
   match crate::logging::resolve_logs_dir(&cfg.logging) {
@@ -144,6 +146,36 @@ pub fn ensure_bind_host(host: &str, insecure_allow_remote: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  fn persistence_config(record_sessions: bool) -> (Config, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("tokn-server-runtime-test-{}", uuid::Uuid::new_v4()));
+    let sessions_db = root.join("sessions.db");
+    let mut cfg = Config::default();
+    cfg.db.usage_db_path = Some(root.join("usage.db"));
+    cfg.db.sessions_db_path = Some(sessions_db.clone());
+    cfg.db.requests_dir = Some(root.join("requests"));
+    cfg.db.record_sessions = record_sessions;
+    cfg.logging.dir = Some(root.join("logs"));
+    (cfg, sessions_db)
+  }
+
+  #[test]
+  fn build_event_bus_opens_sessions_db_when_recording_is_enabled() {
+    let (cfg, sessions_db) = persistence_config(true);
+
+    let _parts = build_event_bus(&cfg).expect("event bus should initialize persistence");
+
+    assert!(sessions_db.is_file());
+  }
+
+  #[test]
+  fn build_event_bus_leaves_sessions_db_absent_when_recording_is_disabled() {
+    let (cfg, sessions_db) = persistence_config(false);
+
+    let _parts = build_event_bus(&cfg).expect("event bus should initialize other persistence");
+
+    assert!(!sessions_db.exists());
+  }
 
   #[test]
   fn rejects_non_loopback_without_insecure_allow_remote() {
