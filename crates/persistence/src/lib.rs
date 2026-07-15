@@ -7,6 +7,7 @@ pub mod usage;
 
 pub use inspect::{get_request, get_session, list_requests, list_sessions, RequestListOptions};
 pub use requests::{read_request_row, RequestEventHandler};
+pub use sessions::SessionEventHandler;
 
 use bytes::Bytes;
 use snafu::Snafu;
