@@ -15,6 +15,7 @@ lzma = ["dep:lzma-rust2"]
 [dependencies]
 tokn-core = { workspace = true }
 tokn-headers = { workspace = true }
+base64 = "0.22"
 bytes = { workspace = true }
 flate2 = { workspace = true }
 rusqlite = { workspace = true }

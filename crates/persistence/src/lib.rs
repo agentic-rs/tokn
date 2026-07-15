@@ -1,13 +1,16 @@
 pub mod archive;
-pub mod inspect;
 pub mod migrate;
 pub mod requests;
 pub mod sessions;
 pub mod usage;
+pub mod viewer;
 
-pub use inspect::{get_request, get_session, list_requests, list_sessions, RequestListOptions};
 pub use requests::{read_request_row, RequestEventHandler};
 pub use sessions::SessionEventHandler;
+pub use viewer::{
+  get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
+  list_sessions, list_sessions_from_db, LatestRequests, RequestDay, RequestDayState, RequestListOptions,
+};
 
 use bytes::Bytes;
 use snafu::Snafu;
@@ -47,6 +50,11 @@ pub enum Error {
 
   #[snafu(display("sqlite"))]
   Sqlite { source: rusqlite::Error },
+
+  #[snafu(display(
+    "sessions database schema version {version} does not support session viewing; version 2 or newer is required"
+  ))]
+  UnsupportedSessionSchema { version: u32 },
 
   #[snafu(display("db writer channel closed"))]
   ChannelClosed,
