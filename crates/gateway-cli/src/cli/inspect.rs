@@ -3,7 +3,7 @@ use clap::Args;
 use std::path::PathBuf;
 
 #[derive(Args, Debug)]
-pub struct ViewerArgs {
+pub struct InspectArgs {
   /// Loopback TCP port for the viewer. The default picks an available port.
   #[arg(long, default_value_t = 0)]
   pub port: u16,
@@ -17,7 +17,7 @@ pub struct ViewerArgs {
   pub sessions_db: Option<PathBuf>,
 }
 
-pub async fn run(cfg_path: Option<PathBuf>, args: ViewerArgs) -> Result<()> {
+pub async fn run(cfg_path: Option<PathBuf>, args: InspectArgs) -> Result<()> {
   let (cfg, _) = crate::config::Config::load(cfg_path.as_deref())?;
   let mut paths = cfg.db.resolve_paths()?;
   if let Some(requests_dir) = args.requests_dir {
@@ -26,7 +26,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ViewerArgs) -> Result<()> {
   if let Some(sessions_db) = args.sessions_db {
     paths.sessions_db = sessions_db;
   }
-  tokn_router_viewer::serve(paths.requests_dir, paths.sessions_db, args.port)
+  tokn_router_inspect::serve(paths.requests_dir, paths.sessions_db, args.port)
     .await
-    .context("run request history viewer")
+    .context("run inspect viewer")
 }

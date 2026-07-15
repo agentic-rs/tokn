@@ -1,5 +1,5 @@
 [package]
-name = "tokn-router-viewer"
+name = "tokn-router-inspect"
 version.workspace = true
 edition.workspace = true
 description = "Loopback-only request and session history viewer for tokn"

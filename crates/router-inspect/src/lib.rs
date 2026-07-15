@@ -1,6 +1,6 @@
-//! Standalone, loopback-only viewer for persisted request history.
+//! Standalone, loopback-only inspector for persisted request history.
 //!
-//! The viewer intentionally stays out of the main API router. Its request
+//! The inspector intentionally stays out of the main API router. Its request
 //! data can include prompts and responses, so it gets a separate local listener
 //! and reads existing day databases without changing them.
 
@@ -15,9 +15,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use tokn_persistence::viewer::{
-  get_request, get_request_payload, get_session, is_valid_request_day, list_latest_requests, list_request_days,
-  list_requests, list_sessions_from_db, RequestCursor, RequestListOptions, RequestPayloadField,
+use tokn_persistence::viewer::{get_request_payload, RequestCursor, RequestPayloadField};
+use tokn_persistence::{
+  get_request, get_session, is_valid_request_day, list_latest_requests, list_request_days, list_requests,
+  list_sessions_from_db, RequestListOptions,
 };
 
 const INDEX_HTML: &str = include_str!("../web/dist/index.html");
@@ -27,7 +28,7 @@ const CONTENT_SECURITY_POLICY_VALUE: &str =
   "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
 #[derive(Clone)]
-struct ViewerState {
+struct InspectState {
   requests_dir: PathBuf,
   sessions_db: PathBuf,
 }
@@ -155,12 +156,12 @@ impl IntoResponse for ApiError {
 pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, port: u16) -> anyhow::Result<()> {
   let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
   let address = listener.local_addr()?;
-  println!("Viewer: http://{address}");
+  println!("Inspect viewer: http://{address}");
   println!("Request history may contain sensitive prompts and responses. Press Ctrl-C to stop.");
 
   axum::serve(
     listener,
-    router(ViewerState {
+    router(InspectState {
       requests_dir,
       sessions_db,
     }),
@@ -170,7 +171,7 @@ pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, port: u16) -> an
   Ok(())
 }
 
-fn router(state: ViewerState) -> Router {
+fn router(state: InspectState) -> Router {
   Router::new()
     .route("/", get(index))
     .route("/assets/viewer.js", get(viewer_js))
@@ -198,7 +199,7 @@ async fn viewer_css() -> Response {
   text_response("text/css; charset=utf-8", VIEWER_CSS)
 }
 
-async fn info(State(state): State<ViewerState>) -> Response {
+async fn info(State(state): State<InspectState>) -> Response {
   json_response(
     StatusCode::OK,
     ViewerInfo {
@@ -208,7 +209,7 @@ async fn info(State(state): State<ViewerState>) -> Response {
   )
 }
 
-async fn request_days(State(state): State<ViewerState>) -> Result<Response, ApiError> {
+async fn request_days(State(state): State<InspectState>) -> Result<Response, ApiError> {
   let requests_dir = state.requests_dir;
   let days = tokio::task::spawn_blocking(move || list_request_days(&requests_dir))
     .await
@@ -217,7 +218,7 @@ async fn request_days(State(state): State<ViewerState>) -> Result<Response, ApiE
   Ok(json_response(StatusCode::OK, days))
 }
 
-async fn requests(State(state): State<ViewerState>, Query(query): Query<RequestsQuery>) -> Result<Response, ApiError> {
+async fn requests(State(state): State<InspectState>, Query(query): Query<RequestsQuery>) -> Result<Response, ApiError> {
   if let Some(day) = query.day.as_deref() {
     validate_request_day(day)?;
   }
@@ -245,7 +246,7 @@ async fn requests(State(state): State<ViewerState>, Query(query): Query<Requests
 }
 
 async fn latest_requests(
-  State(state): State<ViewerState>,
+  State(state): State<InspectState>,
   Query(query): Query<RequestPageQuery>,
 ) -> Result<Response, ApiError> {
   let requests_dir = state.requests_dir;
@@ -266,7 +267,7 @@ fn parse_request_cursor(cursor: Option<&str>) -> Result<Option<RequestCursor>, A
 }
 
 async fn request_detail(
-  State(state): State<ViewerState>,
+  State(state): State<InspectState>,
   Query(query): Query<RequestDetailQuery>,
 ) -> Result<Response, ApiError> {
   validate_request_day(&query.day)?;
@@ -283,7 +284,7 @@ async fn request_detail(
 }
 
 async fn request_payload(
-  State(state): State<ViewerState>,
+  State(state): State<InspectState>,
   Query(query): Query<RequestPayloadQuery>,
 ) -> Result<Response, ApiError> {
   validate_request_day(&query.day)?;
@@ -312,7 +313,7 @@ fn validate_request_day(day: &str) -> Result<(), ApiError> {
   }
 }
 
-async fn sessions(State(state): State<ViewerState>, Query(query): Query<LimitQuery>) -> Result<Response, ApiError> {
+async fn sessions(State(state): State<InspectState>, Query(query): Query<LimitQuery>) -> Result<Response, ApiError> {
   let sessions_db = state.sessions_db;
   let limit = query.limit;
   let sessions = tokio::task::spawn_blocking(move || list_sessions_from_db(&sessions_db, limit))
@@ -328,7 +329,7 @@ async fn sessions(State(state): State<ViewerState>, Query(query): Query<LimitQue
 }
 
 async fn session_detail(
-  State(state): State<ViewerState>,
+  State(state): State<InspectState>,
   Query(query): Query<SessionDetailQuery>,
 ) -> Result<Response, ApiError> {
   let requests_dir = state.requests_dir;
@@ -431,7 +432,7 @@ mod tests {
   }
 
   async fn get_response(requests_dir: &std::path::Path, sessions_db: &std::path::Path, uri: &str) -> Response {
-    router(ViewerState {
+    router(InspectState {
       requests_dir: requests_dir.to_path_buf(),
       sessions_db: sessions_db.to_path_buf(),
     })

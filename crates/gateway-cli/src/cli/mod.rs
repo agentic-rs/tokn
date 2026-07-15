@@ -11,6 +11,7 @@ mod config_cmd;
 mod error;
 mod headers;
 mod import;
+mod inspect;
 mod lan_bootstrap;
 mod login;
 mod migration;
@@ -21,7 +22,6 @@ mod sessions;
 mod smoke;
 mod update;
 mod usage;
-mod viewer;
 
 pub use error::{Error, Result};
 
@@ -53,8 +53,7 @@ pub enum Cmd {
   /// Query usage statistics from the local SQLite log
   Usage(usage::UsageArgs),
   /// Open a loopback-only viewer for persisted requests and inferred sessions
-  #[command(alias = "inspect")]
-  Viewer(viewer::ViewerArgs),
+  Inspect(inspect::InspectArgs),
   /// Inspect and build semantic session views
   #[command(subcommand)]
   Sessions(sessions::SessionsCmd),
@@ -72,8 +71,8 @@ pub enum Cmd {
 impl Cli {
   pub async fn run(self) -> Result<()> {
     let cfg_path = self.config.clone();
-    let is_viewer = matches!(&self.cmd, Cmd::Viewer(_));
-    if !is_viewer {
+    let is_inspect = matches!(&self.cmd, Cmd::Inspect(_));
+    if !is_inspect {
       prepare_default_config_home(cfg_path.as_deref())?;
     }
 
@@ -85,7 +84,7 @@ impl Cli {
     let _guard = match Config::load(cfg_path.as_deref()) {
       Ok((cfg, _)) => {
         let mut logging_cfg = cfg.logging.clone();
-        if is_viewer {
+        if is_inspect {
           logging_cfg.target = LogTarget::Stderr;
         }
         Some(logging::init(&logging_cfg, mode))
@@ -103,7 +102,7 @@ impl Cli {
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
-      Cmd::Viewer(a) => viewer::run(cfg_path, a).await,
+      Cmd::Inspect(a) => inspect::run(cfg_path, a).await,
       Cmd::Sessions(c) => sessions::run(c).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,
@@ -136,7 +135,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Viewer(_) => RunMode::ReadOnlyCli,
+    Cmd::Inspect(_) => RunMode::ReadOnlyCli,
     Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Sessions(_) => RunMode::MutatingCli,
     Cmd::Agent(c) => match c {
@@ -159,27 +158,5 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
       _ => RunMode::ReadOnlyCli,
     },
     _ => RunMode::ReadOnlyCli,
-  }
-}
-
-#[cfg(test)]
-mod tests {
-  use super::{Cli, Cmd};
-  use clap::{CommandFactory, Parser};
-
-  #[test]
-  fn viewer_is_canonical_and_inspect_remains_a_hidden_alias() {
-    for subcommand in ["viewer", "inspect"] {
-      let cli = Cli::try_parse_from(["tokn-router", subcommand]).unwrap();
-      assert!(matches!(cli.cmd, Cmd::Viewer(_)));
-    }
-
-    let command = Cli::command();
-    let visible_subcommands = command
-      .get_subcommands()
-      .map(clap::Command::get_name)
-      .collect::<Vec<_>>();
-    assert!(visible_subcommands.contains(&"viewer"));
-    assert!(!visible_subcommands.contains(&"inspect"));
   }
 }
