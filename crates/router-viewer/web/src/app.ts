@@ -36,7 +36,7 @@ function emptyFilters(): RequestFilters {
 
 type HistoryMode = "push" | "replace" | null;
 
-class InspectApp extends LitElement {
+class ViewerApp extends LitElement {
   static properties = {
     active_view: { type: String },
     info: { attribute: false },
@@ -998,13 +998,13 @@ class InspectApp extends LitElement {
       <header class="app-header">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">t</span>
-          <div><h1>tokn inspect</h1><p>Local · read only</p></div>
+          <div><h1>tokn viewer</h1><p>Local · read only</p></div>
         </div>
         <p class="sensitive-notice">History may contain sensitive prompts and responses.</p>
       </header>
       <main class="app-shell">
         <div class="shell-navigation">
-          <nav class="view-navigation" aria-label="Inspector views">
+          <nav class="view-navigation" aria-label="Viewer sections">
             <button
               type="button"
               aria-current=${this.active_view === "requests" ? "page" : "false"}
@@ -1061,4 +1061,4 @@ class InspectApp extends LitElement {
   }
 }
 
-customElements.define("inspect-app", InspectApp);
+customElements.define("viewer-app", ViewerApp);

@@ -36,7 +36,7 @@ body {
   background: var(--background);
 }
 
-inspect-app {
+viewer-app {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   width: 100%;

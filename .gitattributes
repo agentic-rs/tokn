@@ -1,3 +1,3 @@
 # Lit's production bundle preserves spaces inside multiline template literals.
 # They are runtime-significant, so do not flag this generated asset as trailing whitespace.
-crates/router-inspect/web/dist/viewer.js whitespace=-trailing-space
+crates/router-viewer/web/dist/viewer.js whitespace=-trailing-space

@@ -173,12 +173,12 @@ The request DBs are not a single `requests.db` file. They record request and
 response metadata, and can also persist request bodies when
 `record_request_bodies = true`. Use `body_max_bytes` to cap stored body size.
 
-### Inspect request history
+### View request history
 
 Run the standalone local viewer without starting `serve`:
 
 ```sh
-tokn-gateway inspect
+tokn-gateway viewer
 ```
 
 It binds only to `127.0.0.1`, prints an available URL, and reads the existing
@@ -186,16 +186,16 @@ request-day databases and `sessions.db` without creating or migrating either.
 The Sessions list reads only `sessions.db`; it does not scan request history.
 Selecting a session still loads its request timeline from the request-day
 databases, so that timeline is unavailable when those files are absent. Use
-`--requests-dir PATH` or `--sessions-db PATH` to inspect different persisted
-paths. The viewer can expose stored prompts and responses, so treat its URL and
-screen contents as sensitive.
+`--requests-dir PATH` or `--sessions-db PATH` to view history from different
+persisted paths. The viewer can expose stored prompts and responses, so treat
+its URL and screen contents as sensitive.
 
 The Requests view opens on the most recent non-empty UTC day. It pages through
 large days, supports provider, status, error, and text filters, and loads stored
 headers or bodies only when their panel is opened. Empty or unreadable day files
 remain visible in the day picker but cannot be selected.
 
-The inspector never applies migrations. The writable gateway runtime migrates
+The viewer never applies migrations. The writable gateway runtime migrates
 databases when it opens them; to review or apply those migrations explicitly:
 
 ```sh
@@ -283,7 +283,7 @@ tokn-gateway proxy run [--npx] codex|opencode|pi [ARGS...]
 tokn-gateway proxy exec COMMAND [ARGS...]
 tokn-gateway proxy ca path|show|regenerate
 tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
-tokn-gateway inspect [--port PORT] [--requests-dir PATH] [--sessions-db PATH]
+tokn-gateway viewer [--port PORT] [--requests-dir PATH] [--sessions-db PATH]
 tokn-gateway config get|set|unset KEY [--account ID] [--add]
 tokn-gateway config list|edit|path|init
 tokn-gateway agent list
