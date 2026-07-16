@@ -397,7 +397,7 @@ mod tests {
       .unwrap();
     assert_eq!(relation, "parent-session");
 
-    let response = super::super::select_node_messages(&handler.db.conn, "req-live", "response").unwrap();
+    let response = handler.db.materialize_response_messages("req-live").unwrap();
     assert_eq!(response.len(), 1);
     assert_eq!(response[0].role, "assistant");
     assert_eq!(response[0].parts[0].content.as_ref(), b"hi there");
@@ -480,7 +480,7 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM session_nodes", [], |row| row.get(0))
       .unwrap();
     assert_eq!(node_count, 1);
-    let response = super::super::select_node_messages(&handler.db.conn, "req-buffered", "response").unwrap();
+    let response = handler.db.materialize_response_messages("req-buffered").unwrap();
     assert_eq!(response[0].role, "assistant");
     assert_eq!(response[0].parts[0].content.as_ref(), b"buffered reply");
   }
@@ -524,7 +524,7 @@ mod tests {
       }),
     );
 
-    let request = super::super::select_node_messages(&handler.db.conn, "req-passthrough", "request").unwrap();
+    let request = handler.db.materialize_request_messages("req-passthrough").unwrap();
     assert_eq!(request.len(), 1);
     assert_eq!(request[0].role, "user");
     assert_eq!(request[0].parts[0].content.as_ref(), b"from decoded body");

@@ -1,10 +1,12 @@
 use super::{migrate, MessageRecord, PartRecord, Result};
+#[cfg(test)]
 use bytes::Bytes;
 use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokn_core::db::SessionSource;
@@ -17,7 +19,7 @@ mod semantic;
 pub use live::SessionEventHandler;
 use semantic::{request_messages_from_json, response_messages_from_body};
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/sessions/v0.2.1.sql");
 const REQUESTS_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
@@ -40,7 +42,14 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "thread_lineage",
     sql: include_str!("../schemas/migrations/sessions/0004_thread_lineage.sql"),
   },
+  migrate::Migration {
+    version: 5,
+    name: "message_tree",
+    sql: include_str!("../schemas/migrations/sessions/0005_message_tree.sql"),
+  },
 ];
+
+type MessageId = [u8; 32];
 
 pub fn latest_version() -> u32 {
   migrate::latest_version(MIGRATIONS)
@@ -189,32 +198,23 @@ impl SessionsDb {
     } else {
       "session-fallback"
     };
-    let parent_id = self.predecessor_for_thread(&r.session_id, thread_id, &r.request_id, r.ts)?;
-    let parent_view = match parent_id.as_deref() {
-      Some(parent_id) => self.materialize_request_messages(parent_id)?,
-      None => Vec::new(),
-    };
-    let common_prefix = common_message_prefix(&parent_view, &r.request_messages);
-    let parent_matches = common_prefix == parent_view.len();
-    let request_delta = if parent_matches {
-      r.request_messages[common_prefix..].to_vec()
-    } else {
-      r.request_messages.clone()
-    };
-    let reduction_kind = if parent_id.is_none() {
-      "root_snapshot"
-    } else if parent_matches {
-      "suffix_append"
-    } else {
-      "conflict_snapshot"
-    };
-    let parent_source = if parent_id.is_some() {
-      "inferred_thread_predecessor"
-    } else {
-      "none"
-    };
 
     let tx = self.conn.transaction()?;
+    let input_path = insert_message_path(&tx, None, 0, &r.request_messages)?;
+    let input_tip = input_path.last().copied();
+    let output_path = insert_message_path(&tx, input_tip, input_path.len(), &r.response_messages)?;
+    let message_id = output_path
+      .last()
+      .or(input_path.last())
+      .copied()
+      .expect("record_tree rejects an empty input and output");
+    let input_ids = input_path.iter().copied().collect::<HashSet<_>>();
+    let parent = predecessor_for_message_path(&tx, &r.session_id, thread_id, &r.request_id, r.ts, &input_ids)?;
+    let parent_id = parent.as_ref().map(|parent| parent.node_id.as_str());
+    let common_prefix = parent.as_ref().map_or(0, |parent| parent.depth);
+    let request_delta_count = input_path.len().saturating_sub(common_prefix);
+    let parent_source = if parent.is_some() { "message_ancestor" } else { "none" };
+
     tx.execute(
       "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
        VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6)
@@ -250,18 +250,28 @@ impl SessionsDb {
       "INSERT INTO session_nodes
          (id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
           reduction_kind, parent_source, common_prefix_messages, request_message_count, response_message_count,
-          thread_id)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+          thread_id, message_id, input_message_count, output_message_count)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'message_tree', ?11, ?12, ?13, ?14, ?15,
+               ?16, ?17, ?18)
        ON CONFLICT(session_id, request_id) DO UPDATE SET
+         parent_id = excluded.parent_id,
          status = excluded.status,
          account_id = COALESCE(excluded.account_id, session_nodes.account_id),
          provider_id = COALESCE(excluded.provider_id, session_nodes.provider_id),
          model = COALESCE(excluded.model, session_nodes.model),
-         response_message_count = excluded.response_message_count",
+         reduction_kind = excluded.reduction_kind,
+         parent_source = excluded.parent_source,
+         common_prefix_messages = excluded.common_prefix_messages,
+         request_message_count = excluded.request_message_count,
+         response_message_count = excluded.response_message_count,
+         thread_id = excluded.thread_id,
+         message_id = excluded.message_id,
+         input_message_count = excluded.input_message_count,
+         output_message_count = excluded.output_message_count",
       params![
         r.request_id,
         r.session_id,
-        parent_id.as_deref(),
+        parent_id,
         r.request_id,
         r.ts,
         r.endpoint,
@@ -269,16 +279,16 @@ impl SessionsDb {
         r.account_id.as_deref(),
         r.provider_id.as_deref(),
         r.model.as_deref(),
-        reduction_kind,
         parent_source,
         common_prefix as i64,
-        request_delta.len() as i64,
-        r.response_messages.len() as i64,
+        request_delta_count as i64,
+        output_path.len() as i64,
         thread_id,
+        message_id.as_slice(),
+        input_path.len() as i64,
+        output_path.len() as i64,
       ],
     )?;
-    insert_node_messages(&tx, &r.request_id, "request", &request_delta)?;
-    insert_node_messages(&tx, &r.request_id, "response", &r.response_messages)?;
     tx.execute(
       "INSERT INTO session_heads (session_id, node_id, updated_ts)
        VALUES (?1, ?2, ?3)
@@ -302,29 +312,6 @@ impl SessionsDb {
     Ok(())
   }
 
-  fn predecessor_for_thread(
-    &self,
-    session_id: &str,
-    thread_id: &str,
-    request_id: &str,
-    ts: i64,
-  ) -> Result<Option<String>> {
-    Ok(
-      self
-        .conn
-        .query_row(
-          "SELECT id
-           FROM session_nodes
-           WHERE session_id = ?1 AND thread_id = ?2 AND id != ?3 AND ts < ?4
-           ORDER BY ts DESC, rowid DESC
-           LIMIT 1",
-          params![session_id, thread_id, request_id, ts],
-          |r| r.get(0),
-        )
-        .optional()?,
-    )
-  }
-
   fn node_exists(&self, session_id: &str, request_id: &str) -> Result<bool> {
     let exists = self.conn.query_row(
       "SELECT EXISTS(SELECT 1 FROM session_nodes WHERE session_id = ?1 AND request_id = ?2)",
@@ -334,7 +321,55 @@ impl SessionsDb {
     Ok(exists)
   }
 
+  #[cfg(test)]
   fn materialize_request_messages(&self, node_id: &str) -> Result<Vec<MessageRecord>> {
+    if let Some((request, _)) = self.materialize_message_tree_node(node_id)? {
+      return Ok(request);
+    }
+    self.materialize_legacy_request_messages(node_id)
+  }
+
+  #[cfg(test)]
+  fn materialize_response_messages(&self, node_id: &str) -> Result<Vec<MessageRecord>> {
+    if let Some((_, response)) = self.materialize_message_tree_node(node_id)? {
+      return Ok(response);
+    }
+    select_node_messages(&self.conn, node_id, "response")
+  }
+
+  #[cfg(test)]
+  fn materialize_message_tree_node(&self, node_id: &str) -> Result<Option<(Vec<MessageRecord>, Vec<MessageRecord>)>> {
+    let storage = self.conn.query_row(
+      "SELECT message_id, input_message_count, output_message_count
+       FROM session_nodes
+       WHERE id = ?1",
+      params![node_id],
+      |row| {
+        Ok((
+          row.get::<_, Option<Vec<u8>>>(0)?,
+          row.get::<_, Option<i64>>(1)?,
+          row.get::<_, Option<i64>>(2)?,
+        ))
+      },
+    )?;
+    let Some(message_id) = storage.0 else {
+      return Ok(None);
+    };
+    let input_count = required_count(storage.1, node_id)?;
+    let output_count = required_count(storage.2, node_id)?;
+    let message_id = decode_message_id(&message_id)?;
+    let mut path = select_message_path(&self.conn, message_id)?;
+    if path.len() != input_count.saturating_add(output_count) {
+      return Err(crate::Error::InvalidMessageTree {
+        message_id: encode_message_id(&message_id),
+      });
+    }
+    let response = path.split_off(input_count);
+    Ok(Some((path, response)))
+  }
+
+  #[cfg(test)]
+  fn materialize_legacy_request_messages(&self, node_id: &str) -> Result<Vec<MessageRecord>> {
     let mut lineage = self.materialization_lineage(node_id)?;
     lineage.reverse();
     let mut out = Vec::new();
@@ -349,6 +384,7 @@ impl SessionsDb {
     Ok(out)
   }
 
+  #[cfg(test)]
   fn materialization_lineage(&self, node_id: &str) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     let mut current = Some(node_id.to_string());
@@ -369,6 +405,226 @@ impl SessionsDb {
   }
 }
 
+struct MessagePredecessor {
+  node_id: String,
+  depth: usize,
+}
+
+fn predecessor_for_message_path(
+  conn: &Connection,
+  session_id: &str,
+  thread_id: &str,
+  request_id: &str,
+  ts: i64,
+  input_ids: &HashSet<MessageId>,
+) -> Result<Option<MessagePredecessor>> {
+  if input_ids.is_empty() {
+    return Ok(None);
+  }
+
+  let mut stmt = conn.prepare(
+    "SELECT n.id, n.message_id, message.depth
+     FROM session_nodes n
+     JOIN message_tree message ON message.id = n.message_id
+     WHERE n.session_id = ?1 AND n.thread_id = ?2 AND n.id != ?3 AND n.ts <= ?4
+     ORDER BY message.depth DESC, n.ts DESC, n.rowid DESC",
+  )?;
+  let mut rows = stmt.query(params![session_id, thread_id, request_id, ts])?;
+  while let Some(row) = rows.next()? {
+    let raw_id = row.get::<_, Vec<u8>>(1)?;
+    let message_id = decode_message_id(&raw_id)?;
+    if input_ids.contains(&message_id) {
+      return Ok(Some(MessagePredecessor {
+        node_id: row.get(0)?,
+        depth: required_count(Some(row.get(2)?), &encode_message_id(&message_id))?,
+      }));
+    }
+  }
+  Ok(None)
+}
+
+fn insert_message_path(
+  tx: &rusqlite::Transaction<'_>,
+  mut parent_id: Option<MessageId>,
+  parent_depth: usize,
+  messages: &[MessageRecord],
+) -> Result<Vec<MessageId>> {
+  let mut ids = Vec::with_capacity(messages.len());
+  for (offset, message) in messages.iter().enumerate() {
+    let depth = parent_depth + offset + 1;
+    let message_hash = hash_message(message);
+    let message_id = hash_prefix(parent_id.as_ref(), &message_hash);
+    let parent_param = parent_id.as_ref().map(|id| id.as_slice());
+    let inserted = tx.execute(
+      "INSERT OR IGNORE INTO message_tree (id, parent_id, depth, message_hash, role, status)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      params![
+        message_id.as_slice(),
+        parent_param,
+        depth as i64,
+        message_hash.as_slice(),
+        message.role,
+        message.status.map(i64::from),
+      ],
+    )?;
+    if inserted == 0 {
+      validate_existing_message(tx, message_id, parent_id, depth, message_hash, message)?;
+    }
+    for (part_index, part) in message.parts.iter().enumerate() {
+      upsert_part_blob(tx, part)?;
+      tx.execute(
+        "INSERT OR IGNORE INTO message_parts (message_id, part_index, part_hash)
+         VALUES (?1, ?2, ?3)",
+        params![
+          message_id.as_slice(),
+          part_index as i64,
+          hash_part(&part.part_type, part.content.as_ref())
+        ],
+      )?;
+    }
+    ids.push(message_id);
+    parent_id = Some(message_id);
+  }
+  Ok(ids)
+}
+
+fn validate_existing_message(
+  conn: &Connection,
+  message_id: MessageId,
+  parent_id: Option<MessageId>,
+  depth: usize,
+  message_hash: MessageId,
+  message: &MessageRecord,
+) -> Result<()> {
+  let stored = conn.query_row(
+    "SELECT parent_id, depth, message_hash, role, status
+     FROM message_tree
+     WHERE id = ?1",
+    params![message_id.as_slice()],
+    |row| {
+      Ok((
+        row.get::<_, Option<Vec<u8>>>(0)?,
+        row.get::<_, i64>(1)?,
+        row.get::<_, Vec<u8>>(2)?,
+        row.get::<_, String>(3)?,
+        row.get::<_, Option<i64>>(4)?,
+      ))
+    },
+  )?;
+  let stored_parent = stored.0.as_deref().map(decode_message_id).transpose()?;
+  let stored_hash = decode_message_id(&stored.2)?;
+  let matches = stored_parent == parent_id
+    && stored.1 == depth as i64
+    && stored_hash == message_hash
+    && stored.3 == message.role
+    && stored.4 == message.status.map(i64::from);
+  if !matches {
+    return Err(crate::Error::InvalidMessageTree {
+      message_id: encode_message_id(&message_id),
+    });
+  }
+  Ok(())
+}
+
+#[cfg(test)]
+fn select_message_path(conn: &Connection, tip_id: MessageId) -> Result<Vec<MessageRecord>> {
+  let mut current = Some(tip_id);
+  let mut reversed = Vec::new();
+  while let Some(message_id) = current {
+    let stored = conn
+      .query_row(
+        "SELECT parent_id, depth, message_hash, role, status
+         FROM message_tree
+         WHERE id = ?1",
+        params![message_id.as_slice()],
+        |row| {
+          Ok((
+            row.get::<_, Option<Vec<u8>>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, Vec<u8>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+          ))
+        },
+      )
+      .optional()?;
+    let Some((parent, depth, message_hash, role, status)) = stored else {
+      return Err(crate::Error::InvalidMessageTree {
+        message_id: encode_message_id(&message_id),
+      });
+    };
+    let parent = parent.as_deref().map(decode_message_id).transpose()?;
+    let message_hash = decode_message_id(&message_hash)?;
+    let message = MessageRecord {
+      role,
+      status: status.map(|value| value as u16),
+      parts: select_tree_message_parts(conn, &message_id)?,
+    };
+    if depth <= 0 || hash_message(&message) != message_hash || hash_prefix(parent.as_ref(), &message_hash) != message_id
+    {
+      return Err(crate::Error::InvalidMessageTree {
+        message_id: encode_message_id(&message_id),
+      });
+    }
+    reversed.push((depth as usize, message));
+    current = parent;
+  }
+  reversed.reverse();
+  if reversed
+    .iter()
+    .enumerate()
+    .any(|(index, (depth, _))| *depth != index + 1)
+  {
+    return Err(crate::Error::InvalidMessageTree {
+      message_id: encode_message_id(&tip_id),
+    });
+  }
+  Ok(reversed.into_iter().map(|(_, message)| message).collect())
+}
+
+#[cfg(test)]
+fn select_tree_message_parts(conn: &Connection, message_id: &MessageId) -> Result<Vec<PartRecord>> {
+  let mut stmt = conn.prepare(
+    "SELECT blob.part_type, blob.content
+     FROM message_parts part
+     JOIN part_blobs blob ON blob.hash = part.part_hash
+     WHERE part.message_id = ?1
+     ORDER BY part.part_index",
+  )?;
+  let parts = stmt
+    .query_map(params![message_id.as_slice()], |row| {
+      Ok(PartRecord {
+        part_type: row.get(0)?,
+        content: Bytes::from(row.get::<_, Vec<u8>>(1)?),
+      })
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+  Ok(parts)
+}
+
+fn required_count(value: Option<i64>, id: &str) -> Result<usize> {
+  match value.and_then(|value| usize::try_from(value).ok()) {
+    Some(value) => Ok(value),
+    None => Err(crate::Error::InvalidMessageTree {
+      message_id: id.to_string(),
+    }),
+  }
+}
+
+fn decode_message_id(value: &[u8]) -> Result<MessageId> {
+  value.try_into().map_err(|_| crate::Error::InvalidMessageTree {
+    message_id: encode_message_id(value),
+  })
+}
+
+fn encode_message_id(value: &[u8]) -> String {
+  let mut out = String::with_capacity(value.len() * 2);
+  for byte in value {
+    let _ = write!(&mut out, "{byte:02x}");
+  }
+  out
+}
+
 fn upsert_part_blob(tx: &rusqlite::Transaction<'_>, part: &PartRecord) -> Result<()> {
   let hash = hash_part(&part.part_type, part.content.as_ref());
   tx.execute(
@@ -378,51 +634,7 @@ fn upsert_part_blob(tx: &rusqlite::Transaction<'_>, part: &PartRecord) -> Result
   Ok(())
 }
 
-fn insert_node_messages(
-  tx: &rusqlite::Transaction<'_>,
-  node_id: &str,
-  side: &str,
-  messages: &[MessageRecord],
-) -> Result<()> {
-  tx.execute(
-    "DELETE FROM node_parts
-     WHERE message_id IN (SELECT id FROM node_messages WHERE node_id = ?1 AND side = ?2)",
-    params![node_id, side],
-  )?;
-  tx.execute(
-    "DELETE FROM node_messages WHERE node_id = ?1 AND side = ?2",
-    params![node_id, side],
-  )?;
-  for (message_idx, message) in messages.iter().enumerate() {
-    let message_id = format!("{node_id}:{side}:{message_idx}");
-    tx.execute(
-      "INSERT INTO node_messages (id, node_id, side, message_seq, role, status)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-      params![
-        message_id,
-        node_id,
-        side,
-        message_idx as i64,
-        message.role,
-        message.status.map(i64::from),
-      ],
-    )?;
-    for (part_idx, part) in message.parts.iter().enumerate() {
-      upsert_part_blob(tx, part)?;
-      tx.execute(
-        "INSERT INTO node_parts (message_id, part_index, part_hash)
-         VALUES (?1, ?2, ?3)",
-        params![
-          message_id,
-          part_idx as i64,
-          hash_part(&part.part_type, part.content.as_ref())
-        ],
-      )?;
-    }
-  }
-  Ok(())
-}
-
+#[cfg(test)]
 fn select_node_messages(conn: &Connection, node_id: &str, side: &str) -> Result<Vec<MessageRecord>> {
   let mut stmt = conn.prepare(
     "SELECT id, role, status
@@ -451,6 +663,7 @@ fn select_node_messages(conn: &Connection, node_id: &str, side: &str) -> Result<
     .collect()
 }
 
+#[cfg(test)]
 fn select_message_parts(conn: &Connection, message_id: &str) -> Result<Vec<PartRecord>> {
   let mut stmt = conn.prepare(
     "SELECT b.part_type, b.content
@@ -468,20 +681,6 @@ fn select_message_parts(conn: &Connection, message_id: &str) -> Result<Vec<PartR
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?;
   Ok(parts)
-}
-
-fn common_message_prefix(left: &[MessageRecord], right: &[MessageRecord]) -> usize {
-  left.iter().zip(right).take_while(|(a, b)| messages_equal(a, b)).count()
-}
-
-fn messages_equal(a: &MessageRecord, b: &MessageRecord) -> bool {
-  a.role == b.role
-    && a.parts.len() == b.parts.len()
-    && a
-      .parts
-      .iter()
-      .zip(&b.parts)
-      .all(|(a, b)| a.part_type == b.part_type && a.content == b.content)
 }
 
 pub fn playback_requests_into_sessions(requests_db: &Path, sessions_db: &Path) -> Result<PlaybackReport> {
@@ -679,22 +878,7 @@ fn playback_request_connection(
       request_messages,
       response_messages,
     };
-    let thread_id = record.thread_id.as_deref().unwrap_or(&record.session_id);
-    let parent = sessions.predecessor_for_thread(&record.session_id, thread_id, &record.request_id, record.ts)?;
     sessions.record_tree(&record)?;
-    if parent.is_some() {
-      let stored = sessions
-        .conn
-        .query_row(
-          "SELECT reduction_kind FROM session_nodes WHERE id = ?1",
-          params![record.request_id],
-          |r| r.get::<_, String>(0),
-        )
-        .unwrap_or_default();
-      if stored == "conflict_snapshot" {
-        report.reduction_mismatches += 1;
-      }
-    }
     report.rows_recorded += 1;
     update_expected_latest(
       expected_latest,
@@ -909,6 +1093,44 @@ fn hash_part(part_type: &str, content: &[u8]) -> String {
   h.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn hash_message(message: &MessageRecord) -> MessageId {
+  let mut hash = Sha256::new();
+  hash.update(b"tokn:session-message:v1\0");
+  hash_len_prefixed(&mut hash, message.role.as_bytes());
+  match message.status {
+    Some(status) => {
+      hash.update([1]);
+      hash.update(status.to_be_bytes());
+    }
+    None => hash.update([0]),
+  }
+  hash.update((message.parts.len() as u64).to_be_bytes());
+  for part in &message.parts {
+    hash_len_prefixed(&mut hash, part.part_type.as_bytes());
+    hash_len_prefixed(&mut hash, part.content.as_ref());
+  }
+  hash.finalize().into()
+}
+
+fn hash_prefix(parent_id: Option<&MessageId>, message_hash: &MessageId) -> MessageId {
+  let mut hash = Sha256::new();
+  hash.update(b"tokn:session-prefix:v1\0");
+  match parent_id {
+    Some(parent_id) => {
+      hash.update([1]);
+      hash.update(parent_id);
+    }
+    None => hash.update([0]),
+  }
+  hash.update(message_hash);
+  hash.finalize().into()
+}
+
+fn hash_len_prefixed(hash: &mut Sha256, value: &[u8]) {
+  hash.update((value.len() as u64).to_be_bytes());
+  hash.update(value);
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -917,7 +1139,7 @@ mod tests {
   use serde_json::json;
 
   #[test]
-  fn record_tree_reduces_against_thread_without_splitting_boundaries() {
+  fn record_tree_builds_message_prefixes_without_splitting_observations() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -925,6 +1147,7 @@ mod tests {
     let second = vec![
       msg("system", "instructions"),
       msg("user", "hello"),
+      msg("assistant", "hi"),
       msg("user", "again"),
     ];
     let conflict = vec![msg("system", "changed"), msg("user", "branch")];
@@ -957,7 +1180,7 @@ mod tests {
       account_id: Some("acct".into()),
       provider_id: Some("prov".into()),
       model: Some("model".into()),
-      request_messages: second,
+      request_messages: second.clone(),
       response_messages: vec![msg("assistant", "again")],
     })
     .unwrap();
@@ -981,7 +1204,8 @@ mod tests {
     let rows = db
       .conn
       .prepare(
-        "SELECT request_id, parent_id, reduction_kind, common_prefix_messages, request_message_count
+        "SELECT request_id, parent_id, reduction_kind, common_prefix_messages, request_message_count,
+                input_message_count, output_message_count
          FROM session_nodes
          ORDER BY ts",
       )
@@ -993,19 +1217,23 @@ mod tests {
           r.get::<_, String>(2)?,
           r.get::<_, i64>(3)?,
           r.get::<_, i64>(4)?,
+          r.get::<_, i64>(5)?,
+          r.get::<_, i64>(6)?,
         ))
       })
       .unwrap()
       .collect::<rusqlite::Result<Vec<_>>>()
       .unwrap();
-    assert_eq!(rows[0], ("req-1".into(), None, "root_snapshot".into(), 0, 2));
+    assert_eq!(rows[0], ("req-1".into(), None, "message_tree".into(), 0, 2, 2, 1));
     assert_eq!(
       rows[1],
-      ("req-2".into(), Some("req-1".into()), "suffix_append".into(), 2, 1)
+      ("req-2".into(), Some("req-1".into()), "message_tree".into(), 3, 1, 4, 1,)
     );
-    assert_eq!(
-      rows[2],
-      ("req-3".into(), Some("req-2".into()), "conflict_snapshot".into(), 0, 2)
+    assert_eq!(rows[2], ("req-3".into(), None, "message_tree".into(), 0, 2, 2, 0));
+    assert_messages_eq(&db.materialize_request_messages("req-2").unwrap(), &second);
+    assert_messages_eq(
+      &db.materialize_response_messages("req-2").unwrap(),
+      &[msg("assistant", "again")],
     );
     let head: String = db
       .conn
@@ -1050,7 +1278,17 @@ mod tests {
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
       )
       .unwrap();
-    assert_eq!(old_node, (None, "root_snapshot".into(), "sess-1".into()));
+    assert_eq!(old_node, (None, "message_tree".into(), "sess-1".into()));
+
+    let storage_counts: (i64, i64) = db
+      .conn
+      .query_row(
+        "SELECT (SELECT COUNT(*) FROM message_tree), (SELECT COUNT(*) FROM node_messages)",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+      )
+      .unwrap();
+    assert_eq!(storage_counts, (8, 0));
 
     let relation_count: i64 = db
       .conn
@@ -1060,7 +1298,7 @@ mod tests {
   }
 
   #[test]
-  fn record_tree_reduces_interleaved_requests_against_same_thread() {
+  fn record_tree_links_only_message_ancestors_in_the_same_thread() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -1134,7 +1372,7 @@ mod tests {
         (
           "req-root-1".into(),
           None,
-          "root_snapshot".into(),
+          "message_tree".into(),
           0,
           2,
           "thread-root".into(),
@@ -1142,7 +1380,7 @@ mod tests {
         (
           "req-child-1".into(),
           None,
-          "root_snapshot".into(),
+          "message_tree".into(),
           0,
           2,
           "thread-child".into(),
@@ -1150,7 +1388,7 @@ mod tests {
         (
           "req-root-2".into(),
           Some("req-root-1".into()),
-          "suffix_append".into(),
+          "message_tree".into(),
           2,
           1,
           "thread-root".into(),
@@ -1158,7 +1396,7 @@ mod tests {
         (
           "req-child-2".into(),
           Some("req-child-1".into()),
-          "suffix_append".into(),
+          "message_tree".into(),
           2,
           1,
           "thread-child".into(),
@@ -1197,56 +1435,171 @@ mod tests {
   }
 
   #[test]
-  fn materialization_stops_at_nearest_snapshot() {
+  fn message_tree_shares_prefixes_and_branches_at_first_difference() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
+
+    let mut root = thread_record(100, "thread-root", None, "req-root", vec![msg("user", "root")]);
+    root.response_messages = vec![msg("assistant", "first")];
+    db.record_tree(&root).unwrap();
+
+    let mut extension = thread_record(
+      110,
+      "thread-root",
+      None,
+      "req-extension",
+      vec![msg("user", "root"), msg("assistant", "first"), msg("user", "next")],
+    );
+    extension.response_messages = vec![msg("assistant", "second")];
+    db.record_tree(&extension).unwrap();
+
+    let mut branch = thread_record(
+      120,
+      "thread-root",
+      None,
+      "req-branch",
+      vec![msg("user", "root"), msg("assistant", "first"), msg("user", "alternate")],
+    );
+    branch.response_messages = vec![msg("assistant", "branch")];
+    db.record_tree(&branch).unwrap();
+
+    let nodes = db
+      .conn
+      .prepare("SELECT id, parent_id FROM session_nodes ORDER BY ts")
+      .unwrap()
+      .query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      nodes,
+      vec![
+        ("req-root".into(), None),
+        ("req-extension".into(), Some("req-root".into())),
+        ("req-branch".into(), Some("req-root".into())),
+      ]
+    );
+
+    let tree_rows: i64 = db
+      .conn
+      .query_row("SELECT COUNT(*) FROM message_tree", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(tree_rows, 6);
+    assert_messages_eq(
+      &db.materialize_request_messages("req-branch").unwrap(),
+      &branch.request_messages,
+    );
+    assert_messages_eq(
+      &db.materialize_response_messages("req-extension").unwrap(),
+      &extension.response_messages,
+    );
+  }
+
+  #[test]
+  fn nodes_bookmark_final_message_and_reuse_identical_paths() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+
+    let mut first = thread_record(100, "thread-root", None, "req-first", vec![msg("user", "hello")]);
+    first.response_messages = vec![msg("assistant", "thinking"), msg("assistant", "done")];
+    db.record_tree(&first).unwrap();
+
+    let mut retry = first.clone();
+    retry.ts = 110;
+    retry.request_id = "req-retry".into();
+    db.record_tree(&retry).unwrap();
+
+    let no_output = thread_record(120, "thread-root", None, "req-no-output", vec![msg("user", "hello")]);
+    db.record_tree(&no_output).unwrap();
+
+    let nodes = db
+      .conn
+      .prepare(
+        "SELECT id, message_id, input_message_count, output_message_count
+         FROM session_nodes
+         ORDER BY ts",
+      )
+      .unwrap()
+      .query_map([], |row| {
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Vec<u8>>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, i64>(3)?,
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!((nodes[0].2, nodes[0].3), (1, 2));
+    assert_eq!((nodes[1].2, nodes[1].3), (1, 2));
+    assert_eq!((nodes[2].2, nodes[2].3), (1, 0));
+    assert_eq!(nodes[0].1, nodes[1].1);
+    assert_ne!(nodes[0].1, nodes[2].1);
+
+    let tree_rows: i64 = db
+      .conn
+      .query_row("SELECT COUNT(*) FROM message_tree", [], |row| row.get(0))
+      .unwrap();
+    assert_eq!(tree_rows, 3);
+    assert_messages_eq(
+      &db.materialize_response_messages("req-retry").unwrap(),
+      &retry.response_messages,
+    );
+  }
+
+  #[test]
+  fn message_tree_branches_after_a_sixty_five_message_prefix() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let shared = (0..65)
+      .map(|index| msg("user", &format!("shared-{index}")))
+      .collect::<Vec<_>>();
+    let mut left_messages = shared.clone();
+    left_messages.push(msg("user", "left"));
+    let mut right_messages = shared;
+    right_messages.push(msg("user", "right"));
 
     db.record_tree(&thread_record(
       100,
       "thread-root",
       None,
-      "req-root",
-      vec![msg("user", "root")],
+      "req-left",
+      left_messages.clone(),
     ))
     .unwrap();
     db.record_tree(&thread_record(
       110,
       "thread-root",
       None,
-      "req-suffix-before-conflict",
-      vec![msg("user", "root"), msg("assistant", "first")],
-    ))
-    .unwrap();
-    db.record_tree(&thread_record(
-      120,
-      "thread-root",
-      None,
-      "req-conflict",
-      vec![msg("user", "branch")],
-    ))
-    .unwrap();
-    db.record_tree(&thread_record(
-      130,
-      "thread-root",
-      None,
-      "req-suffix-after-conflict",
-      vec![msg("user", "branch"), msg("assistant", "second")],
+      "req-right",
+      right_messages.clone(),
     ))
     .unwrap();
 
-    let lineage = db.materialization_lineage("req-suffix-after-conflict").unwrap();
-    assert_eq!(
-      lineage,
-      vec![
-        ("req-suffix-after-conflict".into(), "suffix_append".into()),
-        ("req-conflict".into(), "conflict_snapshot".into()),
-      ]
-    );
+    let depth_counts = db
+      .conn
+      .query_row(
+        "SELECT
+           (SELECT COUNT(*) FROM message_tree WHERE depth <= 65),
+           (SELECT COUNT(*) FROM message_tree WHERE depth = 66),
+           (SELECT COUNT(DISTINCT parent_id) FROM message_tree WHERE depth = 66)",
+        [],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?)),
+      )
+      .unwrap();
+    assert_eq!(depth_counts, (65, 2, 1));
+    assert_messages_eq(&db.materialize_request_messages("req-left").unwrap(), &left_messages);
+    assert_messages_eq(&db.materialize_request_messages("req-right").unwrap(), &right_messages);
   }
 
   #[test]
-  fn thread_lineage_migration_does_not_rewrite_existing_nodes() {
+  fn message_tree_migration_does_not_rewrite_existing_nodes() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let conn = Connection::open(&path).unwrap();
@@ -1292,27 +1645,68 @@ mod tests {
       .unwrap();
     drop(conn);
 
+    #[derive(Debug, PartialEq)]
+    struct StoredLegacyNode {
+      thread_id: Option<String>,
+      parent_source: String,
+      reduction_kind: String,
+      request_message_count: i64,
+      response_message_count: i64,
+      message_id: Option<Vec<u8>>,
+      input_message_count: Option<i64>,
+      output_message_count: Option<i64>,
+    }
+
     let db = SessionsDb::open(&path).unwrap();
-    let old_node: (Option<String>, String, String, i64, i64) = db
+    let old_node = db
       .conn
       .query_row(
-        "SELECT thread_id, parent_source, reduction_kind, request_message_count, response_message_count
+        "SELECT thread_id, parent_source, reduction_kind, request_message_count, response_message_count,
+                message_id, input_message_count, output_message_count
          FROM session_nodes WHERE id = 'req-old'",
         [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        |r| {
+          Ok(StoredLegacyNode {
+            thread_id: r.get(0)?,
+            parent_source: r.get(1)?,
+            reduction_kind: r.get(2)?,
+            request_message_count: r.get(3)?,
+            response_message_count: r.get(4)?,
+            message_id: r.get(5)?,
+            input_message_count: r.get(6)?,
+            output_message_count: r.get(7)?,
+          })
+        },
       )
       .unwrap();
-    assert_eq!(old_node, (None, "none".into(), "root_snapshot".into(), 1, 1));
+    assert_eq!(
+      old_node,
+      StoredLegacyNode {
+        thread_id: None,
+        parent_source: "none".into(),
+        reduction_kind: "root_snapshot".into(),
+        request_message_count: 1,
+        response_message_count: 1,
+        message_id: None,
+        input_message_count: None,
+        output_message_count: None,
+      }
+    );
     let thread_count: i64 = db
       .conn
       .query_row("SELECT COUNT(*) FROM session_threads", [], |r| r.get(0))
       .unwrap();
     assert_eq!(thread_count, 0);
+    let message_count: i64 = db
+      .conn
+      .query_row("SELECT COUNT(*) FROM message_tree", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(message_count, 0);
     assert_eq!(migrate::read_current_version(&db.conn).unwrap(), latest_version());
   }
 
   #[test]
-  fn playback_requests_decodes_zstd_reduces_and_verifies_latest_head() {
+  fn playback_requests_decodes_zstd_builds_tree_and_verifies_latest_head() {
     let dir = tempdir();
     let requests_path = dir.join("2026-05-22.db");
     let sessions_path = dir.join("sessions.db");
@@ -1338,6 +1732,7 @@ mod tests {
         "instructions": "be useful",
         "input": [
           {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+          {"role": "assistant", "content": [{"type": "output_text", "text": "hi"}]},
           {"role": "user", "content": [{"type": "input_text", "text": "again"}]}
         ]
       }),
@@ -1373,7 +1768,7 @@ mod tests {
         |r| r.get(0),
       )
       .unwrap();
-    assert_eq!(reduction, "suffix_append");
+    assert_eq!(reduction, "message_tree");
     let head: String = sessions
       .query_row(
         "SELECT n.request_id FROM session_heads h JOIN session_nodes n ON n.id = h.node_id WHERE h.session_id = 'sess-1'",
@@ -1402,11 +1797,9 @@ mod tests {
       .unwrap();
     assert_eq!(timestamps, (100, 110, 110, 110));
     let response_messages: i64 = sessions
-      .query_row(
-        "SELECT COUNT(*) FROM node_messages WHERE side = 'response' AND role = 'assistant'",
-        [],
-        |r| r.get(0),
-      )
+      .query_row("SELECT COUNT(*) FROM message_tree WHERE role = 'assistant'", [], |r| {
+        r.get(0)
+      })
       .unwrap();
     assert_eq!(response_messages, 2);
   }
@@ -1504,14 +1897,14 @@ mod tests {
         (
           "req-child-2".into(),
           Some("req-child-1".into()),
-          "suffix_append".into(),
+          "message_tree".into(),
           1,
           1,
         ),
         (
           "req-root-2".into(),
           Some("req-root-1".into()),
-          "suffix_append".into(),
+          "message_tree".into(),
           1,
           1,
         ),
@@ -1583,11 +1976,22 @@ mod tests {
         "acct".into(),
         "prov".into(),
         "model".into(),
-        "root_snapshot".into(),
+        "message_tree".into(),
         1,
         1,
       )
     );
+    let head_storage: (String, i64, i64) = db
+      .conn
+      .query_row(
+        "SELECT head_message_id, head_input_message_count, head_output_message_count FROM session_current",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+      )
+      .unwrap();
+    let head_message_id = head_storage.0;
+    assert_eq!(head_message_id.len(), 64);
+    assert_eq!((head_storage.1, head_storage.2), (1, 1));
 
     let messages = db
       .conn
@@ -1665,6 +2069,7 @@ mod tests {
       &json!({
         "input": [
           {"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+          {"role": "assistant", "content": [{"type": "output_text", "text": "old"}]},
           {"role": "user", "content": [{"type": "input_text", "text": "new"}]}
         ]
       }),
@@ -1837,6 +2242,19 @@ mod tests {
       )
       .unwrap();
     assert_eq!(head, "req-recorded");
+  }
+
+  fn assert_messages_eq(actual: &[MessageRecord], expected: &[MessageRecord]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+      assert_eq!(actual.role, expected.role);
+      assert_eq!(actual.status, expected.status);
+      assert_eq!(actual.parts.len(), expected.parts.len());
+      for (actual, expected) in actual.parts.iter().zip(&expected.parts) {
+        assert_eq!(actual.part_type, expected.part_type);
+        assert_eq!(actual.content, expected.content);
+      }
+    }
   }
 
   fn msg(role: &str, text: &str) -> MessageRecord {

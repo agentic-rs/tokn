@@ -62,6 +62,9 @@ pub enum Error {
   #[snafu(display("session node lineage is invalid at {node_id}"))]
   InvalidSessionLineage { node_id: String },
 
+  #[snafu(display("session message tree is invalid at {message_id}"))]
+  InvalidMessageTree { message_id: String },
+
   #[snafu(display("db writer channel closed"))]
   ChannelClosed,
 }

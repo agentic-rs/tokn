@@ -242,7 +242,7 @@
             </li>
           `})}
       </ul>
-    `}}customElements.define("request-list",lt);function ct(o){return o===null?{label:"—",tone:"neutral",title:"No response status stored"}:o>=400?{label:String(o),tone:"error",title:`Response status: ${o}`}:o>=300?{label:String(o),tone:"warning",title:`Response status: ${o}`}:{label:String(o),tone:"success",title:`Response status: ${o}`}}function ht(o){switch(o.toLowerCase()){case"assistant":return"assistant";case"system":case"developer":return"system";case"tool":case"function":return"tool";default:return"user"}}function ut(o){try{return JSON.stringify(o,null,2)??String(o)}catch{return String(o)}}function N(o){if(o<1024)return`${o.toLocaleString()} B`;const e=["KiB","MiB","GiB"];let t=o/1024,s=e[0];for(const i of e.slice(1)){if(t<1024)break;t/=1024,s=i}return`${t>=10?t.toFixed(0):t.toFixed(1)} ${s}`}function _t(o){switch(o){case"suffix_append":return{direction:"Appended",title:"Input delta",empty_message:"No new semantic input was stored for this node."};case"root_snapshot":return{direction:"Initial",title:"Input snapshot",empty_message:"No semantic input was stored for this root snapshot."};case"conflict_snapshot":return{direction:"Replaced",title:"Replacement snapshot",empty_message:"No semantic input was stored for this replacement snapshot."};default:return{direction:"Stored",title:"Node input",empty_message:"No semantic input was stored for this node."}}}class pt extends f{static properties={sessions:{attribute:!1},selected_session_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.sessions??[];return a`
+    `}}customElements.define("request-list",lt);function ct(o){return o===null?{label:"—",tone:"neutral",title:"No response status stored"}:o>=400?{label:String(o),tone:"error",title:`Response status: ${o}`}:o>=300?{label:String(o),tone:"warning",title:`Response status: ${o}`}:{label:String(o),tone:"success",title:`Response status: ${o}`}}function ht(o){switch(o.toLowerCase()){case"assistant":return"assistant";case"system":case"developer":return"system";case"tool":case"function":return"tool";default:return"user"}}function ut(o){try{return JSON.stringify(o,null,2)??String(o)}catch{return String(o)}}function N(o){if(o<1024)return`${o.toLocaleString()} B`;const e=["KiB","MiB","GiB"];let t=o/1024,s=e[0];for(const i of e.slice(1)){if(t<1024)break;t/=1024,s=i}return`${t>=10?t.toFixed(0):t.toFixed(1)} ${s}`}function _t(o){switch(o){case"message_tree":return{direction:"Complete",title:"Input prefix",empty_message:"No semantic input was stored for this observation."};case"suffix_append":return{direction:"Appended",title:"Input delta",empty_message:"No new semantic input was stored for this node."};case"root_snapshot":return{direction:"Initial",title:"Input snapshot",empty_message:"No semantic input was stored for this root snapshot."};case"conflict_snapshot":return{direction:"Replaced",title:"Replacement snapshot",empty_message:"No semantic input was stored for this replacement snapshot."};default:return{direction:"Stored",title:"Node input",empty_message:"No semantic input was stored for this node."}}}class pt extends f{static properties={sessions:{attribute:!1},selected_session_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.sessions??[];return a`
       <ul class="session-list" aria-label="Sessions">
         ${e.map(t=>{const s=this.selected_session_id===t.session_id,i=st(t);return a`
             <li>
@@ -370,7 +370,7 @@
       >
         ${s}
       </section>
-    `}renderNode(e){const t=e.node_id===this.selected_node_id,s=ct(e.status);return a`
+    `}renderNode(e){const t=e.node_id===this.selected_node_id,s=ct(e.status),i=e.reduction_kind==="message_tree"?e.input_message_count:e.request_message_count,r=e.reduction_kind==="message_tree"?"input":"input delta",n=e.reduction_kind==="message_tree"?e.output_message_count:e.response_message_count;return a`
       <li class="session-node ${t?"selected":""}">
         <span class="session-node-rail" aria-hidden="true"><span></span></span>
         <button
@@ -394,9 +394,9 @@
           <span class="session-node-context">
             <span>${e.provider_id??"unknown provider"}</span>
             <span aria-hidden="true">·</span>
-            <span>${e.request_message_count.toLocaleString()} input delta</span>
+            <span>${i.toLocaleString()} ${r}</span>
             <span aria-hidden="true">·</span>
-            <span>${e.response_message_count.toLocaleString()} output</span>
+            <span>${n.toLocaleString()} output</span>
           </span>
           <span class="session-node-id" title=${e.request_id}>
             request ${w(e.request_id)} · ${e.parent_node_id?`parent ${w(e.parent_node_id)}`:"root"}

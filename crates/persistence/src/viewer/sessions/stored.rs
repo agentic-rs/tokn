@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::super::database::open_readonly;
 use super::super::effective_limit;
-use super::super::schema::{read_schema_version, SESSION_TREE_SCHEMA_VERSION};
+use super::super::schema::{read_schema_version, SESSION_MESSAGE_TREE_SCHEMA_VERSION, SESSION_TREE_SCHEMA_VERSION};
 use super::super::value::sqlite_status;
 use super::{
   SessionMessage, SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary,
@@ -74,13 +74,13 @@ pub fn get_session_from_db(
     return Ok(None);
   };
   read_transaction(&mut conn, |conn| {
-    require_tree_schema(conn)?;
+    let schema_version = require_tree_schema(conn)?;
 
     let Some((session, head_node_id)) = select_session(conn, session_id)? else {
       return Ok(None);
     };
     let limit = effective_limit(limit);
-    let mut nodes = select_bounded_nodes(conn, session_id, limit)?;
+    let mut nodes = select_bounded_nodes(conn, session_id, limit, schema_version)?;
     nodes.sort_by(|left, right| left.ts.cmp(&right.ts).then_with(|| left.node_id.cmp(&right.node_id)));
     let nodes_truncated = session.request_count > nodes.len() as u64;
 
@@ -103,15 +103,30 @@ pub fn get_session_node_from_db(
     return Ok(None);
   };
   read_transaction(&mut conn, |conn| {
-    require_tree_schema(conn)?;
+    let schema_version = require_tree_schema(conn)?;
 
-    let Some(node) = select_node(conn, session_id, node_id)? else {
+    let Some(node) = select_node(conn, session_id, node_id, schema_version)? else {
       return Ok(None);
     };
-    let request_stats = select_side_stats(conn, node_id, "request")?;
-    let response_stats = select_side_stats(conn, node_id, "response")?;
-    let request_refs = select_node_message_tail(conn, node_id, "request", MAX_REQUEST_MESSAGES)?;
-    let response_refs = select_node_message_refs(conn, node_id, "response", MAX_RESPONSE_MESSAGES, false)?;
+    let tree_storage = if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION {
+      select_message_tree_storage(conn, node_id)?
+    } else {
+      None
+    };
+    let (request_stats, response_stats, request_refs, response_refs) = match tree_storage {
+      Some(storage) => (
+        select_tree_side_stats(conn, &storage, MessageSide::Input)?,
+        select_tree_side_stats(conn, &storage, MessageSide::Output)?,
+        select_tree_message_refs(conn, &storage, MessageSide::Input, MAX_REQUEST_MESSAGES)?,
+        select_tree_message_refs(conn, &storage, MessageSide::Output, MAX_RESPONSE_MESSAGES)?,
+      ),
+      None => (
+        select_side_stats(conn, node_id, "request")?,
+        select_side_stats(conn, node_id, "response")?,
+        select_node_message_tail(conn, node_id, "request", MAX_REQUEST_MESSAGES)?,
+        select_node_message_refs(conn, node_id, "response", MAX_RESPONSE_MESSAGES, false)?,
+      ),
+    };
 
     let mut request_budget = ContentBudget::new();
     let request_messages = load_messages(conn, request_refs, &mut request_budget)?;
@@ -169,12 +184,12 @@ fn read_transaction<T>(conn: &mut Connection, operation: impl FnOnce(&Connection
   Ok(result)
 }
 
-fn require_tree_schema(conn: &Connection) -> Result<()> {
+fn require_tree_schema(conn: &Connection) -> Result<u32> {
   let version = read_schema_version(conn)?;
   if version < SESSION_TREE_SCHEMA_VERSION {
     return Err(crate::Error::UnsupportedSessionSchema { version });
   }
-  Ok(())
+  Ok(version)
 }
 
 fn select_session(conn: &Connection, session_id: &str) -> Result<Option<(SessionSummary, Option<String>)>> {
@@ -224,7 +239,13 @@ fn session_summary_from_db_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Sess
   })
 }
 
-fn select_bounded_nodes(conn: &Connection, session_id: &str, limit: usize) -> Result<Vec<SessionNodeSummary>> {
+fn select_bounded_nodes(
+  conn: &Connection,
+  session_id: &str,
+  limit: usize,
+  schema_version: u32,
+) -> Result<Vec<SessionNodeSummary>> {
+  let message_columns = node_message_columns(schema_version);
   let sql = format!(
     "SELECT
        n.id,
@@ -241,6 +262,7 @@ fn select_bounded_nodes(conn: &Connection, session_id: &str, limit: usize) -> Re
        n.common_prefix_messages,
        n.request_message_count,
        n.response_message_count,
+       {message_columns},
        CASE WHEN head_ref.node_id = n.id THEN 1 ELSE 0 END
      FROM session_nodes AS n
      JOIN sessions AS s ON s.id = n.session_id
@@ -258,7 +280,13 @@ fn select_bounded_nodes(conn: &Connection, session_id: &str, limit: usize) -> Re
   Ok(nodes)
 }
 
-fn select_node(conn: &Connection, session_id: &str, node_id: &str) -> Result<Option<SessionNodeSummary>> {
+fn select_node(
+  conn: &Connection,
+  session_id: &str,
+  node_id: &str,
+  schema_version: u32,
+) -> Result<Option<SessionNodeSummary>> {
+  let message_columns = node_message_columns(schema_version);
   let sql = format!(
     "SELECT
        n.id,
@@ -275,6 +303,7 @@ fn select_node(conn: &Connection, session_id: &str, node_id: &str) -> Result<Opt
        n.common_prefix_messages,
        n.request_message_count,
        n.response_message_count,
+       {message_columns},
        CASE WHEN head_ref.node_id = n.id THEN 1 ELSE 0 END
      FROM session_nodes AS n
      JOIN sessions AS s ON s.id = n.session_id
@@ -304,8 +333,34 @@ fn session_node_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionNod
     common_prefix_messages: nonnegative_count(row.get(11)?),
     request_message_count: nonnegative_count(row.get(12)?),
     response_message_count: nonnegative_count(row.get(13)?),
-    is_head: row.get::<_, i64>(14)? != 0,
+    message_id: row.get(14)?,
+    input_message_count: nonnegative_count(row.get(15)?),
+    output_message_count: nonnegative_count(row.get(16)?),
+    is_head: row.get::<_, i64>(17)? != 0,
   })
+}
+
+fn node_message_columns(schema_version: u32) -> &'static str {
+  if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION {
+    "CASE WHEN n.message_id IS NULL THEN NULL ELSE lower(hex(n.message_id)) END,
+     COALESCE(
+       n.input_message_count,
+       CASE
+         WHEN n.reduction_kind = 'suffix_append'
+           THEN n.common_prefix_messages + n.request_message_count
+         ELSE n.request_message_count
+       END
+     ),
+     COALESCE(n.output_message_count, n.response_message_count)"
+  } else {
+    "NULL,
+     CASE
+       WHEN n.reduction_kind = 'suffix_append'
+         THEN n.common_prefix_messages + n.request_message_count
+       ELSE n.request_message_count
+     END,
+     n.response_message_count"
+  }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -313,6 +368,156 @@ struct SideStats {
   messages: u64,
   parts: u64,
   content_bytes: u64,
+}
+
+struct MessageTreeStorage {
+  tip_id: Vec<u8>,
+  tip_hex: String,
+  input_count: u64,
+  output_count: u64,
+}
+
+#[derive(Clone, Copy)]
+enum MessageSide {
+  Input,
+  Output,
+}
+
+impl MessageTreeStorage {
+  fn depth_range(&self, side: MessageSide) -> (u64, u64) {
+    match side {
+      MessageSide::Input => (1, self.input_count),
+      MessageSide::Output => (
+        self.input_count.saturating_add(1),
+        self.input_count.saturating_add(self.output_count),
+      ),
+    }
+  }
+
+  fn message_count(&self, side: MessageSide) -> u64 {
+    match side {
+      MessageSide::Input => self.input_count,
+      MessageSide::Output => self.output_count,
+    }
+  }
+}
+
+fn select_message_tree_storage(conn: &Connection, node_id: &str) -> Result<Option<MessageTreeStorage>> {
+  let stored = conn.query_row(
+    "SELECT message_id, input_message_count, output_message_count,
+            CASE WHEN message_id IS NULL THEN '' ELSE lower(hex(message_id)) END
+     FROM session_nodes
+     WHERE id = ?1",
+    params![node_id],
+    |row| {
+      Ok((
+        row.get::<_, Option<Vec<u8>>>(0)?,
+        row.get::<_, Option<i64>>(1)?,
+        row.get::<_, Option<i64>>(2)?,
+        row.get::<_, String>(3)?,
+      ))
+    },
+  )?;
+  let Some(tip_id) = stored.0 else {
+    return Ok(None);
+  };
+  let valid_tip = tip_id.len() == 32;
+  let input_count = stored.1.and_then(|value| u64::try_from(value).ok());
+  let output_count = stored.2.and_then(|value| u64::try_from(value).ok());
+  match (valid_tip, input_count, output_count) {
+    (true, Some(input_count), Some(output_count)) => Ok(Some(MessageTreeStorage {
+      tip_id,
+      tip_hex: stored.3,
+      input_count,
+      output_count,
+    })),
+    _ => Err(crate::Error::InvalidMessageTree { message_id: stored.3 }),
+  }
+}
+
+fn select_tree_side_stats(conn: &Connection, storage: &MessageTreeStorage, side: MessageSide) -> Result<SideStats> {
+  let (start_depth, end_depth) = storage.depth_range(side);
+  let (messages, parts, content_bytes) = conn.query_row(
+    "WITH RECURSIVE path(id, parent_id, depth) AS (
+       SELECT id, parent_id, depth FROM message_tree WHERE id = ?1
+       UNION ALL
+       SELECT parent.id, parent.parent_id, parent.depth
+       FROM path child
+       JOIN message_tree parent ON parent.id = child.parent_id
+     )
+     SELECT COUNT(DISTINCT path.id), COUNT(part.part_index), COALESCE(SUM(length(blob.content)), 0)
+     FROM path
+     LEFT JOIN message_parts part ON part.message_id = path.id
+     LEFT JOIN part_blobs blob ON blob.hash = part.part_hash
+     WHERE path.depth BETWEEN ?2 AND ?3",
+    params![storage.tip_id.as_slice(), start_depth as i64, end_depth as i64],
+    |row| {
+      Ok((
+        nonnegative_count(row.get(0)?),
+        nonnegative_count(row.get(1)?),
+        nonnegative_count(row.get(2)?),
+      ))
+    },
+  )?;
+  if messages != storage.message_count(side) {
+    return Err(crate::Error::InvalidMessageTree {
+      message_id: storage.tip_hex.clone(),
+    });
+  }
+  Ok(SideStats {
+    messages,
+    parts,
+    content_bytes,
+  })
+}
+
+fn select_tree_message_refs(
+  conn: &Connection,
+  storage: &MessageTreeStorage,
+  side: MessageSide,
+  limit: usize,
+) -> Result<Vec<MessageRef>> {
+  let (start_depth, end_depth) = storage.depth_range(side);
+  let order = match side {
+    MessageSide::Input => "DESC",
+    MessageSide::Output => "ASC",
+  };
+  let sql = format!(
+    "WITH RECURSIVE path(id, parent_id, depth, role, status) AS (
+       SELECT id, parent_id, depth, role, status FROM message_tree WHERE id = ?1
+       UNION ALL
+       SELECT parent.id, parent.parent_id, parent.depth, parent.role, parent.status
+       FROM path child
+       JOIN message_tree parent ON parent.id = child.parent_id
+     )
+     SELECT id, role, status
+     FROM path
+     WHERE depth BETWEEN ?2 AND ?3
+     ORDER BY depth {order}
+     LIMIT ?4"
+  );
+  let mut stmt = conn.prepare(&sql)?;
+  let mut messages = stmt
+    .query_map(
+      params![
+        storage.tip_id.as_slice(),
+        start_depth as i64,
+        end_depth as i64,
+        limit as i64
+      ],
+      |row| {
+        Ok(MessageRef {
+          message_id: StoredMessageId::Tree(row.get(0)?),
+          role: row.get(1)?,
+          status: sqlite_status(row.get(2)?),
+        })
+      },
+    )?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+  if matches!(side, MessageSide::Input) {
+    messages.reverse();
+  }
+  Ok(messages)
 }
 
 fn select_side_stats(conn: &Connection, node_id: &str, side: &str) -> Result<SideStats> {
@@ -339,9 +544,15 @@ fn select_side_stats(conn: &Connection, node_id: &str, side: &str) -> Result<Sid
 
 #[derive(Debug)]
 struct MessageRef {
-  message_id: String,
+  message_id: StoredMessageId,
   role: String,
   status: Option<u16>,
+}
+
+#[derive(Debug)]
+enum StoredMessageId {
+  Legacy(String),
+  Tree(Vec<u8>),
 }
 
 fn select_node_message_tail(conn: &Connection, node_id: &str, side: &str, limit: usize) -> Result<Vec<MessageRef>> {
@@ -369,7 +580,7 @@ fn select_node_message_refs(
   let messages = stmt
     .query_map(params![node_id, side, limit as i64], |row| {
       Ok(MessageRef {
-        message_id: row.get(0)?,
+        message_id: StoredMessageId::Legacy(row.get(0)?),
         role: row.get(1)?,
         status: sqlite_status(row.get(2)?),
       })
@@ -422,28 +633,30 @@ fn load_messages(
 
 fn load_message_parts(
   conn: &Connection,
-  message_id: &str,
+  message_id: &StoredMessageId,
   budget: &mut ContentBudget,
 ) -> Result<(u64, Vec<SessionPart>)> {
-  let parts_total = conn.query_row(
-    "SELECT COUNT(*) FROM node_parts WHERE message_id = ?1",
-    params![message_id],
-    |row| row.get::<_, i64>(0),
-  )?;
+  let (parts_table, message_column, message_parameter): (&str, &str, &dyn rusqlite::ToSql) = match message_id {
+    StoredMessageId::Legacy(message_id) => ("node_parts", "message_id", message_id),
+    StoredMessageId::Tree(message_id) => ("message_parts", "message_id", message_id),
+  };
+  let count_sql = format!("SELECT COUNT(*) FROM {parts_table} WHERE {message_column} = ?1");
+  let parts_total = conn.query_row(&count_sql, params![message_parameter], |row| row.get::<_, i64>(0))?;
   if budget.parts_remaining == 0 {
     return Ok((nonnegative_count(parts_total), Vec::new()));
   }
 
-  let mut stmt = conn.prepare(
+  let sql = format!(
     "SELECT b.part_type, length(b.content), substr(b.content, 1, ?2)
-     FROM node_parts AS p
+     FROM {parts_table} AS p
      JOIN part_blobs AS b ON b.hash = p.part_hash
-     WHERE p.message_id = ?1
+     WHERE p.{message_column} = ?1
      ORDER BY p.part_index
-     LIMIT ?3",
-  )?;
+     LIMIT ?3"
+  );
+  let mut stmt = conn.prepare(&sql)?;
   let mut rows = stmt.query(params![
-    message_id,
+    message_parameter,
     MAX_PART_CONTENT_BYTES as i64,
     budget.parts_remaining as i64
   ])?;

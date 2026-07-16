@@ -1,0 +1,79 @@
+{
+  "expected_version": 5,
+  "input": [
+    {
+      "table": "sessions",
+      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model", "message_count", "part_count"]
+    },
+    {
+      "table": "part_blobs",
+      "columns": ["hash", "part_type", "content"]
+    },
+    {
+      "table": "session_parts",
+      "columns": ["session_id", "part_seq", "message_seq", "part_index", "ts", "endpoint", "role", "status", "part_hash"]
+    }
+  ],
+  "output": [
+    {
+      "table": "message_parts",
+      "columns": ["message_id", "part_index", "part_hash"]
+    },
+    {
+      "table": "message_tree",
+      "columns": ["id", "parent_id", "depth", "message_hash", "role", "status"]
+    },
+    {
+      "table": "node_messages",
+      "columns": ["id", "node_id", "side", "message_seq", "role", "status"]
+    },
+    {
+      "table": "node_parts",
+      "columns": ["message_id", "part_index", "part_hash"]
+    },
+    {
+      "table": "part_blobs",
+      "columns": ["hash", "part_type", "content"]
+    },
+    {
+      "table": "session_heads",
+      "columns": ["session_id", "node_id", "updated_ts"]
+    },
+    {
+      "table": "session_nodes",
+      "columns": [
+        "id",
+        "session_id",
+        "parent_id",
+        "request_id",
+        "ts",
+        "endpoint",
+        "status",
+        "account_id",
+        "provider_id",
+        "model",
+        "reduction_kind",
+        "parent_source",
+        "common_prefix_messages",
+        "request_message_count",
+        "response_message_count",
+        "thread_id",
+        "message_id",
+        "input_message_count",
+        "output_message_count"
+      ]
+    },
+    {
+      "table": "session_relations",
+      "columns": ["parent_session_id", "child_session_id", "relation_kind", "first_seen_ts", "last_seen_ts", "source"]
+    },
+    {
+      "table": "session_threads",
+      "columns": ["session_id", "thread_id", "parent_thread_id", "first_seen_ts", "last_seen_ts", "source"]
+    },
+    {
+      "table": "sessions",
+      "columns": ["id", "first_seen_ts", "last_seen_ts", "source", "account_id", "provider_id", "model"]
+    }
+  ]
+}
