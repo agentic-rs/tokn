@@ -174,15 +174,13 @@ export class SessionDetailView extends LitElement {
 
   private renderPart(part: SessionPart) {
     switch (part.content.encoding) {
-      case "text":
-        return html`
-          <div class="session-part-text">
-            ${part.content.value || html`<span class="faint">Empty text part</span>`}
-            ${part.content.truncated
-              ? html`<p class="session-part-note">Preview truncated · ${formatByteSize(part.byte_length)} stored</p>`
-              : nothing}
-          </div>
-        `;
+      case "text": {
+        const content = part.content.value || html`<span class="faint">Empty text part</span>`;
+        const truncation_note = part.content.truncated
+          ? html`<p class="session-part-note">Preview truncated · ${formatByteSize(part.byte_length)} stored</p>`
+          : nothing;
+        return html`<div class="session-part-text">${content}${truncation_note}</div>`;
+      }
       case "json":
         return html`
           <details class="session-structured-part">

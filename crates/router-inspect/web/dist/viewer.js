@@ -276,12 +276,7 @@
             </li>
           `})}
       </ul>
-    `}}class pt extends f{static properties={detail:{attribute:!1},node_detail:{attribute:!1},state:{type:String},error_message:{type:String},node_state:{type:String},node_error_message:{type:String},selected_node_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}close(){this.dispatchEvent(new CustomEvent("session-close",{bubbles:!0,composed:!0}))}retryDetail(){this.dispatchEvent(new CustomEvent("session-retry",{bubbles:!0,composed:!0}))}retryNode(){this.dispatchEvent(new CustomEvent("session-node-retry",{bubbles:!0,composed:!0}))}selectNode(e){this.dispatchEvent(new CustomEvent("session-node-select",{detail:e,bubbles:!0,composed:!0}))}renderPart(e){switch(e.content.encoding){case"text":return a`
-          <div class="session-part-text">
-            ${e.content.value||a`<span class="faint">Empty text part</span>`}
-            ${e.content.truncated?a`<p class="session-part-note">Preview truncated · ${N(e.byte_length)} stored</p>`:l}
-          </div>
-        `;case"json":return a`
+    `}}class pt extends f{static properties={detail:{attribute:!1},node_detail:{attribute:!1},state:{type:String},error_message:{type:String},node_state:{type:String},node_error_message:{type:String},selected_node_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}close(){this.dispatchEvent(new CustomEvent("session-close",{bubbles:!0,composed:!0}))}retryDetail(){this.dispatchEvent(new CustomEvent("session-retry",{bubbles:!0,composed:!0}))}retryNode(){this.dispatchEvent(new CustomEvent("session-node-retry",{bubbles:!0,composed:!0}))}selectNode(e){this.dispatchEvent(new CustomEvent("session-node-select",{detail:e,bubbles:!0,composed:!0}))}renderPart(e){switch(e.content.encoding){case"text":{const t=e.content.value||a`<span class="faint">Empty text part</span>`,s=e.content.truncated?a`<p class="session-part-note">Preview truncated · ${N(e.byte_length)} stored</p>`:l;return a`<div class="session-part-text">${t}${s}</div>`}case"json":return a`
           <details class="session-structured-part">
             <summary>${e.part_type.replaceAll("_"," ")}</summary>
             <pre>${ut(e.content.value)}</pre>
