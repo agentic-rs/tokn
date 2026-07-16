@@ -335,11 +335,11 @@ impl SessionsDb {
   }
 
   fn materialize_request_messages(&self, node_id: &str) -> Result<Vec<MessageRecord>> {
-    let mut lineage = self.lineage(node_id)?;
+    let mut lineage = self.materialization_lineage(node_id)?;
     lineage.reverse();
     let mut out = Vec::new();
-    for node in lineage {
-      let (kind, messages) = self.node_request_messages(&node)?;
+    for (node, kind) in lineage {
+      let messages = select_node_messages(&self.conn, &node, "request")?;
       if kind == "root_snapshot" || kind == "conflict_snapshot" {
         out = messages;
       } else {
@@ -349,29 +349,23 @@ impl SessionsDb {
     Ok(out)
   }
 
-  fn lineage(&self, node_id: &str) -> Result<Vec<String>> {
+  fn materialization_lineage(&self, node_id: &str) -> Result<Vec<(String, String)>> {
     let mut out = Vec::new();
     let mut current = Some(node_id.to_string());
     while let Some(id) = current {
-      current = self
-        .conn
-        .query_row("SELECT parent_id FROM session_nodes WHERE id = ?1", params![id], |r| {
-          r.get::<_, Option<String>>(0)
-        })
-        .optional()?
-        .flatten();
-      out.push(id);
+      let (parent_id, reduction_kind) = self.conn.query_row(
+        "SELECT parent_id, reduction_kind FROM session_nodes WHERE id = ?1",
+        params![&id],
+        |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+      )?;
+      let is_snapshot = reduction_kind == "root_snapshot" || reduction_kind == "conflict_snapshot";
+      out.push((id, reduction_kind));
+      if is_snapshot {
+        break;
+      }
+      current = parent_id;
     }
     Ok(out)
-  }
-
-  fn node_request_messages(&self, node_id: &str) -> Result<(String, Vec<MessageRecord>)> {
-    let kind: String = self.conn.query_row(
-      "SELECT reduction_kind FROM session_nodes WHERE id = ?1",
-      params![node_id],
-      |r| r.get(0),
-    )?;
-    Ok((kind, select_node_messages(&self.conn, node_id, "request")?))
   }
 }
 
@@ -1198,6 +1192,55 @@ mod tests {
           "thread-header".into(),
         ),
         ("thread-root".into(), None, "thread-header".into()),
+      ]
+    );
+  }
+
+  #[test]
+  fn materialization_stops_at_nearest_snapshot() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+
+    db.record_tree(&thread_record(
+      100,
+      "thread-root",
+      None,
+      "req-root",
+      vec![msg("user", "root")],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      110,
+      "thread-root",
+      None,
+      "req-suffix-before-conflict",
+      vec![msg("user", "root"), msg("assistant", "first")],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      120,
+      "thread-root",
+      None,
+      "req-conflict",
+      vec![msg("user", "branch")],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      130,
+      "thread-root",
+      None,
+      "req-suffix-after-conflict",
+      vec![msg("user", "branch"), msg("assistant", "second")],
+    ))
+    .unwrap();
+
+    let lineage = db.materialization_lineage("req-suffix-after-conflict").unwrap();
+    assert_eq!(
+      lineage,
+      vec![
+        ("req-suffix-after-conflict".into(), "suffix_append".into()),
+        ("req-conflict".into(), "conflict_snapshot".into()),
       ]
     );
   }

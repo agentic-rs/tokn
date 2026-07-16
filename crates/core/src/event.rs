@@ -1,7 +1,7 @@
 use crate::db::Usage;
 use crate::request_event::RequestEvent;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use tokio::sync::{broadcast, oneshot};
 
 /// Top-level event flowing on the in-process broadcast bus.
@@ -160,9 +160,9 @@ impl Drop for EventFinalizerGuard {
   }
 }
 
-/// Trait for event handlers that process events on the background thread.
+/// Trait for event handlers that process events on a dedicated background worker.
 pub trait EventHandler: Send + 'static {
-  /// Handle a single event. Called sequentially on the consumer thread.
+  /// Handle a single event. Calls to one handler remain sequential and ordered.
   fn handle(&mut self, event: &Event);
 
   /// Called once before the consumer thread exits.
@@ -176,54 +176,101 @@ impl EventBus {
   }
 }
 
-/// Spawn a background OS thread that consumes events and dispatches to
-/// handlers sequentially. The thread owns a single broadcast receiver; all
-/// handlers see every event in arrival order.
+/// Spawn a background dispatcher with one ordered worker queue per handler.
 ///
-/// Slow handlers can push the receiver into a `Lagged` state — when that
-/// happens we log a warning and continue draining.
+/// The dispatcher drains the bounded broadcast receiver without running
+/// handler work itself. This prevents one slow handler from making every
+/// handler lose events while preserving arrival order within each handler.
+/// Worker queues are unbounded so temporary persistence stalls do not discard
+/// events. Shutdown waits for every queued event and handler flush to complete.
 pub fn spawn_event_loop(
   mut receiver: broadcast::Receiver<Arc<Event>>,
-  mut handlers: Vec<Box<dyn EventHandler>>,
+  handlers: Vec<Box<dyn EventHandler>>,
 ) -> std::thread::JoinHandle<()> {
-  std::thread::spawn(move || {
-    let mut flushed = false;
+  let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+  let dispatcher = std::thread::spawn(move || {
+    let mut senders = Vec::with_capacity(handlers.len());
+    let mut workers = Vec::with_capacity(handlers.len());
+    for mut handler in handlers {
+      let (tx, rx) = mpsc::channel::<Arc<Event>>();
+      senders.push(Some(tx));
+      workers.push(std::thread::spawn(move || {
+        while let Ok(event) = rx.recv() {
+          handler.handle(&event);
+        }
+        handler.flush();
+      }));
+    }
+    let _ = ready_tx.send(());
+
+    let mut shutdown_sender = None;
     loop {
       match receiver.blocking_recv() {
         Ok(event) => {
           if let Event::Shutdown(slot) = &*event {
-            for handler in &mut handlers {
-              handler.flush();
-            }
-            flushed = true;
-            if let Some(done) = slot.lock().unwrap().take() {
-              let _ = done.send(());
-            }
+            shutdown_sender = slot.lock().unwrap().take();
             break;
           }
-          for handler in &mut handlers {
-            handler.handle(&event);
+          for (handler_index, sender) in senders.iter_mut().enumerate() {
+            let stopped = sender
+              .as_ref()
+              .is_some_and(|sender| sender.send(event.clone()).is_err());
+            if stopped {
+              tracing::error!(handler_index, "event handler worker stopped before shutdown");
+              *sender = None;
+            }
           }
         }
         Err(broadcast::error::RecvError::Lagged(n)) => {
-          tracing::warn!("event loop lagged behind by {n} events");
+          tracing::warn!("event dispatcher lagged behind by {n} events; events were dropped before dispatch");
           continue;
         }
         Err(broadcast::error::RecvError::Closed) => break,
       }
     }
-    if !flushed {
-      for handler in &mut handlers {
-        handler.flush();
+
+    drop(senders);
+    for (handler_index, worker) in workers.into_iter().enumerate() {
+      if worker.join().is_err() {
+        tracing::error!(handler_index, "event handler worker panicked");
       }
     }
-  })
+    if let Some(done) = shutdown_sender {
+      let _ = done.send(());
+    }
+  });
+  let _ = ready_rx.recv();
+  dispatcher
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::time::Duration;
+  use std::time::{Duration, Instant};
+
+  struct BlockingHandler {
+    entered: Option<mpsc::Sender<()>>,
+    release: mpsc::Receiver<()>,
+    handled: Arc<AtomicUsize>,
+  }
+
+  impl EventHandler for BlockingHandler {
+    fn handle(&mut self, _event: &Event) {
+      if let Some(entered) = self.entered.take() {
+        let _ = entered.send(());
+        self.release.recv().expect("release blocking handler");
+      }
+      self.handled.fetch_add(1, Ordering::Relaxed);
+    }
+  }
+
+  struct CountingHandler(Arc<AtomicUsize>);
+
+  impl EventHandler for CountingHandler {
+    fn handle(&mut self, _event: &Event) {
+      self.0.fetch_add(1, Ordering::Relaxed);
+    }
+  }
 
   #[tokio::test]
   async fn shutdown_waits_for_active_finalizer() {
@@ -240,5 +287,58 @@ mod tests {
 
     guard.finish();
     shutdown.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn slow_handler_does_not_block_or_drop_other_handlers() {
+    const EVENT_COUNT: usize = 32;
+
+    let bus = EventBus::new(8);
+    let receiver = bus.subscribe();
+    let slow_count = Arc::new(AtomicUsize::new(0));
+    let fast_count = Arc::new(AtomicUsize::new(0));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let event_thread = spawn_event_loop(
+      receiver,
+      vec![
+        Box::new(BlockingHandler {
+          entered: Some(entered_tx),
+          release: release_rx,
+          handled: slow_count.clone(),
+        }),
+        Box::new(CountingHandler(fast_count.clone())),
+      ],
+    );
+
+    bus.emit(Event::Session(SessionEvent::Expired {
+      session_id: "session-0".into(),
+    }));
+    entered_rx
+      .recv_timeout(Duration::from_secs(1))
+      .expect("slow handler should receive the first event");
+    for index in 1..EVENT_COUNT {
+      bus.emit(Event::Session(SessionEvent::Expired {
+        session_id: format!("session-{index}"),
+      }));
+      tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while fast_count.load(Ordering::Relaxed) != EVENT_COUNT && Instant::now() < deadline {
+      tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let fast_handler_finished_while_slow_handler_was_blocked = fast_count.load(Ordering::Relaxed) == EVENT_COUNT;
+
+    release_tx.send(()).unwrap();
+    bus.shutdown().await;
+    event_thread.join().unwrap();
+
+    assert!(
+      fast_handler_finished_while_slow_handler_was_blocked,
+      "fast handler should drain independently of the blocked handler"
+    );
+    assert_eq!(slow_count.load(Ordering::Relaxed), EVENT_COUNT);
+    assert_eq!(fast_count.load(Ordering::Relaxed), EVENT_COUNT);
   }
 }
