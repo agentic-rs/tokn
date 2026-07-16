@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokn_core::event::{Event, EventHandler};
-use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
+use tokn_core::request_event::{ExtractedSummary, RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
 use tokn_headers::keys::X_PARENT_SESSION_ID;
 
 const PENDING_RETENTION_MS: i64 = 24 * 60 * 60 * 1_000;
@@ -118,7 +118,11 @@ impl SessionEventHandler {
           .get(&X_PARENT_SESSION_ID)
           .map(|value| value.as_str().to_string());
         pending.model = Some(summary.model.to_string());
-        pending.request_body = Some(summary.body_json.clone());
+        pending.request_body = if pending.session_id.is_some() {
+          session_request_body(summary)
+        } else {
+          None
+        };
       }
       RequestEventPayload::Stage(StageEvent::Resolve(summary)) => {
         let pending = self
@@ -205,6 +209,14 @@ impl SessionEventHandler {
     let cutoff = ts.saturating_sub(PENDING_RETENTION_MS);
     self.pending.retain(|_, pending| pending.ts >= cutoff);
   }
+}
+
+/// Passthrough uses null to avoid reserializing the request; its decoded side-copy remains available for observers.
+fn session_request_body(summary: &ExtractedSummary) -> Option<Arc<Value>> {
+  if !summary.body_json.is_null() {
+    return Some(summary.body_json.clone());
+  }
+  serde_json::from_slice(&summary.decoded_body).ok().map(Arc::new)
 }
 
 impl EventHandler for SessionEventHandler {
@@ -439,6 +451,51 @@ mod tests {
     let response = super::super::select_node_messages(&handler.db.conn, "req-buffered", "response").unwrap();
     assert_eq!(response[0].role, "assistant");
     assert_eq!(response[0].parts[0].content.as_ref(), b"buffered reply");
+  }
+
+  #[test]
+  fn decodes_passthrough_request_body_when_body_json_is_null() {
+    let path = temp_db_path();
+    let mut handler = SessionEventHandler::new(path).unwrap();
+    let mut summary = extracted(
+      Some("session-passthrough"),
+      HeaderMap::new(),
+      json!({"messages": [{"role": "user", "content": "from decoded body"}]}),
+    );
+    summary.raw_body = Bytes::from_static(b"non-json wire body");
+    summary.body_json = Arc::new(Value::Null);
+
+    emit(
+      &mut handler,
+      "req-passthrough",
+      0,
+      4_000,
+      RequestEventPayload::Stage(StageEvent::Started {
+        request_endpoint: RequestEndpoint::custom("chat_completions"),
+      }),
+    );
+    emit(
+      &mut handler,
+      "req-passthrough",
+      0,
+      4_001,
+      RequestEventPayload::Stage(StageEvent::Extract(summary)),
+    );
+    emit(
+      &mut handler,
+      "req-passthrough",
+      0,
+      4_002,
+      RequestEventPayload::Stage(StageEvent::Completed {
+        success: true,
+        attempts: 1,
+      }),
+    );
+
+    let request = super::super::select_node_messages(&handler.db.conn, "req-passthrough", "request").unwrap();
+    assert_eq!(request.len(), 1);
+    assert_eq!(request[0].role, "user");
+    assert_eq!(request[0].parts[0].content.as_ref(), b"from decoded body");
   }
 
   fn emit_attempt(
