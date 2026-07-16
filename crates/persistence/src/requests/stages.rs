@@ -19,9 +19,9 @@ use tokn_core::event::{Event, EventHandler};
 use tokn_core::request_event::{RecordEvent, RequestEndpoint, RequestEventPayload, Stage, StageEvent};
 
 /// `EventHandler` that persists requests stage events into the requests DB.
-/// Construct once and register alongside the legacy `DbEventHandler` —
-/// both run in the same `spawn_event_loop` and each maintains its own
-/// per-day connection cache.
+/// Construct once and register with `spawn_event_loop`; its dedicated worker
+/// preserves event order while this handler maintains its per-day connection
+/// cache.
 pub struct RequestEventHandler {
   db: RequestsDb,
 }
