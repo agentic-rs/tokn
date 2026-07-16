@@ -36,6 +36,45 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  inspect-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: crates/router-inspect/web
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: crates/router-inspect/web/package.json
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: crates/router-inspect/web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check TypeScript
+        run: pnpm check
+
+      - name: Test session tree
+        run: pnpm test:tree
+
+      - name: Build viewer
+        run: pnpm build
+
+      - name: Check generated viewer assets
+        run: git diff --exit-code -- dist
+
   clippy:
     runs-on: ubuntu-latest
     timeout-minutes: 30

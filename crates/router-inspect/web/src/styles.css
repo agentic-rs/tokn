@@ -1221,6 +1221,31 @@ dd {
   background: #282216;
 }
 
+.session-topology-warning {
+  border: 1px solid #81434d;
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  color: #ffd4d8;
+  background: #3a2027;
+  font-size: 0.68rem;
+}
+
+.session-tree-direction {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--faint);
+  font-size: 0.64rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.session-tree-direction span:nth-child(2) {
+  color: #7698ce;
+  font-size: 0.85rem;
+}
+
 .session-content-hint {
   border: 1px dashed #334158;
   border-radius: 0.4rem;
@@ -1258,7 +1283,7 @@ dd {
 }
 
 .linked-node-list .session-node {
-  padding-bottom: 0;
+  padding-bottom: 0.5rem;
 }
 
 .session-node-list {
@@ -1271,48 +1296,201 @@ dd {
 
 .session-node {
   display: grid;
-  grid-template-columns: 1.2rem minmax(0, 1fr);
+  grid-template-columns: calc(var(--session-tree-visible-lanes, 1) * 0.8rem) minmax(0, 1fr);
+  grid-template-rows: auto auto;
   column-gap: 0.55rem;
   padding-bottom: 0.7rem;
 }
 
-.session-node-rail {
+.session-node-graph,
+.session-node-content-graph,
+.session-tree-boundary-graph {
   position: relative;
-  grid-row: 1 / 3;
+  grid-column: 1;
   align-self: stretch;
+  min-height: 4.4rem;
 }
 
-.session-node-rail::after {
+.session-node-graph {
+  grid-row: 1;
+}
+
+.session-node:not(.selected) > .session-node-graph,
+.session-node-content-graph {
+  margin-bottom: -0.7rem;
+}
+
+.session-node-content-graph {
+  grid-row: 2;
+}
+
+.session-node-graph svg,
+.session-node-content-graph svg,
+.session-tree-boundary-graph svg {
   position: absolute;
-  top: 1.25rem;
-  bottom: -0.7rem;
-  left: calc(50% - 0.5px);
-  width: 1px;
-  background: #303d4f;
-  content: "";
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
 }
 
-.session-node:last-child .session-node-rail::after {
-  display: none;
+.session-tree-edge {
+  fill: none;
+  stroke: #465c79;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  vector-effect: non-scaling-stroke;
 }
 
-.session-node-rail > span {
-  position: absolute;
-  z-index: 1;
-  top: 1rem;
-  left: 50%;
-  width: 0.55rem;
-  height: 0.55rem;
-  border: 2px solid #65738a;
-  border-radius: 50%;
-  background: var(--panel);
-  transform: translate(-50%, -50%);
+.session-tree-edge.parent {
+  stroke: #7387a6;
+  stroke-width: 2;
 }
 
-.session-node.selected .session-node-rail > span {
-  border-color: #9bbdff;
-  background: #5e85c8;
-  box-shadow: 0 0 0 0.2rem #1a2d49;
+.session-tree-edge.active {
+  stroke: #8bb0ef;
+  stroke-width: 2.25;
+}
+
+.session-tree-edge.boundary {
+  stroke: #9d7b3f;
+  stroke-dasharray: 3 3;
+}
+
+.session-tree-dot,
+.session-tree-boundary-dot {
+  fill: none;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.session-tree-dot.outline,
+.session-tree-boundary-dot.outline {
+  stroke: #718199;
+  stroke-width: 9;
+}
+
+.session-tree-dot.fill,
+.session-tree-boundary-dot.fill {
+  stroke: var(--panel);
+  stroke-width: 5;
+}
+
+.session-tree-dot.branch.outline {
+  stroke: #86a6d4;
+}
+
+.session-tree-dot.branch.fill {
+  stroke: #273b56;
+}
+
+.session-tree-dot.head.outline,
+.session-node.selected .session-tree-dot.outline {
+  stroke: #c0d5fb;
+}
+
+.session-tree-dot.head.fill,
+.session-node.selected .session-tree-dot.fill {
+  stroke: #6f96d5;
+}
+
+.session-tree-dot.warning.outline,
+.session-tree-boundary-dot.outline {
+  stroke: #c69b4d;
+}
+
+.session-tree-dot.warning.fill,
+.session-tree-boundary-dot.fill {
+  stroke: #2b2417;
+}
+
+.session-tree-lanes-2 {
+  --session-tree-visible-lanes: 2;
+}
+
+.session-tree-lanes-3 {
+  --session-tree-visible-lanes: 3;
+}
+
+.session-tree-lanes-4 {
+  --session-tree-visible-lanes: 4;
+}
+
+.session-tree-lanes-5 {
+  --session-tree-visible-lanes: 5;
+}
+
+.session-tree-lanes-6 {
+  --session-tree-visible-lanes: 6;
+}
+
+.session-tree-boundary {
+  display: grid;
+  grid-template-columns: calc(var(--session-tree-visible-lanes, 1) * 0.8rem) minmax(0, 1fr);
+  column-gap: 0.55rem;
+  min-height: 3.4rem;
+}
+
+.session-tree-boundary-graph {
+  grid-row: 1;
+  min-height: 3.4rem;
+}
+
+.session-tree-boundary-card {
+  display: flex;
+  grid-column: 2;
+  min-width: 0;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px dashed #7b6338;
+  border-radius: 0.45rem;
+  padding: 0.55rem 0.65rem;
+  color: #cdbb93;
+  background: #1f1b13;
+  font-size: 0.66rem;
+}
+
+.session-tree-boundary-card strong {
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+.session-tree-boundary-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tree-boundary-card span:last-child {
+  margin-left: auto;
+  color: #9d8962;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-edge.boundary {
+  stroke: #668ac7;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-boundary-dot.outline {
+  stroke: #9bbdff;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-boundary-dot.fill {
+  stroke: #29466d;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-boundary-card {
+  border-color: #526f9d;
+  color: #bdceea;
+  background: #17243a;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-boundary-card strong {
+  color: #b9d1fa;
+}
+
+.session-tree-boundary.loaded-parent .session-tree-boundary-card span:last-child {
+  color: #819bc3;
 }
 
 .session-node-trigger {
@@ -1364,6 +1542,18 @@ dd {
   font-size: 0.58rem;
   font-weight: 700;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.branch-badge {
+  border: 1px solid #4f6686;
+  border-radius: 999px;
+  padding: 0.17rem 0.4rem;
+  color: #b8c9e4;
+  background: #1a2739;
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
   text-transform: uppercase;
 }
 
@@ -1802,6 +1992,22 @@ dd {
   .session-node-primary,
   .session-node-context {
     flex-wrap: wrap;
+  }
+
+  .session-node,
+  .session-tree-boundary {
+    grid-template-columns: calc(var(--session-tree-visible-lanes, 1) * 0.65rem) minmax(0, 1fr);
+    column-gap: 0.35rem;
+  }
+
+  .session-tree-boundary-card {
+    align-items: start;
+    flex-direction: column;
+    gap: 0.22rem;
+  }
+
+  .session-tree-boundary-card span:last-child {
+    margin-left: 0;
   }
 
   .session-conversation-section > header {

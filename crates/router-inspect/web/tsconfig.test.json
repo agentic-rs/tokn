@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "../../../target/router-inspect-web-tests",
+    "rootDir": "src",
+    "sourceMap": false
+  },
+  "include": ["src/session-tree.ts", "src/session-tree.spec.ts", "src/types.ts"]
+}
