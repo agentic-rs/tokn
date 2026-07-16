@@ -335,7 +335,7 @@ fn stored_sessions_normalize_epoch_seconds_before_sorting_and_serializing() {
 }
 
 #[test]
-fn stored_node_materializes_lineage_and_tags_part_content() {
+fn stored_node_returns_input_delta_and_tags_part_content() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -374,16 +374,11 @@ fn stored_node_materializes_lineage_and_tags_part_content() {
     .unwrap();
   assert_eq!(detail.node.parent_node_id.as_deref(), Some("root"));
   assert_eq!(detail.node.reduction_kind, "suffix_append");
-  assert_eq!(detail.request_messages.len(), 2);
+  assert_eq!(detail.node.common_prefix_messages, 1);
+  assert_eq!(detail.node.request_message_count, 1);
+  assert_eq!(detail.request_messages.len(), 1);
   assert!(matches!(
     detail.request_messages[0].parts[0].content,
-    SessionPartContent::Text {
-      ref value,
-      truncated: false
-    } if value == "hello"
-  ));
-  assert!(matches!(
-    detail.request_messages[1].parts[0].content,
     SessionPartContent::Json { ref value } if value["tool"] == "search"
   ));
   assert_eq!(detail.response_messages.len(), 1);
@@ -397,20 +392,19 @@ fn stored_node_materializes_lineage_and_tags_part_content() {
   ));
   assert_eq!(detail.request_messages[0].parts_total, 1);
   assert_eq!(detail.response_messages[0].parts_total, 3);
-  assert_eq!(detail.truncation.request_messages.messages_total, 2);
-  assert_eq!(detail.truncation.request_messages.messages_returned, 2);
+  assert_eq!(detail.truncation.request_messages.messages_total, 1);
+  assert_eq!(detail.truncation.request_messages.messages_returned, 1);
   assert_eq!(detail.truncation.request_messages.messages_omitted_before, 0);
   assert_eq!(detail.truncation.response_messages.messages_total, 1);
-  assert_eq!(detail.truncation.parts_total, 5);
-  assert_eq!(detail.truncation.parts_returned, 5);
+  assert_eq!(detail.truncation.parts_total, 4);
+  assert_eq!(detail.truncation.parts_returned, 4);
   assert_eq!(detail.truncation.parts_omitted, 0);
-  assert_eq!(detail.truncation.content_bytes_total, 39);
-  assert_eq!(detail.truncation.content_bytes_returned, 37);
+  assert_eq!(detail.truncation.content_bytes_total, 34);
+  assert_eq!(detail.truncation.content_bytes_returned, 32);
   assert_eq!(detail.truncation.content_parts_truncated, 0);
   assert_eq!(detail.truncation.binary_parts_elided, 1);
   let json = serde_json::to_value(&detail).unwrap();
-  assert_eq!(json["request_messages"][0]["parts"][0]["content"]["encoding"], "text");
-  assert_eq!(json["request_messages"][1]["parts"][0]["content"]["encoding"], "json");
+  assert_eq!(json["request_messages"][0]["parts"][0]["content"]["encoding"], "json");
   assert_eq!(
     json["response_messages"][0]["parts"][2]["content"]["encoding"],
     "binary"
@@ -420,7 +414,7 @@ fn stored_node_materializes_lineage_and_tags_part_content() {
 }
 
 #[test]
-fn stored_node_materialization_resets_at_the_latest_conflict_snapshot() {
+fn stored_node_returns_conflict_snapshot() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -469,6 +463,42 @@ fn stored_node_materialization_resets_at_the_latest_conflict_snapshot() {
     } if value == "replacement"
   ));
   assert_eq!(detail.truncation.request_messages.messages_total, 1);
+}
+
+#[test]
+fn stored_node_returns_an_empty_delta_when_input_matches_its_parent() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  let mut sessions = SessionsDb::open(&sessions_db).unwrap();
+  sessions
+    .record_tree(&semantic_record(
+      "unchanged",
+      "root",
+      1_800_000_001_000,
+      vec![message("user", vec![part("text", b"hello")])],
+      vec![],
+    ))
+    .unwrap();
+  sessions
+    .record_tree(&semantic_record(
+      "unchanged",
+      "child",
+      1_800_000_002_000,
+      vec![message("user", vec![part("text", b"hello")])],
+      vec![message("assistant", vec![part("text", b"done")])],
+    ))
+    .unwrap();
+  drop(sessions);
+
+  let detail = get_session_node_from_db(&sessions_db, "unchanged", "child")
+    .unwrap()
+    .unwrap();
+  assert_eq!(detail.node.reduction_kind, "suffix_append");
+  assert_eq!(detail.node.common_prefix_messages, 1);
+  assert_eq!(detail.node.request_message_count, 0);
+  assert!(detail.request_messages.is_empty());
+  assert_eq!(detail.truncation.request_messages.messages_total, 0);
+  assert_eq!(detail.response_messages.len(), 1);
 }
 
 #[test]
@@ -716,67 +746,6 @@ fn stored_node_caps_aggregate_inline_content_bytes() {
       original_encoding: SessionPartEncoding::Text,
       reason: SessionPartOmissionReason::AggregateLimit
     }
-  ));
-}
-
-#[test]
-fn stored_node_rejects_a_cyclic_lineage() {
-  let dir = tempdir();
-  let sessions_db = dir.join("sessions.db");
-  write_session(&sessions_db, "cyclic", "root", 1_800_000_001_000, "openai", "gpt-test");
-  write_session(&sessions_db, "cyclic", "child", 1_800_000_002_000, "openai", "gpt-test");
-  let conn = Connection::open(&sessions_db).unwrap();
-  conn
-    .execute("UPDATE session_nodes SET parent_id = 'child' WHERE id = 'root'", [])
-    .unwrap();
-  drop(conn);
-
-  assert!(matches!(
-    get_session_node_from_db(&sessions_db, "cyclic", "child"),
-    Err(crate::Error::InvalidSessionLineage { .. })
-  ));
-}
-
-#[test]
-fn stored_node_rejects_a_lineage_beyond_the_depth_limit() {
-  let dir = tempdir();
-  let sessions_db = dir.join("sessions.db");
-  write_session(
-    &sessions_db,
-    "too-deep",
-    "node-0",
-    1_800_000_001_000,
-    "openai",
-    "gpt-test",
-  );
-
-  let mut conn = Connection::open(&sessions_db).unwrap();
-  let transaction = conn.transaction().unwrap();
-  {
-    let mut insert = transaction
-      .prepare(
-        "INSERT INTO session_nodes (
-           id, session_id, parent_id, request_id, ts, endpoint, status,
-           reduction_kind, parent_source
-         ) VALUES (?1, 'too-deep', ?2, ?1, ?3, 'responses', 200, 'suffix_append', 'explicit')",
-      )
-      .unwrap();
-    for depth in 1..=4_096 {
-      insert
-        .execute(params![
-          format!("node-{depth}"),
-          format!("node-{}", depth - 1),
-          1_800_000_001_000_i64 + depth as i64,
-        ])
-        .unwrap();
-    }
-  }
-  transaction.commit().unwrap();
-  drop(conn);
-
-  assert!(matches!(
-    get_session_node_from_db(&sessions_db, "too-deep", "node-4096"),
-    Err(crate::Error::InvalidSessionLineage { .. })
   ));
 }
 

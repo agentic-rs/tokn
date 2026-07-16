@@ -64,6 +64,35 @@ function formatByteSize(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
+function requestSectionCopy(reduction_kind: string) {
+  switch (reduction_kind) {
+    case "suffix_append":
+      return {
+        direction: "Appended",
+        title: "Input delta",
+        empty_message: "No new semantic input was stored for this node."
+      };
+    case "root_snapshot":
+      return {
+        direction: "Initial",
+        title: "Input snapshot",
+        empty_message: "No semantic input was stored for this root snapshot."
+      };
+    case "conflict_snapshot":
+      return {
+        direction: "Replaced",
+        title: "Replacement snapshot",
+        empty_message: "No semantic input was stored for this replacement snapshot."
+      };
+    default:
+      return {
+        direction: "Stored",
+        title: "Node input",
+        empty_message: "No semantic input was stored for this node."
+      };
+  }
+}
+
 export class SessionList extends LitElement {
   static properties = {
     sessions: { attribute: false },
@@ -248,6 +277,7 @@ export class SessionDetailView extends LitElement {
 
   private renderLoadedNodeContent(detail: SessionNodeDetail) {
     const truncation = detail.truncation;
+    const request_section = requestSectionCopy(detail.node.reduction_kind);
     const request_messages_omitted = truncation.request_messages.messages_total
       - truncation.request_messages.messages_returned;
     const response_messages_omitted = truncation.response_messages.messages_total
@@ -284,8 +314,8 @@ export class SessionDetailView extends LitElement {
       <div class="session-conversation-section">
         <header>
           <div>
-            <span class="direction-label">Materialized</span>
-            <h3>Conversation input</h3>
+            <span class="direction-label">${request_section.direction}</span>
+            <h3>${request_section.title}</h3>
           </div>
           <span>
             ${truncation.request_messages.messages_returned.toLocaleString()}
@@ -294,7 +324,7 @@ export class SessionDetailView extends LitElement {
               : `of ${truncation.request_messages.messages_total.toLocaleString()}`} messages
           </span>
         </header>
-        ${this.renderMessages(detail.request_messages, "No semantic input was stored for this node.")}
+        ${this.renderMessages(detail.request_messages, request_section.empty_message)}
       </div>
       <div class="session-conversation-section">
         <header>

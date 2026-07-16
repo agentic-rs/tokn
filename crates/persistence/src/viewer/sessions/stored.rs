@@ -1,5 +1,4 @@
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
-use std::collections::HashSet;
 use std::path::Path;
 
 use super::super::database::open_readonly;
@@ -17,7 +16,6 @@ const MAX_RESPONSE_MESSAGES: usize = 100;
 const MAX_PARTS_PER_SIDE: usize = 256;
 const MAX_PART_CONTENT_BYTES: usize = 64 * 1024;
 const MAX_INLINE_CONTENT_BYTES_PER_SIDE: usize = 256 * 1024;
-const MAX_SESSION_LINEAGE_DEPTH: usize = 4_096;
 
 const NORMALIZED_FIRST_TS_SQL: &str =
   "CASE WHEN s.first_seen_ts > -10000000000 AND s.first_seen_ts < 10000000000 THEN s.first_seen_ts * 1000 ELSE s.first_seen_ts END";
@@ -95,7 +93,7 @@ pub fn get_session_from_db(
   })
 }
 
-/// Materialize one stored semantic node without consulting request history.
+/// Return the input stored on one semantic node and its captured response.
 pub fn get_session_node_from_db(
   sessions_db: &Path,
   session_id: &str,
@@ -110,11 +108,9 @@ pub fn get_session_node_from_db(
     let Some(node) = select_node(conn, session_id, node_id)? else {
       return Ok(None);
     };
-    let lineage = select_lineage(conn, session_id, node_id)?;
-    let active_lineage = active_request_lineage(&lineage);
-    let request_stats = select_lineage_stats(conn, active_lineage, "request")?;
+    let request_stats = select_side_stats(conn, node_id, "request")?;
     let response_stats = select_side_stats(conn, node_id, "response")?;
-    let request_refs = select_request_message_tail(conn, active_lineage, MAX_REQUEST_MESSAGES)?;
+    let request_refs = select_node_message_tail(conn, node_id, "request", MAX_REQUEST_MESSAGES)?;
     let response_refs = select_node_message_refs(conn, node_id, "response", MAX_RESPONSE_MESSAGES, false)?;
 
     let mut request_budget = ContentBudget::new();
@@ -312,65 +308,11 @@ fn session_node_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionNod
   })
 }
 
-fn select_lineage(conn: &Connection, session_id: &str, node_id: &str) -> Result<Vec<(String, String)>> {
-  let mut lineage = Vec::new();
-  let mut seen = HashSet::new();
-  let mut current = Some(node_id.to_string());
-
-  while let Some(current_id) = current {
-    if lineage.len() >= MAX_SESSION_LINEAGE_DEPTH {
-      return Err(crate::Error::InvalidSessionLineage { node_id: current_id });
-    }
-    if !seen.insert(current_id.clone()) {
-      return Err(crate::Error::InvalidSessionLineage { node_id: current_id });
-    }
-    let row = conn
-      .query_row(
-        "SELECT parent_id, reduction_kind FROM session_nodes WHERE session_id = ?1 AND id = ?2",
-        params![session_id, current_id],
-        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
-      )
-      .optional()?;
-    let Some((parent_id, reduction_kind)) = row else {
-      return Err(crate::Error::InvalidSessionLineage { node_id: current_id });
-    };
-    lineage.push((current_id, reduction_kind));
-    current = parent_id;
-  }
-
-  lineage.reverse();
-  Ok(lineage)
-}
-
-fn active_request_lineage(lineage: &[(String, String)]) -> &[(String, String)] {
-  let start = lineage
-    .iter()
-    .rposition(|(_, reduction_kind)| matches!(reduction_kind.as_str(), "root_snapshot" | "conflict_snapshot"))
-    .unwrap_or(0);
-  &lineage[start..]
-}
-
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct SideStats {
   messages: u64,
   parts: u64,
   content_bytes: u64,
-}
-
-impl SideStats {
-  fn add(&mut self, other: Self) {
-    self.messages = self.messages.saturating_add(other.messages);
-    self.parts = self.parts.saturating_add(other.parts);
-    self.content_bytes = self.content_bytes.saturating_add(other.content_bytes);
-  }
-}
-
-fn select_lineage_stats(conn: &Connection, lineage: &[(String, String)], side: &str) -> Result<SideStats> {
-  let mut stats = SideStats::default();
-  for (node_id, _) in lineage {
-    stats.add(select_side_stats(conn, node_id, side)?);
-  }
-  Ok(stats)
 }
 
 fn select_side_stats(conn: &Connection, node_id: &str, side: &str) -> Result<SideStats> {
@@ -402,21 +344,8 @@ struct MessageRef {
   status: Option<u16>,
 }
 
-fn select_request_message_tail(
-  conn: &Connection,
-  lineage: &[(String, String)],
-  limit: usize,
-) -> Result<Vec<MessageRef>> {
-  let mut remaining = limit;
-  let mut messages = Vec::new();
-  for (node_id, _) in lineage.iter().rev() {
-    if remaining == 0 {
-      break;
-    }
-    let mut node_messages = select_node_message_refs(conn, node_id, "request", remaining, true)?;
-    remaining = remaining.saturating_sub(node_messages.len());
-    messages.append(&mut node_messages);
-  }
+fn select_node_message_tail(conn: &Connection, node_id: &str, side: &str, limit: usize) -> Result<Vec<MessageRef>> {
+  let mut messages = select_node_message_refs(conn, node_id, side, limit, true)?;
   messages.reverse();
   Ok(messages)
 }

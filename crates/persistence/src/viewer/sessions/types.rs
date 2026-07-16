@@ -54,7 +54,7 @@ pub struct SessionNodeSummary {
   pub is_head: bool,
 }
 
-/// Materialized request context and response messages for one semantic node.
+/// Stored input delta or snapshot and captured response for one semantic node.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionNodeDetail {
   pub node: SessionNodeSummary,
