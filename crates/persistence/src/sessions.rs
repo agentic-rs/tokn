@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokn_core::db::SessionSource;
+use tokn_headers::inbound::{PARENT_THREAD_ID_HEADERS, THREAD_ID_HEADERS};
 use tracing::debug;
 
 mod live;
@@ -34,6 +35,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     name: "session_views",
     sql: include_str!("../schemas/migrations/sessions/0003_session_views.sql"),
   },
+  migrate::Migration {
+    version: 4,
+    name: "thread_lineage",
+    sql: include_str!("../schemas/migrations/sessions/0004_thread_lineage.sql"),
+  },
 ];
 
 pub fn latest_version() -> u32 {
@@ -48,6 +54,8 @@ pub struct SessionsDb {
 pub struct TreeRequestRecord {
   pub ts: i64,
   pub session_id: String,
+  pub thread_id: Option<String>,
+  pub parent_thread_id: Option<String>,
   pub parent_session_id: Option<String>,
   pub request_id: String,
   pub endpoint: String,
@@ -169,7 +177,19 @@ impl SessionsDb {
       return Ok(());
     }
 
-    let parent_id = self.head_for_session(&r.session_id)?;
+    let explicit_thread_id = r.thread_id.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let thread_id = explicit_thread_id.unwrap_or(&r.session_id);
+    let parent_thread_id = r
+      .parent_thread_id
+      .as_deref()
+      .map(str::trim)
+      .filter(|parent| !parent.is_empty() && *parent != thread_id);
+    let thread_source = if explicit_thread_id.is_some() {
+      "thread-header"
+    } else {
+      "session-fallback"
+    };
+    let parent_id = self.predecessor_for_thread(&r.session_id, thread_id, &r.request_id, r.ts)?;
     let parent_view = match parent_id.as_deref() {
       Some(parent_id) => self.materialize_request_messages(parent_id)?,
       None => Vec::new(),
@@ -188,7 +208,11 @@ impl SessionsDb {
     } else {
       "conflict_snapshot"
     };
-    let parent_source = if parent_id.is_some() { "inferred_head" } else { "none" };
+    let parent_source = if parent_id.is_some() {
+      "inferred_thread_predecessor"
+    } else {
+      "none"
+    };
 
     let tx = self.conn.transaction()?;
     tx.execute(
@@ -209,10 +233,25 @@ impl SessionsDb {
       ],
     )?;
     tx.execute(
+      "INSERT INTO session_threads
+         (session_id, thread_id, parent_thread_id, first_seen_ts, last_seen_ts, source)
+       VALUES (?1, ?2, ?3, ?4, ?4, ?5)
+       ON CONFLICT(session_id, thread_id) DO UPDATE SET
+         parent_thread_id = COALESCE(session_threads.parent_thread_id, excluded.parent_thread_id),
+         first_seen_ts = MIN(session_threads.first_seen_ts, excluded.first_seen_ts),
+         last_seen_ts = MAX(session_threads.last_seen_ts, excluded.last_seen_ts),
+         source = CASE
+           WHEN excluded.source = 'thread-header' THEN excluded.source
+           ELSE session_threads.source
+         END",
+      params![r.session_id, thread_id, parent_thread_id, r.ts, thread_source],
+    )?;
+    tx.execute(
       "INSERT INTO session_nodes
          (id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
-          reduction_kind, parent_source, common_prefix_messages, request_message_count, response_message_count)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+          reduction_kind, parent_source, common_prefix_messages, request_message_count, response_message_count,
+          thread_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
        ON CONFLICT(session_id, request_id) DO UPDATE SET
          status = excluded.status,
          account_id = COALESCE(excluded.account_id, session_nodes.account_id),
@@ -235,6 +274,7 @@ impl SessionsDb {
         common_prefix as i64,
         request_delta.len() as i64,
         r.response_messages.len() as i64,
+        thread_id,
       ],
     )?;
     insert_node_messages(&tx, &r.request_id, "request", &request_delta)?;
@@ -262,13 +302,23 @@ impl SessionsDb {
     Ok(())
   }
 
-  fn head_for_session(&self, session_id: &str) -> Result<Option<String>> {
+  fn predecessor_for_thread(
+    &self,
+    session_id: &str,
+    thread_id: &str,
+    request_id: &str,
+    ts: i64,
+  ) -> Result<Option<String>> {
     Ok(
       self
         .conn
         .query_row(
-          "SELECT node_id FROM session_heads WHERE session_id = ?1",
-          params![session_id],
+          "SELECT id
+           FROM session_nodes
+           WHERE session_id = ?1 AND thread_id = ?2 AND id != ?3 AND ts < ?4
+           ORDER BY ts DESC, rowid DESC
+           LIMIT 1",
+          params![session_id, thread_id, request_id, ts],
           |r| r.get(0),
         )
         .optional()?,
@@ -623,6 +673,8 @@ fn playback_request_connection(
     let record = TreeRequestRecord {
       ts,
       session_id,
+      thread_id: first_header_str(&header_json, THREAD_ID_HEADERS).map(str::to_string),
+      parent_thread_id: first_header_str(&header_json, PARENT_THREAD_ID_HEADERS).map(str::to_string),
       parent_session_id: header_str(&header_json, "x-parent-session-id").map(str::to_string),
       request_id,
       endpoint,
@@ -633,7 +685,8 @@ fn playback_request_connection(
       request_messages,
       response_messages,
     };
-    let parent = sessions.head_for_session(&record.session_id)?;
+    let thread_id = record.thread_id.as_deref().unwrap_or(&record.session_id);
+    let parent = sessions.predecessor_for_thread(&record.session_id, thread_id, &record.request_id, record.ts)?;
     sessions.record_tree(&record)?;
     if parent.is_some() {
       let stored = sessions
@@ -842,6 +895,14 @@ fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
     .and_then(|(_, value)| value.as_str())
 }
 
+fn first_header_str<'a>(headers: &'a Value, names: &[&str]) -> Option<&'a str> {
+  names.iter().find_map(|name| {
+    header_str(headers, name)
+      .map(str::trim)
+      .filter(|value| !value.is_empty())
+  })
+}
+
 fn parse_json_bytes(bytes: &[u8]) -> Option<Value> {
   serde_json::from_slice(bytes).ok()
 }
@@ -862,7 +923,7 @@ mod tests {
   use serde_json::json;
 
   #[test]
-  fn record_tree_reduces_against_head_without_splitting_boundaries() {
+  fn record_tree_reduces_against_thread_without_splitting_boundaries() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -877,6 +938,8 @@ mod tests {
     db.record_tree(&TreeRequestRecord {
       ts: 100,
       session_id: "sess-1".into(),
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: Some("parent-sess".into()),
       request_id: "req-1".into(),
       endpoint: "responses".into(),
@@ -891,6 +954,8 @@ mod tests {
     db.record_tree(&TreeRequestRecord {
       ts: 110,
       session_id: "sess-1".into(),
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: None,
       request_id: "req-2".into(),
       endpoint: "responses".into(),
@@ -905,6 +970,8 @@ mod tests {
     db.record_tree(&TreeRequestRecord {
       ts: 120,
       session_id: "sess-1".into(),
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: None,
       request_id: "req-3".into(),
       endpoint: "responses".into(),
@@ -959,6 +1026,8 @@ mod tests {
     db.record_tree(&TreeRequestRecord {
       ts: 90,
       session_id: "sess-1".into(),
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: None,
       request_id: "req-old".into(),
       endpoint: "responses".into(),
@@ -979,12 +1048,224 @@ mod tests {
       )
       .unwrap();
     assert_eq!(head_after_old_insert, "req-3");
+    let old_node: (Option<String>, String, String) = db
+      .conn
+      .query_row(
+        "SELECT parent_id, reduction_kind, thread_id FROM session_nodes WHERE request_id = 'req-old'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+      )
+      .unwrap();
+    assert_eq!(old_node, (None, "root_snapshot".into(), "sess-1".into()));
 
     let relation_count: i64 = db
       .conn
       .query_row("SELECT COUNT(*) FROM session_relations", [], |r| r.get(0))
       .unwrap();
     assert_eq!(relation_count, 1);
+  }
+
+  #[test]
+  fn record_tree_reduces_interleaved_requests_against_same_thread() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+
+    db.record_tree(&thread_record(
+      100,
+      "thread-root",
+      None,
+      "req-root-1",
+      vec![msg("developer", "root"), msg("user", "shared")],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      110,
+      "thread-child",
+      Some("thread-root"),
+      "req-child-1",
+      vec![msg("developer", "child"), msg("user", "task")],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      120,
+      "thread-root",
+      None,
+      "req-root-2",
+      vec![
+        msg("developer", "root"),
+        msg("user", "shared"),
+        msg("assistant", "root result"),
+      ],
+    ))
+    .unwrap();
+    db.record_tree(&thread_record(
+      130,
+      "thread-child",
+      Some("thread-root"),
+      "req-child-2",
+      vec![
+        msg("developer", "child"),
+        msg("user", "task"),
+        msg("assistant", "child result"),
+      ],
+    ))
+    .unwrap();
+
+    let nodes = db
+      .conn
+      .prepare(
+        "SELECT request_id, parent_id, reduction_kind, common_prefix_messages,
+                request_message_count, thread_id
+         FROM session_nodes
+         ORDER BY ts",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, Option<String>>(1)?,
+          r.get::<_, String>(2)?,
+          r.get::<_, i64>(3)?,
+          r.get::<_, i64>(4)?,
+          r.get::<_, String>(5)?,
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      nodes,
+      vec![
+        (
+          "req-root-1".into(),
+          None,
+          "root_snapshot".into(),
+          0,
+          2,
+          "thread-root".into(),
+        ),
+        (
+          "req-child-1".into(),
+          None,
+          "root_snapshot".into(),
+          0,
+          2,
+          "thread-child".into(),
+        ),
+        (
+          "req-root-2".into(),
+          Some("req-root-1".into()),
+          "suffix_append".into(),
+          2,
+          1,
+          "thread-root".into(),
+        ),
+        (
+          "req-child-2".into(),
+          Some("req-child-1".into()),
+          "suffix_append".into(),
+          2,
+          1,
+          "thread-child".into(),
+        ),
+      ]
+    );
+
+    let threads = db
+      .conn
+      .prepare(
+        "SELECT thread_id, parent_thread_id, source FROM session_threads
+         WHERE session_id = 'sess-1' ORDER BY thread_id",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, Option<String>>(1)?,
+          r.get::<_, String>(2)?,
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      threads,
+      vec![
+        (
+          "thread-child".into(),
+          Some("thread-root".into()),
+          "thread-header".into(),
+        ),
+        ("thread-root".into(), None, "thread-header".into()),
+      ]
+    );
+  }
+
+  #[test]
+  fn thread_lineage_migration_does_not_rewrite_existing_nodes() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let conn = Connection::open(&path).unwrap();
+    conn
+      .execute_batch(
+        "CREATE TABLE schema_migrations (
+           version INTEGER PRIMARY KEY,
+           name TEXT NOT NULL,
+           applied_ts INTEGER NOT NULL
+         );",
+      )
+      .unwrap();
+    conn.execute_batch(MIGRATIONS[0].sql).unwrap();
+    for migration in &MIGRATIONS[..3] {
+      if migration.version > 1 {
+        conn.execute_batch(migration.sql).unwrap();
+      }
+      conn
+        .execute(
+          "INSERT INTO schema_migrations (version, name, applied_ts) VALUES (?1, ?2, 0)",
+          params![migration.version, migration.name],
+        )
+        .unwrap();
+    }
+    conn
+      .execute(
+        "INSERT INTO sessions
+           (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
+         VALUES ('sess-old', 100, 100, 'header', 'acct', 'prov', 'model')",
+        [],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "INSERT INTO session_nodes
+           (id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
+            reduction_kind, parent_source, common_prefix_messages, request_message_count, response_message_count)
+         VALUES
+           ('req-old', 'sess-old', NULL, 'req-old', 100, 'responses', 200, 'acct', 'prov', 'model',
+            'root_snapshot', 'none', 0, 1, 1)",
+        [],
+      )
+      .unwrap();
+    drop(conn);
+
+    let db = SessionsDb::open(&path).unwrap();
+    let old_node: (Option<String>, String, String, i64, i64) = db
+      .conn
+      .query_row(
+        "SELECT thread_id, parent_source, reduction_kind, request_message_count, response_message_count
+         FROM session_nodes WHERE id = 'req-old'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+      )
+      .unwrap();
+    assert_eq!(old_node, (None, "none".into(), "root_snapshot".into(), 1, 1));
+    let thread_count: i64 = db
+      .conn
+      .query_row("SELECT COUNT(*) FROM session_threads", [], |r| r.get(0))
+      .unwrap();
+    assert_eq!(thread_count, 0);
+    assert_eq!(migrate::read_current_version(&db.conn).unwrap(), latest_version());
   }
 
   #[test]
@@ -1088,6 +1369,123 @@ mod tests {
   }
 
   #[test]
+  fn playback_keeps_codex_root_and_subagent_threads_separate() {
+    let dir = tempdir();
+    let requests_path = dir.join("2026-05-22.db");
+    let sessions_path = dir.join("sessions.db");
+    crate::requests::open_day_db(&requests_path).unwrap();
+    let conn = Connection::open(&requests_path).unwrap();
+    let root_headers = json!({
+      "Content-Encoding": "zstd",
+      "thread-id": "thread-root"
+    });
+    let child_headers = json!({
+      "Content-Encoding": "zstd",
+      "thread-id": "thread-child",
+      "x-codex-parent-thread-id": "thread-root"
+    });
+
+    insert_request_row_with_headers(
+      &conn,
+      100,
+      "req-root-1",
+      "sess-1",
+      &json!({"input": [{"role": "developer", "content": "root"}]}),
+      &root_headers,
+      "",
+    );
+    insert_request_row_with_headers(
+      &conn,
+      110,
+      "req-child-1",
+      "sess-1",
+      &json!({"input": [{"role": "developer", "content": "child"}]}),
+      &child_headers,
+      "",
+    );
+    insert_request_row_with_headers(
+      &conn,
+      120,
+      "req-root-2",
+      "sess-1",
+      &json!({
+        "input": [
+          {"role": "developer", "content": "root"},
+          {"role": "assistant", "content": "root result"}
+        ]
+      }),
+      &root_headers,
+      "",
+    );
+    insert_request_row_with_headers(
+      &conn,
+      130,
+      "req-child-2",
+      "sess-1",
+      &json!({
+        "input": [
+          {"role": "developer", "content": "child"},
+          {"role": "assistant", "content": "child result"}
+        ]
+      }),
+      &child_headers,
+      "",
+    );
+
+    let report = playback_requests_into_sessions(&requests_path, &sessions_path).unwrap();
+    assert_eq!(report.rows_recorded, 4);
+    assert_eq!(report.reduction_mismatches, 0);
+
+    let sessions = Connection::open(&sessions_path).unwrap();
+    let continuations = sessions
+      .prepare(
+        "SELECT request_id, parent_id, reduction_kind, common_prefix_messages, request_message_count
+         FROM session_nodes WHERE request_id IN ('req-root-2', 'req-child-2') ORDER BY request_id",
+      )
+      .unwrap()
+      .query_map([], |r| {
+        Ok((
+          r.get::<_, String>(0)?,
+          r.get::<_, Option<String>>(1)?,
+          r.get::<_, String>(2)?,
+          r.get::<_, i64>(3)?,
+          r.get::<_, i64>(4)?,
+        ))
+      })
+      .unwrap()
+      .collect::<rusqlite::Result<Vec<_>>>()
+      .unwrap();
+    assert_eq!(
+      continuations,
+      vec![
+        (
+          "req-child-2".into(),
+          Some("req-child-1".into()),
+          "suffix_append".into(),
+          1,
+          1,
+        ),
+        (
+          "req-root-2".into(),
+          Some("req-root-1".into()),
+          "suffix_append".into(),
+          1,
+          1,
+        ),
+      ]
+    );
+    let child_parent: String = sessions
+      .query_row(
+        "SELECT parent_thread_id FROM session_threads
+         WHERE session_id = 'sess-1' AND thread_id = 'thread-child'",
+        [],
+        |r| r.get(0),
+      )
+      .unwrap();
+    assert_eq!(child_parent, "thread-root");
+  }
+
+  #[test]
   fn session_views_expose_current_head_and_message_parts() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
@@ -1095,6 +1493,8 @@ mod tests {
     db.record_tree(&TreeRequestRecord {
       ts: 100,
       session_id: "sess-1".into(),
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: None,
       request_id: "req-1".into(),
       endpoint: "responses".into(),
@@ -1407,6 +1807,30 @@ mod tests {
     }
   }
 
+  fn thread_record(
+    ts: i64,
+    thread_id: &str,
+    parent_thread_id: Option<&str>,
+    request_id: &str,
+    request_messages: Vec<MessageRecord>,
+  ) -> TreeRequestRecord {
+    TreeRequestRecord {
+      ts,
+      session_id: "sess-1".into(),
+      thread_id: Some(thread_id.into()),
+      parent_thread_id: parent_thread_id.map(str::to_string),
+      parent_session_id: None,
+      request_id: request_id.into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: Some("acct".into()),
+      provider_id: Some("prov".into()),
+      model: Some("model".into()),
+      request_messages,
+      response_messages: Vec::new(),
+    }
+  }
+
   fn insert_request_row(
     conn: &Connection,
     ts: i64,
@@ -1415,13 +1839,32 @@ mod tests {
     body: &Value,
     response_body: impl AsRef<[u8]>,
   ) {
+    insert_request_row_with_headers(
+      conn,
+      ts,
+      request_id,
+      session_id,
+      body,
+      &json!({
+        "Content-Encoding": "zstd",
+        "X-Parent-Session-Id": "parent-session"
+      }),
+      response_body,
+    );
+  }
+
+  fn insert_request_row_with_headers(
+    conn: &Connection,
+    ts: i64,
+    request_id: &str,
+    session_id: &str,
+    body: &Value,
+    headers: &Value,
+    response_body: impl AsRef<[u8]>,
+  ) {
     let raw_body = serde_json::to_vec(body).unwrap();
     let encoded_body = zstd::stream::encode_all(raw_body.as_slice(), 0).unwrap();
-    let headers = serde_json::to_vec(&json!({
-      "Content-Encoding": "zstd",
-      "X-Parent-Session-Id": "parent-session"
-    }))
-    .unwrap();
+    let headers = serde_json::to_vec(headers).unwrap();
     conn
       .execute(
         "INSERT INTO request_connection (request_id, ts, ver, endpoint, status)

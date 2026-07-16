@@ -759,6 +759,8 @@ fn semantic_record(
   TreeRequestRecord {
     ts,
     session_id: session_id.to_string(),
+    thread_id: None,
+    parent_thread_id: None,
     parent_session_id: None,
     request_id: request_id.to_string(),
     endpoint: "responses".to_string(),

@@ -1,5 +1,5 @@
 -- Squashed sessions migrations from snapshot v0.1.1 to snapshot v0.2.0.
--- Covers schema versions 0001 through 0003.
+-- Covers schema versions 0001 through 0004.
 
 DROP INDEX IF EXISTS idx_sessions_last;
 DROP INDEX IF EXISTS idx_session_parts_msg;
@@ -38,10 +38,14 @@ CREATE TABLE session_nodes (
   common_prefix_messages INTEGER NOT NULL DEFAULT 0,
   request_message_count  INTEGER NOT NULL DEFAULT 0,
   response_message_count INTEGER NOT NULL DEFAULT 0,
+  thread_id               TEXT,
   UNIQUE(session_id, request_id)
 );
 CREATE INDEX idx_session_nodes_session_parent ON session_nodes(session_id, parent_id);
 CREATE INDEX idx_session_nodes_session_ts ON session_nodes(session_id, ts);
+CREATE INDEX idx_session_nodes_session_thread_ts
+  ON session_nodes(session_id, thread_id, ts)
+  WHERE thread_id IS NOT NULL;
 
 CREATE TABLE node_messages (
   id          TEXT PRIMARY KEY,
@@ -78,6 +82,17 @@ CREATE TABLE session_relations (
   PRIMARY KEY(parent_session_id, child_session_id, relation_kind)
 );
 
+CREATE TABLE session_threads (
+  session_id       TEXT    NOT NULL REFERENCES sessions(id),
+  thread_id        TEXT    NOT NULL,
+  parent_thread_id TEXT,
+  first_seen_ts    INTEGER NOT NULL,
+  last_seen_ts     INTEGER NOT NULL,
+  source           TEXT    NOT NULL,
+  PRIMARY KEY(session_id, thread_id)
+);
+CREATE INDEX idx_session_threads_parent ON session_threads(session_id, parent_thread_id);
+
 CREATE VIEW session_current AS
 SELECT
   s.id AS session_id,
@@ -94,6 +109,8 @@ SELECT
   COALESCE(n.provider_id, s.provider_id) AS provider_id,
   COALESCE(n.model, s.model) AS model,
   n.parent_id AS head_parent_id,
+  n.thread_id AS head_thread_id,
+  t.parent_thread_id AS head_parent_thread_id,
   n.reduction_kind AS head_reduction_kind,
   n.parent_source AS head_parent_source,
   n.common_prefix_messages AS head_common_prefix_messages,
@@ -101,7 +118,8 @@ SELECT
   n.response_message_count AS head_response_message_count
 FROM sessions s
 LEFT JOIN session_heads h ON h.session_id = s.id
-LEFT JOIN session_nodes n ON n.id = h.node_id;
+LEFT JOIN session_nodes n ON n.id = h.node_id
+LEFT JOIN session_threads t ON t.session_id = n.session_id AND t.thread_id = n.thread_id;
 
 CREATE VIEW session_messages AS
 SELECT
@@ -111,6 +129,8 @@ SELECT
   s.source,
   n.id AS node_id,
   n.parent_id,
+  n.thread_id,
+  t.parent_thread_id,
   n.request_id,
   n.ts AS node_ts,
   n.endpoint,
@@ -132,6 +152,7 @@ SELECT
 FROM sessions s
 JOIN session_nodes n ON n.session_id = s.id
 LEFT JOIN session_heads h ON h.session_id = s.id
+LEFT JOIN session_threads t ON t.session_id = n.session_id AND t.thread_id = n.thread_id
 JOIN node_messages m ON m.node_id = n.id
 JOIN node_parts p ON p.message_id = m.id
 JOIN part_blobs b ON b.hash = p.part_hash;

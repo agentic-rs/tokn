@@ -72,6 +72,11 @@ const SESSIONS_MIGRATIONS: &[Migration] = &[
     name: "session_views",
     sql: include_str!("../schemas/migrations/sessions/0003_session_views.sql"),
   },
+  Migration {
+    version: 4,
+    name: "thread_lineage",
+    sql: include_str!("../schemas/migrations/sessions/0004_thread_lineage.sql"),
+  },
 ];
 
 const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
@@ -165,7 +170,7 @@ const SESSIONS_V0_2_0_CASE: DbCase = DbCase {
   v0_0_0: SESSIONS_V0_0_0,
   target_snapshot: SESSIONS_V0_2_0,
   target_squash: SESSIONS_SQUASH_V0_2_0,
-  target_version: 3,
+  target_version: 4,
   squash_start_version: 1,
   migrations: SESSIONS_MIGRATIONS,
   meta_json: include_str!("fixtures/sessions_meta_v0.2.0.json"),

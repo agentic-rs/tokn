@@ -440,6 +440,8 @@ mod tests {
       .record_tree(&TreeRequestRecord {
         ts: 1_783_987_200_000,
         session_id: session_id.to_string(),
+        thread_id: None,
+        parent_thread_id: None,
         parent_session_id: None,
         request_id: request_id.to_string(),
         endpoint: "responses".to_string(),
