@@ -18,7 +18,11 @@ pub use requests::{
   InvalidRequestPayloadField, LatestRequests, RequestCursor, RequestDetail, RequestListOptions, RequestPage,
   RequestPayload, RequestPayloadField, RequestSummary,
 };
-pub use sessions::{get_session, list_sessions, list_sessions_from_db, SessionDetail, SessionSummary};
+pub use sessions::{
+  get_session, get_session_from_db, get_session_node_from_db, list_sessions, list_sessions_from_db, SessionDetail,
+  SessionMessage, SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary,
+  SessionPart, SessionPartContent, SessionPartEncoding, SessionPartOmissionReason, SessionSummary, StoredSessionDetail,
+};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;

@@ -185,9 +185,11 @@ tokn-gateway inspect
 
 It binds only to `127.0.0.1`, prints an available URL, and reads the existing
 request-day databases and `sessions.db` without creating or migrating either.
-The Sessions list reads only `sessions.db`; it does not scan request history.
-Selecting a session still loads its request timeline from the request-day
-databases, so that timeline is unavailable when those files are absent. Use
+The Sessions view reads its list, semantic node tree, and selected-node content
+only from `sessions.db`; opening it does not scan request history. Session and
+node metadata load first, while message content is fetched only when a node is
+opened. Large node responses use explicit message, part, and byte bounds, and
+the viewer reports anything omitted or truncated. Use
 `--requests-dir PATH` or `--sessions-db PATH` to inspect different persisted
 paths. The viewer can expose stored prompts and responses, so treat its URL and
 screen contents as sensitive.

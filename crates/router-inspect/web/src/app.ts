@@ -14,6 +14,8 @@ import type {
   RequestPage,
   RequestSummary,
   SessionDetail,
+  SessionNodeDetail,
+  SessionNodeSummary,
   SessionSummary,
   TimezoneMode,
   ViewerInfo,
@@ -68,8 +70,13 @@ class InspectApp extends LitElement {
     selected_session_detail: { attribute: false },
     sessions_loading: { type: Boolean },
     sessions_error: { type: String },
-    session_detail_loading: { type: Boolean },
-    session_detail_error: { type: String }
+    session_search_query: { type: String },
+    session_detail_state: { type: String },
+    session_detail_error: { type: String },
+    selected_session_node_id: { type: String },
+    selected_session_node_detail: { attribute: false },
+    session_node_state: { type: String },
+    session_node_error: { type: String }
   };
 
   declare active_view: ViewName;
@@ -102,19 +109,32 @@ class InspectApp extends LitElement {
   declare selected_session_detail: SessionDetail | undefined;
   declare sessions_loading: boolean;
   declare sessions_error: string | undefined;
-  declare session_detail_loading: boolean;
+  declare session_search_query: string;
+  declare session_detail_state: LoadState;
   declare session_detail_error: string | undefined;
+  declare selected_session_node_id: string | undefined;
+  declare selected_session_node_detail: SessionNodeDetail | undefined;
+  declare session_node_state: LoadState;
+  declare session_node_error: string | undefined;
 
   private request_load_id = 0;
   private request_detail_load_id = 0;
   private session_detail_load_id = 0;
+  private session_node_load_id = 0;
+  private session_list_load_id = 0;
   private request_days_load_id = 0;
   private sessions_loaded = false;
   private requested_request_id: string | undefined;
   private requested_request_row_id: string | undefined;
+  private requested_session_id: string | undefined;
+  private requested_session_node_id: string | undefined;
   private request_rows_context: string | undefined;
   private request_controller: AbortController | undefined;
   private request_detail_controller: AbortController | undefined;
+  private session_list_controller: AbortController | undefined;
+  private session_list_load: Promise<boolean> | undefined;
+  private session_detail_controller: AbortController | undefined;
+  private session_node_controller: AbortController | undefined;
   private navigation_workflow_id = 0;
   private readonly popstate_handler = () => void this.restoreFromHistory();
 
@@ -136,7 +156,9 @@ class InspectApp extends LitElement {
     this.loading_more = false;
     this.request_days_loading = false;
     this.sessions_loading = false;
-    this.session_detail_loading = false;
+    this.session_search_query = "";
+    this.session_detail_state = "idle";
+    this.session_node_state = "idle";
   }
 
   createRenderRoot() {
@@ -154,6 +176,9 @@ class InspectApp extends LitElement {
     window.removeEventListener("popstate", this.popstate_handler);
     this.request_controller?.abort();
     this.request_detail_controller?.abort();
+    this.session_list_controller?.abort();
+    this.session_detail_controller?.abort();
+    this.session_node_controller?.abort();
     super.disconnectedCallback();
   }
 
@@ -178,6 +203,8 @@ class InspectApp extends LitElement {
     this.requested_request_row_id = row_id && /^-?\d+$/.test(row_id) ? row_id : undefined;
     const tab = params.get("tab");
     this.active_detail_tab = isDetailTab(tab) ? tab : "overview";
+    this.requested_session_id = params.has("session_id") ? params.get("session_id") ?? "" : undefined;
+    this.requested_session_node_id = params.get("node_id") ?? undefined;
     this.timezone = params.get("timezone") === "utc" ? "utc" : "local";
   }
 
@@ -187,31 +214,39 @@ class InspectApp extends LitElement {
 
   private syncUrl(mode: Exclude<HistoryMode, null> = "replace") {
     const params = new URLSearchParams();
-    if (this.active_view !== "requests") {
-      params.set("view", this.active_view);
-    }
-    const day = this.selected_request_id ? this.selectedRequestDay() : this.selected_day;
-    if (day) {
-      params.set("day", day);
-    }
-    if (this.applied_filters.query) {
-      params.set("query", this.applied_filters.query);
-    }
-    if (this.applied_filters.provider_id) {
-      params.set("provider_id", this.applied_filters.provider_id);
-    }
-    if (this.applied_filters.status) {
-      params.set("status", this.applied_filters.status);
-    }
-    if (this.applied_filters.errors_only) {
-      params.set("errors_only", "true");
-    }
-    if (this.selected_request_id) {
-      params.set("request_id", this.selected_request_id);
-      if (this.selected_request_row_id) {
-        params.set("row_id", this.selected_request_row_id);
+    if (this.active_view === "sessions") {
+      params.set("view", "sessions");
+      const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+      if (session_id !== undefined) {
+        params.set("session_id", session_id);
       }
-      params.set("tab", this.active_detail_tab);
+      if (this.selected_session_node_id) {
+        params.set("node_id", this.selected_session_node_id);
+      }
+    } else {
+      const day = this.selected_request_id ? this.selectedRequestDay() : this.selected_day;
+      if (day) {
+        params.set("day", day);
+      }
+      if (this.applied_filters.query) {
+        params.set("query", this.applied_filters.query);
+      }
+      if (this.applied_filters.provider_id) {
+        params.set("provider_id", this.applied_filters.provider_id);
+      }
+      if (this.applied_filters.status) {
+        params.set("status", this.applied_filters.status);
+      }
+      if (this.applied_filters.errors_only) {
+        params.set("errors_only", "true");
+      }
+      if (this.selected_request_id) {
+        params.set("request_id", this.selected_request_id);
+        if (this.selected_request_row_id) {
+          params.set("row_id", this.selected_request_row_id);
+        }
+        params.set("tab", this.active_detail_tab);
+      }
     }
     params.set("timezone", this.timezone);
     const query = params.toString();
@@ -229,7 +264,6 @@ class InspectApp extends LitElement {
   private async loadInitialData() {
     const workflow_id = ++this.navigation_workflow_id;
     void this.loadInfo();
-    void this.loadRequestDays();
     await this.loadUrlState(workflow_id);
   }
 
@@ -237,11 +271,16 @@ class InspectApp extends LitElement {
     const workflow_id = ++this.navigation_workflow_id;
     this.request_controller?.abort();
     this.request_detail_controller?.abort();
+    this.session_detail_controller?.abort();
+    this.session_node_controller?.abort();
     this.resetRequestSelection();
+    this.resetSessionSelection();
     this.restoreUrlState();
-    this.requests = [];
-    this.next_cursor = undefined;
-    this.request_rows_context = undefined;
+    if (this.active_view === "requests") {
+      this.requests = [];
+      this.next_cursor = undefined;
+      this.request_rows_context = undefined;
+    }
     await this.loadUrlState(workflow_id);
   }
 
@@ -249,8 +288,22 @@ class InspectApp extends LitElement {
     const requested_request_id = this.requested_request_id;
     const requested_request_row_id = this.requested_request_row_id;
     if (this.active_view === "sessions") {
-      void this.ensureSessionsLoaded();
+      const requested_session_id = this.requested_session_id;
+      const requested_node_id = this.requested_session_node_id;
+      const loaded = await this.ensureSessionsLoaded();
+      if (!loaded || workflow_id !== this.navigation_workflow_id || requested_session_id === undefined) {
+        return;
+      }
+      await this.loadSession(
+        requested_session_id,
+        this.sessions.find((session) => session.session_id === requested_session_id),
+        false,
+        null,
+        requested_node_id
+      );
+      return;
     }
+    void this.loadRequestDays();
     let loaded: boolean;
     if (this.selected_day) {
       loaded = await this.loadRequests();
@@ -466,6 +519,25 @@ class InspectApp extends LitElement {
     this.active_detail_tab = "overview";
   }
 
+  private resetSessionSelection() {
+    this.session_detail_controller?.abort();
+    this.session_node_controller?.abort();
+    this.session_detail_controller = undefined;
+    this.session_node_controller = undefined;
+    this.session_detail_load_id += 1;
+    this.session_node_load_id += 1;
+    this.requested_session_id = undefined;
+    this.requested_session_node_id = undefined;
+    this.selected_session = undefined;
+    this.selected_session_detail = undefined;
+    this.selected_session_node_id = undefined;
+    this.selected_session_node_detail = undefined;
+    this.session_detail_state = "idle";
+    this.session_detail_error = undefined;
+    this.session_node_state = "idle";
+    this.session_node_error = undefined;
+  }
+
   private async closeRequestDetail() {
     const selected_key = this.selected_request_row_id && this.selectedRequestDay()
       ? requestKey({ day: this.selectedRequestDay()!, row_id: this.selected_request_row_id })
@@ -479,6 +551,19 @@ class InspectApp extends LitElement {
     await this.updateComplete;
     const rows = this.querySelectorAll<HTMLButtonElement>("request-list [data-request-key]");
     [...rows].find((row) => row.dataset.requestKey === selected_key)?.focus();
+  }
+
+  private async closeSessionDetail() {
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    ++this.navigation_workflow_id;
+    this.resetSessionSelection();
+    this.syncUrl("push");
+    if (session_id === undefined || !window.matchMedia("(max-width: 680px)").matches) {
+      return;
+    }
+    await this.updateComplete;
+    const rows = this.querySelectorAll<HTMLButtonElement>("session-list [data-session-id]");
+    [...rows].find((row) => row.dataset.sessionId === session_id)?.focus();
   }
 
   private async loadRequestDetail(
@@ -646,78 +731,297 @@ class InspectApp extends LitElement {
     return [...providers].sort();
   }
 
-  private async ensureSessionsLoaded() {
-    if (this.sessions_loaded || this.sessions_loading) {
-      return;
+  private ensureSessionsLoaded(force = false): Promise<boolean> {
+    if (this.sessions_loaded && !force) {
+      return Promise.resolve(true);
     }
+    if (this.session_list_load && !force) {
+      return this.session_list_load;
+    }
+    this.session_list_controller?.abort();
+    const controller = new AbortController();
+    this.session_list_controller = controller;
+    const load_id = ++this.session_list_load_id;
     this.sessions_loading = true;
     this.sessions_error = undefined;
+    const load = this.loadSessions(controller, load_id);
+    this.session_list_load = load;
+    return load;
+  }
+
+  private async loadSessions(controller: AbortController, load_id: number): Promise<boolean> {
     try {
-      this.sessions = await fetchJson<SessionSummary[]>("/api/sessions?limit=100");
+      const sessions = await fetchJson<SessionSummary[]>("/api/sessions?limit=100", controller.signal);
+      if (load_id !== this.session_list_load_id || this.session_list_controller !== controller) {
+        return false;
+      }
+      this.sessions = sessions;
       this.sessions_loaded = true;
+      if (this.selected_session) {
+        this.selected_session = sessions.find((session) => session.session_id === this.selected_session?.session_id)
+          ?? this.selected_session;
+      }
+      return true;
     } catch (error) {
-      this.sessions_error = errorMessage(error, "Unable to load sessions");
+      if (load_id === this.session_list_load_id && !isAbortError(error)) {
+        this.sessions_error = errorMessage(error, "Unable to load sessions");
+      }
+      return false;
     } finally {
-      this.sessions_loading = false;
+      if (load_id === this.session_list_load_id && this.session_list_controller === controller) {
+        this.session_list_controller = undefined;
+        this.session_list_load = undefined;
+        this.sessions_loading = false;
+      }
     }
   }
 
   private retrySessions() {
+    const workflow_id = ++this.navigation_workflow_id;
     this.sessions_loaded = false;
-    void this.ensureSessionsLoaded();
+    void this.retrySessionsAndRestore(workflow_id);
   }
 
-  private async loadSession(session_id: string, session: SessionSummary | undefined) {
+  private async retrySessionsAndRestore(workflow_id: number) {
+    const loaded = await this.ensureSessionsLoaded(true);
+    if (!loaded || workflow_id !== this.navigation_workflow_id || this.active_view !== "sessions") {
+      return;
+    }
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    if (session_id === undefined) {
+      return;
+    }
+    const node_id = this.selected_session_node_id ?? this.requested_session_node_id;
+    await this.loadSession(
+      session_id,
+      this.sessions.find((session) => session.session_id === session_id),
+      this.selected_session_detail?.session.session_id === session_id,
+      null,
+      node_id
+    );
+  }
+
+  private async refreshSessions() {
+    const workflow_id = this.navigation_workflow_id;
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    const node_id = this.selected_session_node_id;
+    const loaded = await this.ensureSessionsLoaded(true);
+    const current_session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    if (
+      loaded
+      && workflow_id === this.navigation_workflow_id
+      && session_id !== undefined
+      && current_session_id === session_id
+      && this.selected_session_node_id === node_id
+    ) {
+      await this.loadSession(
+        session_id,
+        this.sessions.find((session) => session.session_id === session_id),
+        true,
+        null,
+        node_id
+      );
+    }
+  }
+
+  private filteredSessions(): SessionSummary[] {
+    const query = this.session_search_query.trim().toLocaleLowerCase();
+    if (!query) {
+      return this.sessions;
+    }
+    return this.sessions.filter((session) => [
+      session.session_id,
+      session.model,
+      session.provider_id,
+      session.account_id,
+      session.endpoint,
+      session.status === null ? null : String(session.status)
+    ].some((value) => value?.toLocaleLowerCase().includes(query)));
+  }
+
+  private async loadSession(
+    session_id: string,
+    session: SessionSummary | undefined,
+    preserve: boolean,
+    history_mode: HistoryMode = "push",
+    requested_node_id?: string
+  ): Promise<boolean> {
+    this.session_detail_controller?.abort();
+    this.session_node_controller?.abort();
+    const controller = new AbortController();
+    this.session_detail_controller = controller;
     const load_id = ++this.session_detail_load_id;
+    const node_load_id = ++this.session_node_load_id;
+    this.requested_session_id = session_id;
+    this.requested_session_node_id = requested_node_id;
     this.selected_session = session;
-    this.selected_session_detail = undefined;
-    this.session_detail_loading = true;
+    if (!preserve) {
+      this.selected_session_detail = undefined;
+      this.selected_session_node_detail = undefined;
+      this.selected_session_node_id = undefined;
+      this.session_node_state = "idle";
+      this.session_node_error = undefined;
+    }
+    this.session_detail_state = "loading";
     this.session_detail_error = undefined;
+    if (history_mode) {
+      this.syncUrl(history_mode);
+    }
     try {
-      const detail = await fetchJson<SessionDetail>(`/api/session?session_id=${encodeURIComponent(session_id)}&limit=500`);
-      if (load_id === this.session_detail_load_id) {
+      const params = new URLSearchParams({ session_id, limit: "500" });
+      const detail = await fetchJson<SessionDetail>(`/api/session?${params.toString()}`, controller.signal);
+      if (load_id === this.session_detail_load_id && this.session_detail_controller === controller) {
         this.selected_session = detail.session;
         this.selected_session_detail = detail;
+        this.sessions = this.sessions.map((candidate) =>
+          candidate.session_id === detail.session.session_id ? detail.session : candidate
+        );
+        this.session_detail_state = "ready";
+        if (node_load_id !== this.session_node_load_id) {
+          return true;
+        }
+        if (requested_node_id) {
+          const selected_node = detail.nodes.find((node) => node.node_id === requested_node_id);
+          void this.loadSessionNode(selected_node ?? requested_node_id, false, "replace");
+        } else {
+          this.selected_session_node_id = undefined;
+          this.selected_session_node_detail = undefined;
+          this.session_node_state = "idle";
+          this.syncUrl("replace");
+        }
+        return true;
       }
+      return false;
     } catch (error) {
-      if (load_id === this.session_detail_load_id) {
-        this.session_detail_error = errorMessage(error, "Unable to load session timeline");
+      if (load_id === this.session_detail_load_id && !isAbortError(error)) {
+        this.session_detail_state = "error";
+        this.session_detail_error = errorMessage(error, "Unable to load semantic session");
       }
+      return false;
     } finally {
-      if (load_id === this.session_detail_load_id) {
-        this.session_detail_loading = false;
+      if (this.session_detail_controller === controller) {
+        this.session_detail_controller = undefined;
       }
+    }
+  }
+
+  private async loadSessionNode(
+    node: SessionNodeSummary | string,
+    preserve: boolean,
+    history_mode: HistoryMode = "push"
+  ): Promise<boolean> {
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    if (session_id === undefined) {
+      return false;
+    }
+    this.session_node_controller?.abort();
+    const controller = new AbortController();
+    this.session_node_controller = controller;
+    const load_id = ++this.session_node_load_id;
+    const node_id = typeof node === "string" ? node : node.node_id;
+    this.requested_session_node_id = node_id;
+    this.selected_session_node_id = node_id;
+    if (!preserve) {
+      this.selected_session_node_detail = undefined;
+    }
+    this.session_node_state = "loading";
+    this.session_node_error = undefined;
+    if (history_mode) {
+      this.syncUrl(history_mode);
+    }
+    try {
+      const params = new URLSearchParams({ session_id, node_id });
+      const detail = await fetchJson<SessionNodeDetail>(`/api/session-node?${params.toString()}`, controller.signal);
+      if (load_id === this.session_node_load_id && this.session_node_controller === controller) {
+        this.selected_session_node_detail = detail;
+        this.session_node_state = "ready";
+        this.syncUrl("replace");
+        return true;
+      }
+      return false;
+    } catch (error) {
+      if (load_id === this.session_node_load_id && !isAbortError(error)) {
+        this.session_node_state = "error";
+        this.session_node_error = errorMessage(error, "Unable to load semantic node content");
+      }
+      return false;
+    } finally {
+      if (this.session_node_controller === controller) {
+        this.session_node_controller = undefined;
+      }
+    }
+  }
+
+  private async selectSession(session: SessionSummary) {
+    const workflow_id = ++this.navigation_workflow_id;
+    const loaded = await this.loadSession(session.session_id, session, false, "push");
+    if (
+      !loaded
+      || workflow_id !== this.navigation_workflow_id
+      || this.active_view !== "sessions"
+      || this.selected_session_detail?.session.session_id !== session.session_id
+      || !window.matchMedia("(max-width: 680px)").matches
+    ) {
+      return;
+    }
+
+    await this.updateComplete;
+    const detail_view = this.querySelector<LitElement>("session-detail-view");
+    await detail_view?.updateComplete;
+    if (
+      workflow_id === this.navigation_workflow_id
+      && this.active_view === "sessions"
+      && this.selected_session_detail?.session.session_id === session.session_id
+    ) {
+      detail_view?.querySelector<HTMLButtonElement>(".mobile-back-button")?.focus();
+    }
+  }
+
+  private selectSessionNode(node: SessionNodeSummary) {
+    if (node.node_id === this.selected_session_node_id && this.session_node_state === "ready") {
+      return;
+    }
+    void this.loadSessionNode(node, false, "push");
+  }
+
+  private retrySessionDetail() {
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    if (session_id !== undefined) {
+      void this.loadSession(
+        session_id,
+        this.selected_session,
+        Boolean(this.selected_session_detail),
+        null,
+        this.selected_session_node_id ?? this.requested_session_node_id
+      );
+    }
+  }
+
+  private retrySessionNode() {
+    const node = this.selected_session_detail?.nodes.find((candidate) => candidate.node_id === this.selected_session_node_id);
+    if (node ?? this.selected_session_node_id) {
+      void this.loadSessionNode(node ?? this.selected_session_node_id!, Boolean(this.selected_session_node_detail), null);
     }
   }
 
   private async openSession(session_id: string) {
     ++this.navigation_workflow_id;
-    this.setActiveView("sessions", false, "push");
+    this.setActiveView("sessions", false, null);
+    await this.ensureSessionsLoaded();
     const session = this.sessions.find((candidate) => candidate.session_id === session_id);
-    await this.loadSession(session_id, session);
+    await this.loadSession(session_id, session, false, "push");
   }
 
-  private async openRequest(request: RequestSummary) {
-    const workflow_id = ++this.navigation_workflow_id;
-    this.setActiveView("requests", true, null);
-    const needs_reload = this.selected_day !== request.day || this.hasAppliedFilters();
-    if (needs_reload) {
-      this.selected_day = request.day;
-      this.search_query = "";
-      this.provider_id = "";
-      this.status_filter = "";
-      this.errors_only = false;
-      this.applied_filters = emptyFilters();
-      this.resetRequestSelection();
-      const loaded = await this.loadRequests();
-      if (!loaded || workflow_id !== this.navigation_workflow_id) {
-        return;
-      }
+  private async loadRequestsView() {
+    void this.loadRequestDays();
+    if (this.selected_day) {
+      await this.loadRequests();
+    } else {
+      await this.loadLatestRequests();
     }
-    await this.selectRequest(request);
   }
 
-  private setActiveView(active_view: ViewName, load_sessions = true, history_mode: HistoryMode = "push") {
+  private setActiveView(active_view: ViewName, load_view = true, history_mode: HistoryMode = "push") {
     if (history_mode === "push") {
       ++this.navigation_workflow_id;
     }
@@ -725,8 +1029,13 @@ class InspectApp extends LitElement {
     if (history_mode) {
       this.syncUrl(history_mode);
     }
-    if (active_view === "sessions" && load_sessions) {
+    if (!load_view) {
+      return;
+    }
+    if (active_view === "sessions") {
       void this.ensureSessionsLoaded();
+    } else if (this.request_list_state === "idle") {
+      void this.loadRequestsView();
     }
   }
 
@@ -946,54 +1255,118 @@ class InspectApp extends LitElement {
   }
 
   private renderSessionsSidebar() {
-    if (this.sessions_loading) {
-      return html`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading sessions…</div>`;
-    }
-    if (this.sessions_error) {
-      return html`
-        <div class="inline-error" role="alert">
-          <span>${this.sessions_error}</span>
-          <button type="button" @click=${this.retrySessions}>Retry</button>
-        </div>
-      `;
-    }
-    if (!this.sessions_loaded) {
-      return html`<button type="button" class="primary-button standalone-action" @click=${() => void this.ensureSessionsLoaded()}>
-        Load session list
-      </button>`;
-    }
+    const sessions = this.filteredSessions();
+    const has_content = this.sessions.length > 0;
     return html`
-      <session-list
-        .sessions=${this.sessions}
-        .selected_session_id=${this.selected_session?.session_id}
-        .timezone=${this.timezone}
-        @session-select=${(event: Event) => void this.loadSession(
-          eventDetail<SessionSummary>(event).session_id,
-          eventDetail<SessionSummary>(event)
-        )}
-      ></session-list>
+      <div class="list-pane" aria-busy=${String(this.sessions_loading)}>
+        <header class="list-pane-header">
+          <div>
+            <strong>Recent sessions</strong>
+            <span>
+              ${this.session_search_query
+                ? `${sessions.length.toLocaleString()} of ${this.sessions.length.toLocaleString()} loaded`
+                : `${this.sessions.length.toLocaleString()} loaded · newest first`}
+            </span>
+          </div>
+          ${this.session_search_query ? html`<span class="filter-indicator">Filtered</span>` : nothing}
+        </header>
+        ${this.sessions_loading
+          ? html`
+              <div class="inline-state" role="status">
+                <span class="spinner" aria-hidden="true"></span>${has_content ? "Refreshing sessions…" : "Loading sessions…"}
+              </div>
+            `
+          : nothing}
+        ${this.sessions_error
+          ? html`
+              <div class="inline-error" role="alert">
+                <span>${this.sessions_error}</span>
+                <button type="button" @click=${this.retrySessions}>Retry</button>
+              </div>
+            `
+          : nothing}
+        ${sessions.length > 0
+          ? html`
+              <session-list
+                .sessions=${sessions}
+                .selected_session_id=${this.selected_session?.session_id ?? this.requested_session_id}
+                .timezone=${this.timezone}
+                @session-select=${(event: Event) => void this.selectSession(eventDetail<SessionSummary>(event))}
+              ></session-list>
+            `
+          : this.sessions_loaded && this.session_search_query
+            ? html`<p class="empty">No recent sessions match this filter.</p>`
+            : this.sessions_loaded
+              ? html`
+                  <div class="empty empty-session-list">
+                    <strong>No semantic sessions available</strong>
+                    <span>The gateway records successful sessions here when session persistence is enabled.</span>
+                  </div>
+                `
+              : nothing}
+        ${has_content && !this.session_search_query
+          ? html`<p class="end-of-list">${this.sessions.length === 100 ? "Latest 100 sessions" : "End of recent sessions"}</p>`
+          : nothing}
+      </div>
     `;
   }
 
   private renderSessionDetail() {
     return html`
-      ${this.session_detail_loading
-        ? html`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading session timeline…</div>`
-        : nothing}
-      ${this.session_detail_error
-        ? html`<div class="inline-error" role="alert"><span>${this.session_detail_error}</span></div>`
-        : nothing}
-      <session-timeline
+      <session-detail-view
         .detail=${this.selected_session_detail}
+        .node_detail=${this.selected_session_node_detail}
+        .state=${this.session_detail_state}
+        .error_message=${this.session_detail_error}
+        .node_state=${this.session_node_state}
+        .node_error_message=${this.session_node_error}
+        .selected_node_id=${this.selected_session_node_id}
         .timezone=${this.timezone}
-        @request-select=${(event: Event) => void this.openRequest(eventDetail<RequestSummary>(event))}
-      ></session-timeline>
+        @session-close=${() => void this.closeSessionDetail()}
+        @session-retry=${this.retrySessionDetail}
+        @session-node-retry=${this.retrySessionNode}
+        @session-node-select=${(event: Event) => this.selectSessionNode(eventDetail<SessionNodeSummary>(event))}
+      ></session-detail-view>
+    `;
+  }
+
+  private renderSessionToolbar() {
+    return html`
+      <section class="session-toolbar">
+        <label class="session-search-field">
+          <span class="visually-hidden">Filter recent sessions</span>
+          <span class="search-icon" aria-hidden="true">⌕</span>
+          <input
+            type="search"
+            .value=${this.session_search_query}
+            placeholder="Filter session, model, provider…"
+            @input=${(event: Event) => (this.session_search_query = (event.target as HTMLInputElement).value)}
+          />
+        </label>
+        <p><span class="source-indicator" aria-hidden="true"></span>Semantic trees and content from <code>sessions.db</code></p>
+        <div class="session-toolbar-actions">
+          <button
+            type="button"
+            class="refresh-button"
+            ?disabled=${this.sessions_loading}
+            @click=${() => void this.refreshSessions()}
+          >
+            <span aria-hidden="true">↻</span> Refresh sessions
+          </button>
+          <div class="timezone-toggle" role="group" aria-label="Timestamp timezone">
+            <button type="button" aria-pressed=${String(this.timezone === "local")} @click=${() => this.setTimezone("local")}>Local</button>
+            <button type="button" aria-pressed=${String(this.timezone === "utc")} @click=${() => this.setTimezone("utc")}>UTC</button>
+          </div>
+        </div>
+      </section>
     `;
   }
 
   render() {
     const data_path = this.active_view === "sessions" ? this.info?.sessions_db : this.info?.requests_dir;
-    const has_selection = this.active_view === "requests" && Boolean(this.selected_request_id);
+    const has_selection = this.active_view === "requests"
+      ? Boolean(this.selected_request_id)
+      : this.requested_session_id !== undefined;
     return html`
       <header class="app-header">
         <div class="brand">
@@ -1024,15 +1397,7 @@ class InspectApp extends LitElement {
         </div>
         ${this.active_view === "requests"
           ? this.renderRequestToolbar()
-          : html`
-              <section class="session-toolbar">
-                <p>Session list from <code>sessions.db</code>; timeline payloads from request history.</p>
-                <div class="timezone-toggle" role="group" aria-label="Timestamp timezone">
-                  <button type="button" aria-pressed=${String(this.timezone === "local")} @click=${() => this.setTimezone("local")}>Local</button>
-                  <button type="button" aria-pressed=${String(this.timezone === "utc")} @click=${() => this.setTimezone("utc")}>UTC</button>
-                </div>
-              </section>
-            `}
+          : this.renderSessionToolbar()}
         <section class="viewer-grid ${this.active_view === "requests" ? "request-view" : "session-view"} ${has_selection ? "has-selection" : ""}">
           <aside class="sidebar" aria-label=${this.active_view === "requests" ? "Request list" : "Session list"}>
             ${this.active_view === "requests" ? this.renderRequestSidebar() : this.renderSessionsSidebar()}
