@@ -361,11 +361,6 @@ mod tests {
   #[test]
   fn response_output_items_match_their_next_request_forms() {
     let sse = concat!(
-      "event: response.output_item.done\n",
-      "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":",
-      "{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"ciphertext\",",
-      "\"summary\":[],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
-      "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
       "event: response.function_call_arguments.delta\n",
       "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,",
       "\"delta\":\"{\\\"cmd\\\":\\\"pwd\\\"}\"}\n\n",
@@ -374,6 +369,11 @@ mod tests {
       "{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",",
       "\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",",
       "\"namespace\":\"functions\",\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+      "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+      "event: response.output_item.done\n",
+      "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":",
+      "{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"ciphertext\",",
+      "\"summary\":[],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
       "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
       "event: response.completed\n",
       "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",

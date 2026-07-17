@@ -372,10 +372,10 @@ fn stored_node_returns_full_input_prefix_and_tags_part_content() {
   let detail = get_session_node_from_db(&sessions_db, "semantic", "child")
     .unwrap()
     .unwrap();
-  assert_eq!(detail.node.parent_node_id.as_deref(), Some("root"));
+  assert_eq!(detail.node.parent_node_id, None);
   assert_eq!(detail.node.reduction_kind, "message_tree");
-  assert_eq!(detail.node.common_prefix_messages, 1);
-  assert_eq!(detail.node.request_message_count, 1);
+  assert_eq!(detail.node.common_prefix_messages, 0);
+  assert_eq!(detail.node.request_message_count, 2);
   assert_eq!(detail.node.message_id.as_ref().unwrap().len(), 64);
   assert_eq!(detail.node.input_message_count, 2);
   assert_eq!(detail.node.output_message_count, 1);
@@ -502,9 +502,10 @@ fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
   let detail = get_session_node_from_db(&sessions_db, "unchanged", "child")
     .unwrap()
     .unwrap();
+  assert_eq!(detail.node.parent_node_id, None);
   assert_eq!(detail.node.reduction_kind, "message_tree");
-  assert_eq!(detail.node.common_prefix_messages, 1);
-  assert_eq!(detail.node.request_message_count, 0);
+  assert_eq!(detail.node.common_prefix_messages, 0);
+  assert_eq!(detail.node.request_message_count, 1);
   assert_eq!(detail.node.input_message_count, 1);
   assert_eq!(detail.node.output_message_count, 1);
   assert_eq!(detail.request_messages.len(), 1);

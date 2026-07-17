@@ -390,6 +390,13 @@ export class SessionDetailView extends LitElement {
     const output_count = node.reduction_kind === "message_tree"
       ? node.output_message_count
       : node.response_message_count;
+    const lineage_label = node.reduction_kind === "message_tree"
+      ? node.message_id
+        ? `message ${shortId(node.message_id)}`
+        : "message unavailable"
+      : node.parent_node_id
+        ? `parent ${shortId(node.parent_node_id)}`
+        : "root";
     return html`
       <li class="session-node ${selected ? "selected" : ""}">
         <span class="session-node-rail" aria-hidden="true"><span></span></span>
@@ -419,7 +426,7 @@ export class SessionDetailView extends LitElement {
             <span>${output_count.toLocaleString()} output</span>
           </span>
           <span class="session-node-id" title=${node.request_id}>
-            request ${shortId(node.request_id)} · ${node.parent_node_id ? `parent ${shortId(node.parent_node_id)}` : "root"}
+            request ${shortId(node.request_id)} · ${lineage_label}
           </span>
         </button>
         ${this.renderNodeContent(node)}

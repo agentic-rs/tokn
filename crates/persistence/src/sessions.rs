@@ -5,7 +5,7 @@ use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -208,12 +208,6 @@ impl SessionsDb {
       .or(input_path.last())
       .copied()
       .expect("record_tree rejects an empty input and output");
-    let input_ids = input_path.iter().copied().collect::<HashSet<_>>();
-    let parent = nearest_node_ancestor(&tx, &r.session_id, thread_id, &r.request_id, r.ts, &input_ids)?;
-    let parent_id = parent.as_ref().map(|parent| parent.node_id.as_str());
-    let common_prefix = parent.as_ref().map_or(0, |parent| parent.depth);
-    let request_delta_count = input_path.len().saturating_sub(common_prefix);
-    let parent_source = if parent.is_some() { "message_ancestor" } else { "none" };
 
     tx.execute(
       "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
@@ -246,6 +240,7 @@ impl SessionsDb {
          END",
       params![r.session_id, thread_id, parent_thread_id, r.ts, thread_source],
     )?;
+    // The immutable message tree owns ancestry; each session node independently bookmarks one tree tip.
     tx.execute(
       "INSERT INTO session_nodes
          (id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
@@ -271,7 +266,7 @@ impl SessionsDb {
       params![
         r.request_id,
         r.session_id,
-        parent_id,
+        None::<&str>,
         r.request_id,
         r.ts,
         r.endpoint,
@@ -279,9 +274,9 @@ impl SessionsDb {
         r.account_id.as_deref(),
         r.provider_id.as_deref(),
         r.model.as_deref(),
-        parent_source,
-        common_prefix as i64,
-        request_delta_count as i64,
+        "none",
+        0_i64,
+        input_path.len() as i64,
         output_path.len() as i64,
         thread_id,
         message_id.as_slice(),
@@ -403,44 +398,6 @@ impl SessionsDb {
     }
     Ok(out)
   }
-}
-
-struct NodeAncestor {
-  node_id: String,
-  depth: usize,
-}
-
-fn nearest_node_ancestor(
-  conn: &Connection,
-  session_id: &str,
-  thread_id: &str,
-  request_id: &str,
-  ts: i64,
-  input_ids: &HashSet<MessageId>,
-) -> Result<Option<NodeAncestor>> {
-  if input_ids.is_empty() {
-    return Ok(None);
-  }
-
-  let mut stmt = conn.prepare(
-    "SELECT n.id, n.message_id, message.depth
-     FROM session_nodes n
-     JOIN message_tree message ON message.id = n.message_id
-     WHERE n.session_id = ?1 AND n.thread_id = ?2 AND n.id != ?3 AND n.ts <= ?4
-     ORDER BY message.depth DESC, n.ts DESC, n.rowid DESC",
-  )?;
-  let mut rows = stmt.query(params![session_id, thread_id, request_id, ts])?;
-  while let Some(row) = rows.next()? {
-    let raw_id = row.get::<_, Vec<u8>>(1)?;
-    let message_id = decode_message_id(&raw_id)?;
-    if input_ids.contains(&message_id) {
-      return Ok(Some(NodeAncestor {
-        node_id: row.get(0)?,
-        depth: required_count(Some(row.get(2)?), &encode_message_id(&message_id))?,
-      }));
-    }
-  }
-  Ok(None)
 }
 
 fn insert_message_path(
@@ -632,6 +589,7 @@ fn select_tree_message_parts(conn: &Connection, message_id: &MessageId) -> Resul
   Ok(parts)
 }
 
+#[cfg(test)]
 fn required_count(value: Option<i64>, id: &str) -> Result<usize> {
   match value.and_then(|value| usize::try_from(value).ok()) {
     Some(value) => Ok(value),
@@ -1297,10 +1255,7 @@ mod tests {
       .collect::<rusqlite::Result<Vec<_>>>()
       .unwrap();
     assert_eq!(rows[0], ("req-1".into(), None, "message_tree".into(), 0, 2, 2, 1));
-    assert_eq!(
-      rows[1],
-      ("req-2".into(), Some("req-1".into()), "message_tree".into(), 3, 1, 4, 1,)
-    );
+    assert_eq!(rows[1], ("req-2".into(), None, "message_tree".into(), 0, 4, 4, 1,));
     assert_eq!(rows[2], ("req-3".into(), None, "message_tree".into(), 0, 2, 2, 0));
     assert_messages_eq(&db.materialize_request_messages("req-2").unwrap(), &second);
     assert_messages_eq(
@@ -1370,7 +1325,7 @@ mod tests {
   }
 
   #[test]
-  fn record_tree_links_only_message_ancestors_in_the_same_thread() {
+  fn record_tree_keeps_thread_metadata_without_node_lineage() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -1459,18 +1414,18 @@ mod tests {
         ),
         (
           "req-root-2".into(),
-          Some("req-root-1".into()),
+          None,
           "message_tree".into(),
-          2,
-          1,
+          0,
+          3,
           "thread-root".into(),
         ),
         (
           "req-child-2".into(),
-          Some("req-child-1".into()),
+          None,
           "message_tree".into(),
-          2,
-          1,
+          0,
+          3,
           "thread-child".into(),
         ),
       ]
@@ -1550,8 +1505,8 @@ mod tests {
       nodes,
       vec![
         ("req-root".into(), None),
-        ("req-extension".into(), Some("req-root".into())),
-        ("req-branch".into(), Some("req-root".into())),
+        ("req-extension".into(), None),
+        ("req-branch".into(), None),
       ]
     );
 
@@ -1571,7 +1526,7 @@ mod tests {
   }
 
   #[test]
-  fn message_tree_links_canonical_response_items_to_the_next_request() {
+  fn message_tree_reuses_canonical_response_items_in_the_next_request() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -1633,23 +1588,27 @@ mod tests {
     db.record_tree(&thread_record(110, "thread-root", None, "req-next", next_input))
       .unwrap();
 
-    let parent = db
+    let next_node = db
       .conn
       .query_row(
-        "SELECT parent_id, common_prefix_messages, request_message_count
-         FROM session_nodes
-         WHERE id = 'req-next'",
+        "SELECT next.parent_id, next.common_prefix_messages, next.request_message_count,
+                first.message_id = tip.parent_id
+         FROM session_nodes next
+         JOIN session_nodes first ON first.id = 'req-first'
+         JOIN message_tree tip ON tip.id = next.message_id
+         WHERE next.id = 'req-next'",
         [],
         |row| {
           Ok((
             row.get::<_, Option<String>>(0)?,
             row.get::<_, i64>(1)?,
             row.get::<_, i64>(2)?,
+            row.get::<_, bool>(3)?,
           ))
         },
       )
       .unwrap();
-    assert_eq!(parent, (Some("req-first".into()), 3, 1));
+    assert_eq!(next_node, (None, 0, 4, true));
   }
 
   #[test]
@@ -2134,20 +2093,8 @@ mod tests {
     assert_eq!(
       continuations,
       vec![
-        (
-          "req-child-2".into(),
-          Some("req-child-1".into()),
-          "message_tree".into(),
-          1,
-          1,
-        ),
-        (
-          "req-root-2".into(),
-          Some("req-root-1".into()),
-          "message_tree".into(),
-          1,
-          1,
-        ),
+        ("req-child-2".into(), None, "message_tree".into(), 0, 2,),
+        ("req-root-2".into(), None, "message_tree".into(), 0, 2,),
       ]
     );
     let child_parent: String = sessions
@@ -2402,7 +2349,7 @@ mod tests {
         |r| r.get(0),
       )
       .unwrap();
-    assert_eq!(parent.as_deref(), Some("req-old"));
+    assert_eq!(parent, None);
   }
 
   #[test]
