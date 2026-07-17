@@ -513,6 +513,94 @@ fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
 }
 
 #[test]
+fn stored_session_derives_nearest_input_ancestor_when_outputs_are_reencoded() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  let mut sessions = SessionsDb::open(&sessions_db).unwrap();
+  let shared = vec![message("user", vec![part("text", b"task")])];
+  sessions
+    .record_tree(&semantic_record(
+      "reencoded",
+      "root",
+      1_800_000_001_000,
+      shared.clone(),
+      vec![],
+    ))
+    .unwrap();
+
+  let mut first_input = shared.clone();
+  first_input.extend([
+    message("reasoning", vec![part("reasoning", b"first thought")]),
+    message("function_call", vec![part("function_call", b"first call")]),
+    message(
+      "function_call_output",
+      vec![part("function_call_output", b"first result")],
+    ),
+  ]);
+  sessions
+    .record_tree(&semantic_record(
+      "reencoded",
+      "first",
+      1_800_000_002_000,
+      first_input.clone(),
+      vec![message("assistant", vec![part("text", b"flattened first output")])],
+    ))
+    .unwrap();
+
+  let mut second_input = first_input;
+  second_input.extend([
+    message("reasoning", vec![part("reasoning", b"second thought")]),
+    message("function_call", vec![part("function_call", b"second call")]),
+    message(
+      "function_call_output",
+      vec![part("function_call_output", b"second result")],
+    ),
+  ]);
+  sessions
+    .record_tree(&semantic_record(
+      "reencoded",
+      "second",
+      1_800_000_003_000,
+      second_input,
+      vec![message("assistant", vec![part("text", b"flattened second output")])],
+    ))
+    .unwrap();
+  drop(sessions);
+
+  let conn = Connection::open(&sessions_db).unwrap();
+  let stored_parent: Option<String> = conn
+    .query_row("SELECT parent_id FROM session_nodes WHERE id = 'second'", [], |row| {
+      row.get(0)
+    })
+    .unwrap();
+  assert_eq!(
+    stored_parent.as_deref(),
+    Some("root"),
+    "the fixture must reproduce the stale stored-parent behavior"
+  );
+  drop(conn);
+
+  let session = get_session_from_db(&sessions_db, "reencoded", None).unwrap().unwrap();
+  let first = session.nodes.iter().find(|node| node.node_id == "first").unwrap();
+  assert_eq!(first.parent_node_id.as_deref(), Some("root"));
+  assert_eq!(first.common_prefix_messages, 1);
+  assert_eq!(first.request_message_count, 3);
+
+  let second = session.nodes.iter().find(|node| node.node_id == "second").unwrap();
+  assert_eq!(second.parent_node_id.as_deref(), Some("first"));
+  assert_eq!(second.parent_source, "input_ancestor");
+  assert_eq!(second.common_prefix_messages, 4);
+  assert_eq!(second.request_message_count, 3);
+
+  let detail = get_session_node_from_db(&sessions_db, "reencoded", "second")
+    .unwrap()
+    .unwrap();
+  assert_eq!(detail.node.parent_node_id.as_deref(), Some("first"));
+  assert_eq!(detail.node.common_prefix_messages, 4);
+  assert_eq!(detail.node.request_message_count, 3);
+}
+
+#[test]
 fn stored_node_rejects_a_cyclic_message_tree() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");

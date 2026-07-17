@@ -528,9 +528,19 @@ export class SessionDetailView extends LitElement {
       ? node.input_message_count
       : node.request_message_count;
     const input_label = node.reduction_kind === "message_tree" ? "input" : "input delta";
+    const input_delta = node.reduction_kind === "message_tree"
+      ? html` (+${node.request_message_count.toLocaleString()} new)`
+      : nothing;
     const output_count = node.reduction_kind === "message_tree"
       ? node.output_message_count
       : node.response_message_count;
+    const ancestry_description = node.reduction_kind === "message_tree"
+      ? node.parent_node_id
+        ? `Prefix-derived child of ${node.parent_node_id}.`
+        : "Prefix-derived root node."
+      : node.parent_node_id
+        ? `Recorded child of ${node.parent_node_id}.`
+        : "Recorded root node.";
     return html`
       <li class=${node_classes}>
         <span class="session-node-graph" aria-hidden="true">
@@ -561,7 +571,7 @@ export class SessionDetailView extends LitElement {
           <span class="session-node-context">
             <span>${node.provider_id ?? "unknown provider"}</span>
             <span aria-hidden="true">·</span>
-            <span>${input_count.toLocaleString()} ${input_label}</span>
+            <span>${input_count.toLocaleString()} ${input_label}${input_delta}</span>
             <span aria-hidden="true">·</span>
             <span>${output_count.toLocaleString()} output</span>
           </span>
@@ -570,10 +580,10 @@ export class SessionDetailView extends LitElement {
             ${parent_is_outside_snapshot ? " · outside snapshot" : ""}
           </span>
           <span class="visually-hidden">
-            ${node.parent_node_id ? `Recorded child of ${node.parent_node_id}.` : "Recorded root node."}
+            ${ancestry_description}
             ${parent_is_outside_snapshot ? " Parent is outside this bounded snapshot." : ""}
             ${parent_is_loaded ? " Parent appears in the loaded session tree." : ""}
-            ${row.has_topology_warning ? " Stored parent links contain a topology warning." : ""}
+            ${row.has_topology_warning ? " Parent links contain a topology warning." : ""}
           </span>
         </button>
         ${selected

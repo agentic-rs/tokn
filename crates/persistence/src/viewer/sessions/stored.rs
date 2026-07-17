@@ -5,6 +5,7 @@ use super::super::database::open_readonly;
 use super::super::effective_limit;
 use super::super::schema::{read_schema_version, SESSION_MESSAGE_TREE_SCHEMA_VERSION, SESSION_TREE_SCHEMA_VERSION};
 use super::super::value::sqlite_status;
+use super::ancestry::derive_session_ancestry;
 use super::{
   SessionMessage, SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary,
   SessionPart, SessionPartContent, SessionPartEncoding, SessionPartOmissionReason, SessionSummary, StoredSessionDetail,
@@ -81,6 +82,9 @@ pub fn get_session_from_db(
     };
     let limit = effective_limit(limit);
     let mut nodes = select_bounded_nodes(conn, session_id, limit, schema_version)?;
+    if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION {
+      apply_derived_ancestry(conn, session_id, &mut nodes)?;
+    }
     nodes.sort_by(|left, right| left.ts.cmp(&right.ts).then_with(|| left.node_id.cmp(&right.node_id)));
     let nodes_truncated = session.request_count > nodes.len() as u64;
 
@@ -105,9 +109,12 @@ pub fn get_session_node_from_db(
   read_transaction(&mut conn, |conn| {
     let schema_version = require_tree_schema(conn)?;
 
-    let Some(node) = select_node(conn, session_id, node_id, schema_version)? else {
+    let Some(mut node) = select_node(conn, session_id, node_id, schema_version)? else {
       return Ok(None);
     };
+    if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION && node.message_id.is_some() {
+      apply_derived_ancestry(conn, session_id, std::slice::from_mut(&mut node))?;
+    }
     let tree_storage = if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION {
       select_message_tree_storage(conn, node_id)?
     } else {
@@ -185,6 +192,22 @@ fn read_transaction<T>(conn: &mut Connection, operation: impl FnOnce(&Connection
   let result = operation(&transaction)?;
   transaction.commit()?;
   Ok(result)
+}
+
+fn apply_derived_ancestry(conn: &Connection, session_id: &str, nodes: &mut [SessionNodeSummary]) -> Result<()> {
+  let ancestry = derive_session_ancestry(conn, session_id)?;
+  for node in nodes.iter_mut().filter(|node| node.message_id.is_some()) {
+    let derived = ancestry
+      .get(&node.node_id)
+      .ok_or_else(|| crate::Error::InvalidMessageTree {
+        message_id: node.message_id.clone().unwrap_or_default(),
+      })?;
+    node.parent_node_id.clone_from(&derived.parent_node_id);
+    node.parent_source = derived.parent_source.to_string();
+    node.common_prefix_messages = derived.common_prefix_messages;
+    node.request_message_count = node.input_message_count.saturating_sub(derived.common_prefix_messages);
+  }
+  Ok(())
 }
 
 fn require_tree_schema(conn: &Connection) -> Result<u32> {
