@@ -221,6 +221,14 @@ export class SessionDetailView extends LitElement {
     }));
   }
 
+  private openRequest(node: SessionNodeSummary) {
+    this.dispatchEvent(new CustomEvent<SessionNodeSummary>("open-request", {
+      detail: node,
+      bubbles: true,
+      composed: true
+    }));
+  }
+
   private renderPart(part: SessionPart) {
     switch (part.content.encoding) {
       case "text": {
@@ -424,6 +432,10 @@ export class SessionDetailView extends LitElement {
       || truncation.content_parts_truncated > 0
       || truncation.binary_parts_elided > 0;
     return html`
+      <div class="session-node-content-actions">
+        <span title=${detail.node.request_id}>Request ${shortId(detail.node.request_id)}</span>
+        <button type="button" class="secondary-button" @click=${() => this.openRequest(detail.node)}>Open request</button>
+      </div>
       ${content_is_bounded
         ? html`
             <div class="session-content-boundary" role="status">
