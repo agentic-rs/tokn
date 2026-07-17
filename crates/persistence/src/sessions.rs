@@ -469,18 +469,13 @@ fn insert_message_path(
     )?;
     if inserted == 0 {
       validate_existing_message(tx, message_id, parent_id, depth, message_hash, message)?;
-    }
-    for (part_index, part) in message.parts.iter().enumerate() {
-      upsert_part_blob(tx, part)?;
-      tx.execute(
-        "INSERT OR IGNORE INTO message_parts (message_id, part_index, part_hash)
-         VALUES (?1, ?2, ?3)",
-        params![
-          message_id.as_slice(),
-          part_index as i64,
-          hash_part(&part.part_type, part.content.as_ref())
-        ],
-      )?;
+    } else {
+      for (part_index, part) in message.parts.iter().enumerate() {
+        let part_hash = hash_part(&part.part_type, part.content.as_ref());
+        insert_or_validate_part_blob(tx, message_id, &part_hash, part)?;
+        insert_or_validate_message_part(tx, message_id, part_index, &part_hash)?;
+      }
+      validate_message_parts(tx, message_id, message)?;
     }
     ids.push(message_id);
     parent_id = Some(message_id);
@@ -518,6 +513,41 @@ fn validate_existing_message(
     && stored_hash == message_hash
     && stored.3 == message.role
     && stored.4 == message.status.map(i64::from);
+  if !matches {
+    return Err(crate::Error::InvalidMessageTree {
+      message_id: encode_message_id(&message_id),
+    });
+  }
+  validate_message_parts(conn, message_id, message)
+}
+
+fn validate_message_parts(conn: &Connection, message_id: MessageId, message: &MessageRecord) -> Result<()> {
+  let mut stmt = conn.prepare(
+    "SELECT part.part_index, part.part_hash, blob.part_type, blob.content
+     FROM message_parts part
+     LEFT JOIN part_blobs blob ON blob.hash = part.part_hash
+     WHERE part.message_id = ?1
+     ORDER BY part.part_index",
+  )?;
+  let stored_parts = stmt
+    .query_map(params![message_id.as_slice()], |row| {
+      Ok((
+        row.get::<_, i64>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, Option<Vec<u8>>>(3)?,
+      ))
+    })?
+    .collect::<rusqlite::Result<Vec<_>>>()?;
+  let matches = stored_parts.len() == message.parts.len()
+    && stored_parts.iter().zip(&message.parts).enumerate().all(
+      |(part_index, ((stored_index, stored_hash, stored_type, stored_content), part))| {
+        *stored_index == part_index as i64
+          && *stored_hash == hash_part(&part.part_type, part.content.as_ref())
+          && stored_type.as_deref() == Some(part.part_type.as_str())
+          && stored_content.as_deref() == Some(part.content.as_ref())
+      },
+    );
   if !matches {
     return Err(crate::Error::InvalidMessageTree {
       message_id: encode_message_id(&message_id),
@@ -625,12 +655,54 @@ fn encode_message_id(value: &[u8]) -> String {
   out
 }
 
-fn upsert_part_blob(tx: &rusqlite::Transaction<'_>, part: &PartRecord) -> Result<()> {
-  let hash = hash_part(&part.part_type, part.content.as_ref());
-  tx.execute(
+fn insert_or_validate_part_blob(
+  conn: &Connection,
+  message_id: MessageId,
+  part_hash: &str,
+  part: &PartRecord,
+) -> Result<()> {
+  let inserted = conn.execute(
     "INSERT OR IGNORE INTO part_blobs (hash, part_type, content) VALUES (?1, ?2, ?3)",
-    params![hash, part.part_type, part.content.as_ref()],
+    params![part_hash, part.part_type, part.content.as_ref()],
   )?;
+  if inserted == 0 {
+    let stored = conn.query_row(
+      "SELECT part_type, content FROM part_blobs WHERE hash = ?1",
+      params![part_hash],
+      |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+    )?;
+    if stored.0 != part.part_type || stored.1.as_slice() != part.content.as_ref() {
+      return Err(crate::Error::InvalidMessageTree {
+        message_id: encode_message_id(&message_id),
+      });
+    }
+  }
+  Ok(())
+}
+
+fn insert_or_validate_message_part(
+  conn: &Connection,
+  message_id: MessageId,
+  part_index: usize,
+  part_hash: &str,
+) -> Result<()> {
+  let inserted = conn.execute(
+    "INSERT OR IGNORE INTO message_parts (message_id, part_index, part_hash)
+     VALUES (?1, ?2, ?3)",
+    params![message_id.as_slice(), part_index as i64, part_hash],
+  )?;
+  if inserted == 0 {
+    let stored_hash = conn.query_row(
+      "SELECT part_hash FROM message_parts WHERE message_id = ?1 AND part_index = ?2",
+      params![message_id.as_slice(), part_index as i64],
+      |row| row.get::<_, String>(0),
+    )?;
+    if stored_hash != part_hash {
+      return Err(crate::Error::InvalidMessageTree {
+        message_id: encode_message_id(&message_id),
+      });
+    }
+  }
   Ok(())
 }
 
@@ -1553,6 +1625,92 @@ mod tests {
   }
 
   #[test]
+  fn reused_message_paths_reject_missing_or_corrupt_parts() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let record = thread_record(100, "thread-root", None, "req-first", vec![msg("user", "hello")]);
+    db.record_tree(&record).unwrap();
+
+    let message_id = db
+      .conn
+      .query_row(
+        "SELECT message_id FROM session_nodes WHERE id = 'req-first'",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+      )
+      .unwrap();
+    let expected_hash = hash_part("text", b"hello");
+    db.conn
+      .execute(
+        "DELETE FROM message_parts WHERE message_id = ?1",
+        params![message_id.as_slice()],
+      )
+      .unwrap();
+
+    let mut retry = record.clone();
+    retry.ts = 110;
+    retry.request_id = "req-missing-part".into();
+    assert!(matches!(
+      db.record_tree(&retry),
+      Err(crate::Error::InvalidMessageTree { .. })
+    ));
+    let part_count: i64 = db
+      .conn
+      .query_row(
+        "SELECT COUNT(*) FROM message_parts WHERE message_id = ?1",
+        params![message_id.as_slice()],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(part_count, 0, "recording must not repair an immutable message");
+
+    let wrong_hash = hash_part("text", b"wrong");
+    db.conn
+      .execute(
+        "INSERT INTO part_blobs (hash, part_type, content) VALUES (?1, 'text', ?2)",
+        params![wrong_hash, b"wrong".as_slice()],
+      )
+      .unwrap();
+    db.conn
+      .execute(
+        "INSERT INTO message_parts (message_id, part_index, part_hash) VALUES (?1, 0, ?2)",
+        params![message_id.as_slice(), wrong_hash],
+      )
+      .unwrap();
+    retry.ts = 120;
+    retry.request_id = "req-wrong-mapping".into();
+    assert!(matches!(
+      db.record_tree(&retry),
+      Err(crate::Error::InvalidMessageTree { .. })
+    ));
+
+    db.conn
+      .execute(
+        "UPDATE message_parts SET part_hash = ?1 WHERE message_id = ?2 AND part_index = 0",
+        params![expected_hash, message_id.as_slice()],
+      )
+      .unwrap();
+    db.conn
+      .execute(
+        "UPDATE part_blobs SET content = ?1 WHERE hash = ?2",
+        params![b"tampered".as_slice(), expected_hash],
+      )
+      .unwrap();
+    let conflicting_blob = thread_record(
+      130,
+      "thread-root",
+      None,
+      "req-corrupt-blob",
+      vec![msg("assistant", "hello")],
+    );
+    assert!(matches!(
+      db.record_tree(&conflicting_blob),
+      Err(crate::Error::InvalidMessageTree { .. })
+    ));
+  }
+
+  #[test]
   fn message_tree_branches_after_a_sixty_five_message_prefix() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
@@ -2047,6 +2205,55 @@ mod tests {
         ),
       ]
     );
+  }
+
+  #[test]
+  fn session_messages_view_keeps_messages_without_parts() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    db.record_tree(&TreeRequestRecord {
+      ts: 100,
+      session_id: "sess-empty".into(),
+      thread_id: None,
+      parent_thread_id: None,
+      parent_session_id: None,
+      request_id: "req-empty".into(),
+      endpoint: "responses".into(),
+      status: Some(200),
+      account_id: None,
+      provider_id: None,
+      model: None,
+      request_messages: vec![MessageRecord {
+        role: "user".into(),
+        status: None,
+        parts: Vec::new(),
+      }],
+      response_messages: Vec::new(),
+    })
+    .unwrap();
+
+    let row = db
+      .conn
+      .query_row(
+        "SELECT side, message_seq, role, part_index, part_hash, part_type, content
+         FROM session_messages
+         WHERE node_id = 'req-empty'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<Vec<u8>>>(6)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(row, ("request".into(), 0, "user".into(), None, None, None, None));
   }
 
   #[test]

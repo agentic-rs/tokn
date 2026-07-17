@@ -513,6 +513,54 @@ fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
 }
 
 #[test]
+fn stored_node_rejects_a_cyclic_message_tree() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  let mut sessions = SessionsDb::open(&sessions_db).unwrap();
+  sessions
+    .record_tree(&semantic_record(
+      "cyclic",
+      "cyclic-node",
+      1_800_000_001_000,
+      vec![
+        message("user", vec![part("text", b"first")]),
+        message("user", vec![part("text", b"second")]),
+      ],
+      vec![],
+    ))
+    .unwrap();
+  drop(sessions);
+
+  let conn = Connection::open(&sessions_db).unwrap();
+  let tip_id = conn
+    .query_row(
+      "SELECT message_id FROM session_nodes WHERE id = 'cyclic-node'",
+      [],
+      |row| row.get::<_, Vec<u8>>(0),
+    )
+    .unwrap();
+  let root_id = conn
+    .query_row(
+      "SELECT parent_id FROM message_tree WHERE id = ?1",
+      params![tip_id.as_slice()],
+      |row| row.get::<_, Vec<u8>>(0),
+    )
+    .unwrap();
+  conn
+    .execute(
+      "UPDATE message_tree SET parent_id = ?1 WHERE id = ?2",
+      params![tip_id.as_slice(), root_id.as_slice()],
+    )
+    .unwrap();
+  drop(conn);
+
+  assert!(matches!(
+    get_session_node_from_db(&sessions_db, "cyclic", "cyclic-node"),
+    Err(crate::Error::InvalidMessageTree { .. })
+  ));
+}
+
+#[test]
 fn stored_node_bounds_message_ranges_and_preserves_their_order() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");

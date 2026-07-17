@@ -71,7 +71,7 @@ WITH RECURSIVE message_paths(node_id, message_id) AS (
   SELECT id, message_id
   FROM session_nodes
   WHERE message_id IS NOT NULL
-  UNION ALL
+  UNION
   SELECT path.node_id, message.parent_id
   FROM message_paths path
   JOIN message_tree message ON message.id = path.message_id
@@ -149,6 +149,6 @@ LEFT JOIN session_heads h ON h.session_id = s.id
 LEFT JOIN session_threads t ON t.session_id = n.session_id AND t.thread_id = n.thread_id
 JOIN message_paths path ON path.node_id = n.id
 JOIN message_tree message ON message.id = path.message_id
-JOIN message_parts part ON part.message_id = message.id
-JOIN part_blobs blob ON blob.hash = part.part_hash
+LEFT JOIN message_parts part ON part.message_id = message.id
+LEFT JOIN part_blobs blob ON blob.hash = part.part_hash
 WHERE n.message_id IS NOT NULL;

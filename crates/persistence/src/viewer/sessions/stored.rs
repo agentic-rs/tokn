@@ -114,12 +114,15 @@ pub fn get_session_node_from_db(
       None
     };
     let (request_stats, response_stats, request_refs, response_refs) = match tree_storage {
-      Some(storage) => (
-        select_tree_side_stats(conn, &storage, MessageSide::Input)?,
-        select_tree_side_stats(conn, &storage, MessageSide::Output)?,
-        select_tree_message_refs(conn, &storage, MessageSide::Input, MAX_REQUEST_MESSAGES)?,
-        select_tree_message_refs(conn, &storage, MessageSide::Output, MAX_RESPONSE_MESSAGES)?,
-      ),
+      Some(storage) => {
+        validate_message_tree_path(conn, &storage)?;
+        (
+          select_tree_side_stats(conn, &storage, MessageSide::Input)?,
+          select_tree_side_stats(conn, &storage, MessageSide::Output)?,
+          select_tree_message_refs(conn, &storage, MessageSide::Input, MAX_REQUEST_MESSAGES)?,
+          select_tree_message_refs(conn, &storage, MessageSide::Output, MAX_RESPONSE_MESSAGES)?,
+        )
+      }
       None => (
         select_side_stats(conn, node_id, "request")?,
         select_side_stats(conn, node_id, "response")?,
@@ -377,6 +380,15 @@ struct MessageTreeStorage {
   output_count: u64,
 }
 
+struct MessageTreePathStats {
+  rows: i64,
+  distinct_depths: i64,
+  min_depth: i64,
+  max_depth: i64,
+  roots: i64,
+  invalid_edges: i64,
+}
+
 #[derive(Clone, Copy)]
 enum MessageSide {
   Input,
@@ -400,6 +412,67 @@ impl MessageTreeStorage {
       MessageSide::Output => self.output_count,
     }
   }
+}
+
+fn validate_message_tree_path(conn: &Connection, storage: &MessageTreeStorage) -> Result<()> {
+  let expected_depth = storage
+    .input_count
+    .checked_add(storage.output_count)
+    .and_then(|depth| i64::try_from(depth).ok())
+    .filter(|depth| *depth > 0)
+    .ok_or_else(|| crate::Error::InvalidMessageTree {
+      message_id: storage.tip_hex.clone(),
+    })?;
+  let stats = conn.query_row(
+    "WITH RECURSIVE path(id, parent_id, depth) AS (
+       SELECT id, parent_id, depth FROM message_tree WHERE id = ?1
+       UNION
+       SELECT parent.id, parent.parent_id, parent.depth
+       FROM path child
+       JOIN message_tree parent ON parent.id = child.parent_id
+     )
+     SELECT
+       COUNT(*),
+       COUNT(DISTINCT depth),
+       COALESCE(MIN(depth), 0),
+       COALESCE(MAX(depth), 0),
+       COALESCE(SUM(CASE WHEN parent_id IS NULL THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(
+         CASE
+           WHEN parent_id IS NULL THEN CASE WHEN depth = 1 THEN 0 ELSE 1 END
+           WHEN EXISTS (
+             SELECT 1
+             FROM message_tree parent
+             WHERE parent.id = path.parent_id AND parent.depth = path.depth - 1
+           ) THEN 0
+           ELSE 1
+         END
+       ), 0)
+     FROM path",
+    params![storage.tip_id.as_slice()],
+    |row| {
+      Ok(MessageTreePathStats {
+        rows: row.get(0)?,
+        distinct_depths: row.get(1)?,
+        min_depth: row.get(2)?,
+        max_depth: row.get(3)?,
+        roots: row.get(4)?,
+        invalid_edges: row.get(5)?,
+      })
+    },
+  )?;
+  let valid = stats.rows == expected_depth
+    && stats.distinct_depths == expected_depth
+    && stats.min_depth == 1
+    && stats.max_depth == expected_depth
+    && stats.roots == 1
+    && stats.invalid_edges == 0;
+  if !valid {
+    return Err(crate::Error::InvalidMessageTree {
+      message_id: storage.tip_hex.clone(),
+    });
+  }
+  Ok(())
 }
 
 fn select_message_tree_storage(conn: &Connection, node_id: &str) -> Result<Option<MessageTreeStorage>> {
@@ -440,7 +513,7 @@ fn select_tree_side_stats(conn: &Connection, storage: &MessageTreeStorage, side:
   let (messages, parts, content_bytes) = conn.query_row(
     "WITH RECURSIVE path(id, parent_id, depth) AS (
        SELECT id, parent_id, depth FROM message_tree WHERE id = ?1
-       UNION ALL
+       UNION
        SELECT parent.id, parent.parent_id, parent.depth
        FROM path child
        JOIN message_tree parent ON parent.id = child.parent_id
@@ -485,7 +558,7 @@ fn select_tree_message_refs(
   let sql = format!(
     "WITH RECURSIVE path(id, parent_id, depth, role, status) AS (
        SELECT id, parent_id, depth, role, status FROM message_tree WHERE id = ?1
-       UNION ALL
+       UNION
        SELECT parent.id, parent.parent_id, parent.depth, parent.role, parent.status
        FROM path child
        JOIN message_tree parent ON parent.id = child.parent_id
