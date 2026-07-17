@@ -36,6 +36,10 @@ function emptyFilters(): RequestFilters {
   return { query: "", provider_id: "", status: "", errors_only: false };
 }
 
+function requestDay(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
 type HistoryMode = "push" | "replace" | null;
 
 class InspectApp extends LitElement {
@@ -1027,6 +1031,31 @@ class InspectApp extends LitElement {
     await this.loadSession(session_id, session, false, "push");
   }
 
+  private async openRequestFromSession(node: SessionNodeSummary) {
+    ++this.navigation_workflow_id;
+    this.setActiveView("requests", false, null);
+    this.search_query = "";
+    this.provider_id = "";
+    this.status_filter = "";
+    this.errors_only = false;
+    this.applied_filters = emptyFilters();
+    this.selected_day = requestDay(node.ts);
+    this.resetRequestSelection();
+    void this.loadRequestDays();
+    void this.loadRequests();
+    const loaded = await this.loadRequestDetail(
+      this.selected_day,
+      node.request_id,
+      undefined,
+      undefined,
+      false,
+      "push"
+    );
+    if (!loaded && this.request_detail_state === "error" && this.request_detail_error === "request not found") {
+      this.request_detail_error = "Request history is unavailable; semantic session data is still retained.";
+    }
+  }
+
   private async loadRequestsView() {
     void this.loadRequestDays();
     if (this.selected_day) {
@@ -1341,6 +1370,7 @@ class InspectApp extends LitElement {
         @session-retry=${this.retrySessionDetail}
         @session-node-retry=${this.retrySessionNode}
         @session-node-select=${(event: Event) => this.selectSessionNode(eventDetail<SessionNodeSummary>(event))}
+        @open-request=${(event: Event) => void this.openRequestFromSession(eventDetail<SessionNodeSummary>(event))}
       ></session-detail-view>
     `;
   }
