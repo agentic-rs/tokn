@@ -977,8 +977,23 @@ class InspectApp extends LitElement {
     }
   }
 
+  private collapseSessionNode(history_mode: HistoryMode = "push") {
+    this.session_node_controller?.abort();
+    this.session_node_controller = undefined;
+    ++this.session_node_load_id;
+    this.requested_session_node_id = undefined;
+    this.selected_session_node_id = undefined;
+    this.selected_session_node_detail = undefined;
+    this.session_node_state = "idle";
+    this.session_node_error = undefined;
+    if (history_mode) {
+      this.syncUrl(history_mode);
+    }
+  }
+
   private selectSessionNode(node: SessionNodeSummary) {
-    if (node.node_id === this.selected_session_node_id && this.session_node_state === "ready") {
+    if (node.node_id === this.selected_session_node_id) {
+      this.collapseSessionNode();
       return;
     }
     void this.loadSessionNode(node, false, "push");

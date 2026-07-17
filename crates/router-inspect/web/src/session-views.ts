@@ -1,5 +1,7 @@
 import { LitElement, html, nothing } from "lit";
 import { formatCompactTimestamp, formatDuration, formatTimestamp, sessionOutcome, shortId } from "./format";
+import { buildSessionTree } from "./session-tree";
+import type { SessionTreeModel, SessionTreeRow } from "./session-tree";
 import type {
   LoadState,
   SessionDetail,
@@ -10,6 +12,10 @@ import type {
   SessionSummary,
   TimezoneMode
 } from "./types";
+
+const COMPACT_TREE_LANE_THRESHOLD = 6;
+const TREE_LANE_WIDTH = 16;
+const TREE_NODE_Y = 25;
 
 function statusOutcome(status: number | null) {
   if (status === null) {
@@ -68,9 +74,9 @@ function requestSectionCopy(reduction_kind: string) {
   switch (reduction_kind) {
     case "message_tree":
       return {
-        direction: "Complete",
-        title: "Input prefix",
-        empty_message: "No semantic input was stored for this observation."
+        direction: "New",
+        title: "Input delta",
+        empty_message: "No new semantic input was stored for this observation."
       };
     case "suffix_append":
       return {
@@ -97,6 +103,14 @@ function requestSectionCopy(reduction_kind: string) {
         empty_message: "No semantic input was stored for this node."
       };
   }
+}
+
+function treeLaneX(lane: number): number {
+  return (lane + 0.5) * TREE_LANE_WIDTH;
+}
+
+function treeLaneClass(lane_count: number): string {
+  return `session-tree-lanes-${Math.min(lane_count, COMPACT_TREE_LANE_THRESHOLD)}`;
 }
 
 export class SessionList extends LitElement {
@@ -281,6 +295,122 @@ export class SessionDetailView extends LitElement {
     return `session-node-${kind}-${encodeURIComponent(node_id)}`;
   }
 
+  private renderNodeGraph(row: SessionTreeRow, lane_count: number) {
+    const view_width = lane_count * TREE_LANE_WIDTH;
+    const node_x = treeLaneX(row.node_lane);
+    const node_path = `M ${node_x} ${TREE_NODE_Y} l 0 0.001`;
+    const edge_paths = row.connections.map((connection) => {
+      const from_x = treeLaneX(connection.from_lane);
+      const to_x = treeLaneX(connection.to_lane);
+      const from_y = connection.kind === "parent" ? TREE_NODE_Y : 0;
+      return html`
+        <path
+          class="session-tree-edge ${connection.kind} ${connection.active ? "active" : ""}"
+          d=${`M ${from_x} ${from_y} L ${to_x} 100`}
+        ></path>
+      `;
+    });
+    const dot_classes = [
+      "session-tree-dot",
+      row.node.is_head ? "head" : "",
+      row.child_count > 1 ? "branch" : "",
+      row.has_topology_warning ? "warning" : ""
+    ].filter(Boolean).join(" ");
+    return html`
+      <svg
+        viewBox=${`0 0 ${view_width} 100`}
+        preserveAspectRatio="none"
+        focusable="false"
+        aria-hidden="true"
+      >
+        ${row.starts_here
+          ? nothing
+          : html`
+              <path
+                class="session-tree-edge incoming ${row.is_on_head_path ? "active" : ""}"
+                d=${`M ${node_x} 0 L ${node_x} ${TREE_NODE_Y}`}
+              ></path>
+            `}
+        ${edge_paths}
+        <path class="${dot_classes} outline" d=${node_path}></path>
+        <path class="${dot_classes} fill" d=${node_path}></path>
+      </svg>
+    `;
+  }
+
+  private renderNodeGraphContinuation(row: SessionTreeRow, lane_count: number) {
+    const view_width = lane_count * TREE_LANE_WIDTH;
+    return html`
+      <svg
+        viewBox=${`0 0 ${view_width} 100`}
+        preserveAspectRatio="none"
+        focusable="false"
+        aria-hidden="true"
+      >
+        ${row.bottom_lanes.map((_, lane) => html`
+          <path
+            class="session-tree-edge continuation ${row.bottom_lane_is_active[lane] ? "active" : ""}"
+            d=${`M ${treeLaneX(lane)} 0 L ${treeLaneX(lane)} 100`}
+          ></path>
+        `)}
+      </svg>
+    `;
+  }
+
+  private renderTreeBoundary(
+    tree: SessionTreeModel,
+    lane_count: number,
+    nodes_truncated: boolean,
+    omitted_nodes: number,
+    loaded_parent?: SessionNodeSummary
+  ) {
+    if (tree.missing_parent_ids.length === 0) {
+      return nothing;
+    }
+    const view_width = lane_count * TREE_LANE_WIDTH;
+    const boundary_lanes = tree.remaining_lanes.length > 0
+      ? tree.remaining_lanes.map((_, lane) => lane)
+      : tree.missing_parent_ids.map((_, lane) => lane);
+    const visible_lanes = [...new Set(boundary_lanes)];
+    const label = loaded_parent
+      ? "Connects to loaded tree"
+      : nodes_truncated
+        ? "Earlier ancestry omitted"
+        : "Parent nodes unavailable";
+    const detail = loaded_parent
+      ? `Parent ${shortId(loaded_parent.node_id)} appears in the session tree below.`
+      : nodes_truncated
+        ? `${omitted_nodes.toLocaleString()} ${omitted_nodes === 1 ? "node falls" : "nodes fall"} outside this bounded tree snapshot.`
+        : "The stored parent links point outside the returned session tree.";
+    const link_detail = loaded_parent
+      ? "Parent link resolved in the loaded snapshot"
+      : `${tree.missing_parent_ids.length.toLocaleString()} parent ${tree.missing_parent_ids.length === 1 ? "link" : "links"} outside the snapshot`;
+    return html`
+      <li class="session-tree-boundary ${loaded_parent ? "loaded-parent" : ""} ${treeLaneClass(lane_count)}">
+        <span class="session-tree-boundary-graph" aria-hidden="true">
+          <svg viewBox=${`0 0 ${view_width} 100`} preserveAspectRatio="none" focusable="false">
+            ${visible_lanes.map((lane) => html`
+              <path class="session-tree-edge boundary" d=${`M ${treeLaneX(lane)} 0 L ${treeLaneX(lane)} 48`}></path>
+              <path
+                class="session-tree-boundary-dot outline"
+                d=${`M ${treeLaneX(lane)} 52 l 0 0.001`}
+              ></path>
+              <path
+                class="session-tree-boundary-dot fill"
+                d=${`M ${treeLaneX(lane)} 52 l 0 0.001`}
+              ></path>
+            `)}
+          </svg>
+        </span>
+        <div class="session-tree-boundary-card" role="note">
+          <strong>${label}</strong>
+          <span>${detail}</span>
+          <span title=${loaded_parent?.node_id ?? tree.missing_parent_ids.join(", ")}>${link_detail}</span>
+        </div>
+      </li>
+    `;
+  }
+
   private renderLoadedNodeContent(detail: SessionNodeDetail) {
     const truncation = detail.truncation;
     const request_section = requestSectionCopy(detail.node.reduction_kind);
@@ -380,19 +510,42 @@ export class SessionDetailView extends LitElement {
     `;
   }
 
-  private renderNode(node: SessionNodeSummary) {
+  private renderNode(row: SessionTreeRow, lane_count: number, loaded_parent?: SessionNodeSummary) {
+    const node = row.node;
     const selected = node.node_id === this.selected_node_id;
     const outcome = statusOutcome(node.status);
+    const parent_is_loaded = Boolean(loaded_parent && node.parent_node_id === loaded_parent.node_id);
+    const parent_is_outside_snapshot = row.parent_is_missing && !parent_is_loaded;
+    const node_classes = [
+      "session-node",
+      treeLaneClass(lane_count),
+      selected ? "selected" : "",
+      row.is_on_head_path ? "head-path" : "",
+      parent_is_outside_snapshot ? "boundary-child" : "",
+      row.has_topology_warning ? "topology-warning" : ""
+    ].filter(Boolean).join(" ");
     const input_count = node.reduction_kind === "message_tree"
       ? node.input_message_count
       : node.request_message_count;
     const input_label = node.reduction_kind === "message_tree" ? "input" : "input delta";
+    const input_delta = node.reduction_kind === "message_tree"
+      ? html` (+${node.request_message_count.toLocaleString()} new)`
+      : nothing;
     const output_count = node.reduction_kind === "message_tree"
       ? node.output_message_count
       : node.response_message_count;
+    const ancestry_description = node.reduction_kind === "message_tree"
+      ? node.parent_node_id
+        ? `Prefix-derived child of ${node.parent_node_id}.`
+        : "Prefix-derived root node."
+      : node.parent_node_id
+        ? `Recorded child of ${node.parent_node_id}.`
+        : "Recorded root node.";
     return html`
-      <li class="session-node ${selected ? "selected" : ""}">
-        <span class="session-node-rail" aria-hidden="true"><span></span></span>
+      <li class=${node_classes}>
+        <span class="session-node-graph" aria-hidden="true">
+          ${this.renderNodeGraph(row, lane_count)}
+        </span>
         <button
           id=${this.nodeDomId("trigger", node.node_id)}
           type="button"
@@ -400,11 +553,15 @@ export class SessionDetailView extends LitElement {
           data-node-id=${node.node_id}
           aria-expanded=${String(selected)}
           aria-controls=${selected ? this.nodeDomId("content", node.node_id) : nothing}
+          aria-current=${node.is_head ? "true" : nothing}
           @click=${() => this.selectNode(node)}
         >
           <span class="session-node-primary">
             <time datetime=${new Date(node.ts).toISOString()}>${formatTimestamp(node.ts, this.timezone)}</time>
             <span class="status ${outcome.tone}" title=${outcome.title}>${outcome.label}</span>
+            ${row.child_count > 1
+              ? html`<span class="branch-badge">${row.child_count.toLocaleString()} branches</span>`
+              : nothing}
             ${node.is_head ? html`<span class="head-badge">Current head</span>` : nothing}
           </span>
           <span class="session-node-title">
@@ -414,14 +571,28 @@ export class SessionDetailView extends LitElement {
           <span class="session-node-context">
             <span>${node.provider_id ?? "unknown provider"}</span>
             <span aria-hidden="true">·</span>
-            <span>${input_count.toLocaleString()} ${input_label}</span>
+            <span>${input_count.toLocaleString()} ${input_label}${input_delta}</span>
             <span aria-hidden="true">·</span>
             <span>${output_count.toLocaleString()} output</span>
           </span>
           <span class="session-node-id" title=${node.request_id}>
             request ${shortId(node.request_id)} · ${node.parent_node_id ? `parent ${shortId(node.parent_node_id)}` : "root"}
+            ${parent_is_outside_snapshot ? " · outside snapshot" : ""}
+          </span>
+          <span class="visually-hidden">
+            ${ancestry_description}
+            ${parent_is_outside_snapshot ? " Parent is outside this bounded snapshot." : ""}
+            ${parent_is_loaded ? " Parent appears in the loaded session tree." : ""}
+            ${row.has_topology_warning ? " Parent links contain a topology warning." : ""}
           </span>
         </button>
+        ${selected
+          ? html`
+              <span class="session-node-content-graph" aria-hidden="true">
+                ${this.renderNodeGraphContinuation(row, lane_count)}
+              </span>
+            `
+          : nothing}
         ${this.renderNodeContent(node)}
       </li>
     `;
@@ -458,7 +629,10 @@ export class SessionDetailView extends LitElement {
     }
 
     const { session, nodes } = this.detail;
-    const display_nodes = [...nodes].reverse();
+    const session_tree = buildSessionTree(nodes);
+    const lane_count = Math.max(1, session_tree.max_lane_count);
+    const omitted_nodes = Math.max(0, session.request_count - nodes.length);
+    const has_omitted_ancestry = session_tree.missing_parent_ids.length > 0;
     const selected_node_is_loaded = Boolean(
       this.selected_node_id && nodes.some((node) => node.node_id === this.selected_node_id)
     );
@@ -468,14 +642,19 @@ export class SessionDetailView extends LitElement {
       && node_detail.node.node_id === this.selected_node_id
       ? node_detail.node
       : undefined;
-    const model = session.model ?? "Unknown model";
+    const linked_tree = linked_node ? buildSessionTree([linked_node]) : undefined;
+    const linked_lane_count = linked_tree ? Math.max(1, linked_tree.max_lane_count) : 1;
+    const linked_parent = linked_node?.parent_node_id
+      ? nodes.find((node) => node.node_id === linked_node.parent_node_id)
+      : undefined;
+    const session_model = session.model ?? "Unknown model";
     return html`
       <section class="detail-content session-detail-content">
         <header class="detail-header session-detail-header">
           <button type="button" class="mobile-back-button" @click=${this.close}>← Sessions</button>
           <div class="detail-title">
             <p class="eyebrow">session · ${shortId(session.session_id)}</p>
-            <h2>${model}<span> on ${session.provider_id ?? "unknown provider"}</span></h2>
+            <h2>${session_model}<span> on ${session.provider_id ?? "unknown provider"}</span></h2>
             <p class="muted" title=${session.session_id}>${session.session_id || "Missing session identifier"}</p>
           </div>
           <button
@@ -510,13 +689,40 @@ export class SessionDetailView extends LitElement {
         <section class="session-activity">
           <header class="session-section-header">
             <div>
-              <p class="eyebrow">Recent semantic nodes</p>
-              <h3>Session activity</h3>
+              <p class="eyebrow">Recorded parent graph</p>
+              <h3>Session tree</h3>
             </div>
-            <span>${nodes.length.toLocaleString()} loaded · latest first${this.detail.nodes_truncated ? " · bounded" : ""}</span>
+            <span>
+              ${nodes.length.toLocaleString()} loaded · head branch first${this.detail.nodes_truncated ? " · bounded" : ""}
+              ${session_tree.max_lane_count > COMPACT_TREE_LANE_THRESHOLD ? " · compressed lanes" : ""}
+            </span>
           </header>
           ${this.detail.nodes_truncated
-            ? html`<p class="session-truncation-note">Older nodes are omitted from this bounded viewer response.</p>`
+            ? html`
+                <p class="session-truncation-note">
+                  ${omitted_nodes.toLocaleString()} older nodes are omitted.
+                  ${has_omitted_ancestry
+                    ? " Amber graph endpoints continue into the omitted ancestry."
+                    : " The graph shows every parent link available in this snapshot."}
+                </p>
+              `
+            : nothing}
+          ${session_tree.cycle_node_ids.length > 0
+            ? html`
+                <p class="session-topology-warning" role="alert">
+                  ${session_tree.cycle_node_ids.length.toLocaleString()} nodes contain cyclic parent links; their graph
+                  edges were detached defensively.
+                </p>
+              `
+            : nothing}
+          ${nodes.length > 0
+            ? html`
+                <p class="session-tree-direction">
+                  <span>Leaves and current-head branch</span>
+                  <span aria-hidden="true">↓</span>
+                  <span>recorded parents</span>
+                </p>
+              `
             : nothing}
           ${!this.selected_node_id
             ? html`<p class="session-content-hint">Open a node to load its conversation content from <code>sessions.db</code>.</p>`
@@ -531,8 +737,13 @@ export class SessionDetailView extends LitElement {
                     </div>
                     <span>${shortId(this.selected_node_id)}</span>
                   </header>
-                  ${linked_node
-                    ? html`<ol class="session-node-list linked-node-list">${this.renderNode(linked_node)}</ol>`
+                  ${linked_tree
+                    ? html`
+                        <ol class="session-node-list linked-node-list">
+                          ${linked_tree.rows.map((row) => this.renderNode(row, linked_lane_count, linked_parent))}
+                          ${this.renderTreeBoundary(linked_tree, linked_lane_count, false, 0, linked_parent)}
+                        </ol>
+                      `
                     : this.node_state === "loading"
                       ? html`
                           <div class="inline-state" role="status" aria-live="polite">
@@ -551,7 +762,12 @@ export class SessionDetailView extends LitElement {
               `
             : nothing}
           ${nodes.length > 0
-            ? html`<ol class="session-node-list">${display_nodes.map((node) => this.renderNode(node))}</ol>`
+            ? html`
+                <ol class="session-node-list">
+                  ${session_tree.rows.map((row) => this.renderNode(row, lane_count))}
+                  ${this.renderTreeBoundary(session_tree, lane_count, this.detail.nodes_truncated, omitted_nodes)}
+                </ol>
+              `
             : html`<p class="empty">This migrated session has no semantic nodes.</p>`}
         </section>
       </section>
