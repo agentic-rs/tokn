@@ -335,7 +335,7 @@ fn stored_sessions_normalize_epoch_seconds_before_sorting_and_serializing() {
 }
 
 #[test]
-fn stored_node_returns_full_input_prefix_and_tags_part_content() {
+fn stored_node_returns_input_delta_and_tags_part_content() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -379,9 +379,9 @@ fn stored_node_returns_full_input_prefix_and_tags_part_content() {
   assert_eq!(detail.node.message_id.as_ref().unwrap().len(), 64);
   assert_eq!(detail.node.input_message_count, 2);
   assert_eq!(detail.node.output_message_count, 1);
-  assert_eq!(detail.request_messages.len(), 2);
+  assert_eq!(detail.request_messages.len(), 1);
   assert!(matches!(
-    detail.request_messages[1].parts[0].content,
+    detail.request_messages[0].parts[0].content,
     SessionPartContent::Json { ref value } if value["tool"] == "search"
   ));
   assert_eq!(detail.response_messages.len(), 1);
@@ -394,21 +394,20 @@ fn stored_node_returns_full_input_prefix_and_tags_part_content() {
     SessionPartContent::Binary { byte_length: 2 }
   ));
   assert_eq!(detail.request_messages[0].parts_total, 1);
-  assert_eq!(detail.request_messages[1].parts_total, 1);
   assert_eq!(detail.response_messages[0].parts_total, 3);
-  assert_eq!(detail.truncation.request_messages.messages_total, 2);
-  assert_eq!(detail.truncation.request_messages.messages_returned, 2);
+  assert_eq!(detail.truncation.request_messages.messages_total, 1);
+  assert_eq!(detail.truncation.request_messages.messages_returned, 1);
   assert_eq!(detail.truncation.request_messages.messages_omitted_before, 0);
   assert_eq!(detail.truncation.response_messages.messages_total, 1);
-  assert_eq!(detail.truncation.parts_total, 5);
-  assert_eq!(detail.truncation.parts_returned, 5);
+  assert_eq!(detail.truncation.parts_total, 4);
+  assert_eq!(detail.truncation.parts_returned, 4);
   assert_eq!(detail.truncation.parts_omitted, 0);
-  assert_eq!(detail.truncation.content_bytes_total, 39);
-  assert_eq!(detail.truncation.content_bytes_returned, 37);
+  assert_eq!(detail.truncation.content_bytes_total, 34);
+  assert_eq!(detail.truncation.content_bytes_returned, 32);
   assert_eq!(detail.truncation.content_parts_truncated, 0);
   assert_eq!(detail.truncation.binary_parts_elided, 1);
   let json = serde_json::to_value(&detail).unwrap();
-  assert_eq!(json["request_messages"][1]["parts"][0]["content"]["encoding"], "json");
+  assert_eq!(json["request_messages"][0]["parts"][0]["content"]["encoding"], "json");
   assert_eq!(
     json["response_messages"][0]["parts"][2]["content"]["encoding"],
     "binary"
@@ -475,7 +474,7 @@ fn stored_node_returns_full_input_from_an_independent_branch() {
 }
 
 #[test]
-fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
+fn stored_node_returns_empty_input_delta_when_node_reuses_parent_prefix() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -507,8 +506,9 @@ fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
   assert_eq!(detail.node.request_message_count, 0);
   assert_eq!(detail.node.input_message_count, 1);
   assert_eq!(detail.node.output_message_count, 1);
-  assert_eq!(detail.request_messages.len(), 1);
-  assert_eq!(detail.truncation.request_messages.messages_total, 1);
+  assert!(detail.request_messages.is_empty());
+  assert_eq!(detail.truncation.request_messages.messages_total, 0);
+  assert_eq!(detail.truncation.request_messages.messages_returned, 0);
   assert_eq!(detail.response_messages.len(), 1);
 }
 
@@ -598,6 +598,8 @@ fn stored_session_derives_nearest_input_ancestor_when_outputs_are_reencoded() {
   assert_eq!(detail.node.parent_node_id.as_deref(), Some("first"));
   assert_eq!(detail.node.common_prefix_messages, 4);
   assert_eq!(detail.node.request_message_count, 3);
+  assert_eq!(detail.request_messages.len(), 3);
+  assert_eq!(detail.truncation.request_messages.messages_total, 3);
 }
 
 #[test]

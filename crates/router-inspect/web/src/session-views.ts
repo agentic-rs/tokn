@@ -74,9 +74,9 @@ function requestSectionCopy(reduction_kind: string) {
   switch (reduction_kind) {
     case "message_tree":
       return {
-        direction: "Complete",
-        title: "Input prefix",
-        empty_message: "No semantic input was stored for this observation."
+        direction: "New",
+        title: "Input delta",
+        empty_message: "No new semantic input was stored for this observation."
       };
     case "suffix_append":
       return {

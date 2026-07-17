@@ -116,7 +116,7 @@ pub fn get_session_node_from_db(
       apply_derived_ancestry(conn, session_id, std::slice::from_mut(&mut node))?;
     }
     let tree_storage = if schema_version >= SESSION_MESSAGE_TREE_SCHEMA_VERSION {
-      select_message_tree_storage(conn, node_id)?
+      select_message_tree_storage(conn, node_id, node.common_prefix_messages)?
     } else {
       None
     };
@@ -399,6 +399,7 @@ struct SideStats {
 struct MessageTreeStorage {
   tip_id: Vec<u8>,
   tip_hex: String,
+  input_start_depth: u64,
   input_count: u64,
   output_count: u64,
 }
@@ -421,7 +422,7 @@ enum MessageSide {
 impl MessageTreeStorage {
   fn depth_range(&self, side: MessageSide) -> (u64, u64) {
     match side {
-      MessageSide::Input => (1, self.input_count),
+      MessageSide::Input => (self.input_start_depth, self.input_count),
       MessageSide::Output => (
         self.input_count.saturating_add(1),
         self.input_count.saturating_add(self.output_count),
@@ -431,7 +432,10 @@ impl MessageTreeStorage {
 
   fn message_count(&self, side: MessageSide) -> u64 {
     match side {
-      MessageSide::Input => self.input_count,
+      MessageSide::Input => self
+        .input_count
+        .saturating_add(1)
+        .saturating_sub(self.input_start_depth),
       MessageSide::Output => self.output_count,
     }
   }
@@ -498,7 +502,11 @@ fn validate_message_tree_path(conn: &Connection, storage: &MessageTreeStorage) -
   Ok(())
 }
 
-fn select_message_tree_storage(conn: &Connection, node_id: &str) -> Result<Option<MessageTreeStorage>> {
+fn select_message_tree_storage(
+  conn: &Connection,
+  node_id: &str,
+  common_prefix_messages: u64,
+) -> Result<Option<MessageTreeStorage>> {
   let stored = conn.query_row(
     "SELECT message_id, input_message_count, output_message_count,
             CASE WHEN message_id IS NULL THEN '' ELSE lower(hex(message_id)) END
@@ -521,12 +529,21 @@ fn select_message_tree_storage(conn: &Connection, node_id: &str) -> Result<Optio
   let input_count = stored.1.and_then(|value| u64::try_from(value).ok());
   let output_count = stored.2.and_then(|value| u64::try_from(value).ok());
   match (valid_tip, input_count, output_count) {
-    (true, Some(input_count), Some(output_count)) => Ok(Some(MessageTreeStorage {
-      tip_id,
-      tip_hex: stored.3,
-      input_count,
-      output_count,
-    })),
+    (true, Some(input_count), Some(output_count)) if common_prefix_messages <= input_count => {
+      let input_start_depth =
+        common_prefix_messages
+          .checked_add(1)
+          .ok_or_else(|| crate::Error::InvalidMessageTree {
+            message_id: stored.3.clone(),
+          })?;
+      Ok(Some(MessageTreeStorage {
+        tip_id,
+        tip_hex: stored.3,
+        input_start_depth,
+        input_count,
+        output_count,
+      }))
+    }
     _ => Err(crate::Error::InvalidMessageTree { message_id: stored.3 }),
   }
 }
