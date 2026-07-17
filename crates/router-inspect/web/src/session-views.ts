@@ -10,6 +10,7 @@ import type {
   SessionNodeSummary,
   SessionPart,
   SessionSummary,
+  SessionUsage,
   TimezoneMode
 } from "./types";
 
@@ -70,6 +71,10 @@ function formatByteSize(bytes: number): string {
     unit = candidate;
   }
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
+
+function formatTokenCount(tokens: number | null): string {
+  return tokens === null ? "—" : tokens.toLocaleString();
 }
 
 function requestSectionCopy(reduction_kind: string) {
@@ -187,6 +192,9 @@ export class SessionDetailView extends LitElement {
     node_state: { type: String },
     node_error_message: { type: String },
     selected_node_id: { type: String },
+    usage: { attribute: false },
+    usage_state: { type: String },
+    usage_error_message: { type: String },
     timezone: { type: String }
   };
 
@@ -197,6 +205,9 @@ export class SessionDetailView extends LitElement {
   declare node_state: LoadState;
   declare node_error_message: string | undefined;
   declare selected_node_id: string | undefined;
+  declare usage: SessionUsage | undefined;
+  declare usage_state: LoadState;
+  declare usage_error_message: string | undefined;
   declare timezone: TimezoneMode;
 
   createRenderRoot() {
@@ -213,6 +224,10 @@ export class SessionDetailView extends LitElement {
 
   private retryNode() {
     this.dispatchEvent(new CustomEvent("session-node-retry", { bubbles: true, composed: true }));
+  }
+
+  private retryUsage() {
+    this.dispatchEvent(new CustomEvent("session-usage-retry", { bubbles: true, composed: true }));
   }
 
   private selectNode(node: SessionNodeSummary) {
@@ -308,6 +323,73 @@ export class SessionDetailView extends LitElement {
           </article>
         `)}
       </div>
+    `;
+  }
+
+  private renderUsage() {
+    if (this.usage_state === "loading") {
+      return html`
+        <section class="session-usage-panel" aria-busy="true">
+          <header>
+            <div>
+              <p class="eyebrow">usage.db</p>
+              <h3>Token usage</h3>
+            </div>
+          </header>
+          <div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading usage…</div>
+        </section>
+      `;
+    }
+    if (this.usage_state === "error") {
+      return html`
+        <section class="session-usage-panel">
+          <header>
+            <div>
+              <p class="eyebrow">usage.db</p>
+              <h3>Token usage</h3>
+            </div>
+          </header>
+          <div class="inline-error" role="alert">
+            <span>${this.usage_error_message}</span>
+            <button type="button" @click=${this.retryUsage}>Retry</button>
+          </div>
+        </section>
+      `;
+    }
+    if (!this.usage) {
+      return html`
+        <section class="session-usage-panel">
+          <header>
+            <div>
+              <p class="eyebrow">usage.db</p>
+              <h3>Token usage</h3>
+            </div>
+            <span>No usage recorded</span>
+          </header>
+        </section>
+      `;
+    }
+    const usage = this.usage;
+    return html`
+      <section class="session-usage-panel">
+        <header>
+          <div>
+            <p class="eyebrow">usage.db</p>
+            <h3>Token usage</h3>
+          </div>
+          <span>
+            ${usage.requests_with_usage.toLocaleString()} of ${usage.request_count.toLocaleString()} requests reported
+          </span>
+        </header>
+        <dl class="session-usage-grid">
+          <div><dt>Input</dt><dd>${formatTokenCount(usage.input_tokens)}</dd></div>
+          <div><dt>Output</dt><dd>${formatTokenCount(usage.output_tokens)}</dd></div>
+          <div><dt>Total</dt><dd>${formatTokenCount(usage.total_tokens)}</dd></div>
+          <div><dt>Cache read</dt><dd>${formatTokenCount(usage.cache_read_tokens)}</dd></div>
+          <div><dt>Cache write</dt><dd>${formatTokenCount(usage.cache_write_tokens)}</dd></div>
+          <div><dt>Reasoning</dt><dd>${formatTokenCount(usage.reasoning_tokens)}</dd></div>
+        </dl>
+      </section>
     `;
   }
 
@@ -710,6 +792,7 @@ export class SessionDetailView extends LitElement {
           <div><dt>Endpoint</dt><dd title=${session.endpoint ?? ""}>${session.endpoint ?? "—"}</dd></div>
           <div><dt>Account</dt><dd title=${session.account_id ?? ""}>${session.account_id ?? "—"}</dd></div>
         </dl>
+        ${this.renderUsage()}
         <section class="session-activity">
           <header class="session-section-header">
             <div>

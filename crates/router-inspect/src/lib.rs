@@ -17,8 +17,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use tokn_persistence::viewer::{get_request_payload, RequestCursor, RequestPayloadField};
 use tokn_persistence::{
-  get_request, get_session_from_db, get_session_node_from_db, is_valid_request_day, list_latest_requests,
-  list_request_days, list_requests, list_sessions_from_db, RequestListOptions,
+  get_request, get_session_from_db, get_session_node_from_db, get_session_usage, is_valid_request_day,
+  list_latest_requests, list_request_days, list_requests, list_sessions_from_db, RequestListOptions,
 };
 
 const INDEX_HTML: &str = include_str!("../web/dist/index.html");
@@ -31,6 +31,7 @@ const CONTENT_SECURITY_POLICY_VALUE: &str =
 struct InspectState {
   requests_dir: PathBuf,
   sessions_db: PathBuf,
+  usage_db: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +104,7 @@ struct SessionNodeDetailQuery {
 struct ViewerInfo {
   requests_dir: String,
   sessions_db: String,
+  usage_db: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -159,7 +161,7 @@ impl IntoResponse for ApiError {
 }
 
 /// Serve the viewer on a separate loopback listener until Ctrl-C.
-pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, port: u16) -> anyhow::Result<()> {
+pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, usage_db: PathBuf, port: u16) -> anyhow::Result<()> {
   let listener = tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await?;
   let address = listener.local_addr()?;
   println!("Inspect viewer: http://{address}");
@@ -170,6 +172,7 @@ pub async fn serve(requests_dir: PathBuf, sessions_db: PathBuf, port: u16) -> an
     router(InspectState {
       requests_dir,
       sessions_db,
+      usage_db,
     }),
   )
   .with_graceful_shutdown(wait_for_shutdown())
@@ -190,6 +193,7 @@ fn router(state: InspectState) -> Router {
     .route("/api/request-payload", get(request_payload))
     .route("/api/sessions", get(sessions))
     .route("/api/session", get(session_detail))
+    .route("/api/session-usage", get(session_usage))
     .route("/api/session-node", get(session_node_detail))
     .with_state(state)
 }
@@ -212,6 +216,7 @@ async fn info(State(state): State<InspectState>) -> Response {
     ViewerInfo {
       requests_dir: state.requests_dir.display().to_string(),
       sessions_db: state.sessions_db.display().to_string(),
+      usage_db: state.usage_db.display().to_string(),
     },
   )
 }
@@ -360,12 +365,34 @@ async fn session_node_detail(
   Ok(json_response(StatusCode::OK, node))
 }
 
+async fn session_usage(
+  State(state): State<InspectState>,
+  Query(query): Query<SessionDetailQuery>,
+) -> Result<Response, ApiError> {
+  let usage_db = state.usage_db;
+  let session_id = query.session_id;
+  let usage = tokio::task::spawn_blocking(move || get_session_usage(&usage_db, &session_id))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(usage_database_error)?;
+  Ok(json_response(StatusCode::OK, usage))
+}
+
 fn session_database_error(error: tokn_persistence::Error) -> ApiError {
   match error {
     tokn_persistence::Error::UnsupportedSessionSchema { .. } => ApiError::unavailable_message(
       "sessions database requires migration; migrate the selected database before opening the sessions view",
     ),
     _ => ApiError::unavailable("session database"),
+  }
+}
+
+fn usage_database_error(error: tokn_persistence::Error) -> ApiError {
+  match error {
+    tokn_persistence::Error::UnsupportedUsageSchema { .. } => ApiError::unavailable_message(
+      "usage database requires migration; migrate the selected database before opening session usage",
+    ),
+    _ => ApiError::unavailable("usage database"),
   }
 }
 
@@ -407,7 +434,7 @@ mod tests {
   use rusqlite::params;
   use tokn_persistence::requests::open_day_db;
   use tokn_persistence::sessions::{SessionsDb, TreeRequestRecord};
-  use tokn_persistence::MessageRecord;
+  use tokn_persistence::{MessageRecord, UsageDb};
   use tower::ServiceExt;
 
   fn write_request(dir: &std::path::Path, day: &str, request_id: &str, session_id: &str) {
@@ -459,10 +486,23 @@ mod tests {
       .unwrap();
   }
 
+  fn write_usage(usage_db: &std::path::Path, session_id: &str, request_id: &str, usage_json: &str) {
+    drop(UsageDb::open(usage_db).unwrap());
+    let conn = rusqlite::Connection::open(usage_db).unwrap();
+    conn
+      .execute(
+        "INSERT INTO requests (ts, session_id, request_id, model, usage_json)
+         VALUES (1784444800000, ?1, ?2, 'gpt-test', ?3)",
+        params![session_id, request_id, usage_json],
+      )
+      .unwrap();
+  }
+
   async fn get_response(requests_dir: &std::path::Path, sessions_db: &std::path::Path, uri: &str) -> Response {
     router(InspectState {
       requests_dir: requests_dir.to_path_buf(),
       sessions_db: sessions_db.to_path_buf(),
+      usage_db: sessions_db.with_file_name("usage.db"),
     })
     .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
     .await
@@ -836,6 +876,39 @@ mod tests {
     assert!(node.contains(r#""parts_total":0"#));
     assert!(node.contains(r#""messages_total":1,"messages_returned":1"#));
     assert!(node.contains(r#""parts_omitted":0"#));
+  }
+
+  #[tokio::test]
+  async fn session_usage_endpoint_reads_only_the_usage_database() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let requests_dir = tempdir.path().join("not-a-directory");
+    std::fs::write(&requests_dir, b"session usage must not read request history").unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    let usage_db = tempdir.path().join("usage.db");
+    write_session(&sessions_db, "stored-session", "stored-request");
+    write_usage(
+      &usage_db,
+      "stored-session",
+      "stored-request",
+      r#"{"input":120,"output":30,"total":150,"cache_read":80,"reasoning":5}"#,
+    );
+
+    let response = get_response(
+      &requests_dir,
+      &sessions_db,
+      "/api/session-usage?session_id=stored-session",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_body(response).await;
+    assert!(body.contains(r#""session_id":"stored-session""#));
+    assert!(body.contains(r#""input_tokens":120"#));
+    assert!(body.contains(r#""output_tokens":30"#));
+    assert!(body.contains(r#""cache_read_tokens":80"#));
+
+    let missing = get_response(&requests_dir, &sessions_db, "/api/session-usage?session_id=missing").await;
+    assert_eq!(missing.status(), StatusCode::OK);
+    assert_eq!(response_body(missing).await, "null");
   }
 
   #[tokio::test]

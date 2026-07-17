@@ -122,6 +122,18 @@ export interface SessionDetail {
   nodes_truncated: boolean;
 }
 
+export interface SessionUsage {
+  session_id: string;
+  request_count: number;
+  requests_with_usage: number;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  total_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
+}
+
 export interface SessionNodeDetail {
   node: SessionNodeSummary;
   request_messages: SessionMessage[];
@@ -132,6 +144,7 @@ export interface SessionNodeDetail {
 export interface ViewerInfo {
   requests_dir: string;
   sessions_db: string;
+  usage_db: string;
 }
 
 export type RequestDayState = "available" | "empty" | "unavailable";

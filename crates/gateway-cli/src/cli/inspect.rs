@@ -15,6 +15,10 @@ pub struct InspectArgs {
   /// Override the configured sessions database.
   #[arg(long)]
   pub sessions_db: Option<PathBuf>,
+
+  /// Override the configured usage database.
+  #[arg(long)]
+  pub usage_db: Option<PathBuf>,
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: InspectArgs) -> Result<()> {
@@ -26,7 +30,10 @@ pub async fn run(cfg_path: Option<PathBuf>, args: InspectArgs) -> Result<()> {
   if let Some(sessions_db) = args.sessions_db {
     paths.sessions_db = sessions_db;
   }
-  tokn_router_inspect::serve(paths.requests_dir, paths.sessions_db, args.port)
+  if let Some(usage_db) = args.usage_db {
+    paths.usage_db = usage_db;
+  }
+  tokn_router_inspect::serve(paths.requests_dir, paths.sessions_db, paths.usage_db, args.port)
     .await
     .context("run inspect viewer")
 }
