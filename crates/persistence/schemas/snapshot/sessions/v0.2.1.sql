@@ -50,8 +50,11 @@ CREATE INDEX idx_message_parts_hash ON message_parts(part_hash);
 -- Each node is an observation bookmark. `message_id` is the final output
 -- message when output exists and otherwise the final input message. Input and
 -- output counts divide that one prefix path at the request/response boundary.
--- The reduction columns are retained only for untouched pre-v0.2.1 rows and
--- compatibility metadata; new rows use reduction_kind = 'message_tree'.
+-- Legacy rows retain their reduction metadata. New rows use
+-- reduction_kind = 'message_tree' with a null parent_id. For those rows,
+-- common_prefix_messages is the leading input already present in the global
+-- message tree at first write, and request_message_count is the remaining
+-- suffix. Observation ancestry is derived when sessions are read.
 CREATE TABLE session_nodes (
   id                     TEXT PRIMARY KEY,
   session_id             TEXT    NOT NULL REFERENCES sessions(id),
