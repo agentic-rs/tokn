@@ -5,7 +5,7 @@ use flate2::read::GzDecoder;
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -201,19 +201,15 @@ impl SessionsDb {
 
     let tx = self.conn.transaction()?;
     let input_path = insert_message_path(&tx, None, 0, &r.request_messages)?;
-    let input_tip = input_path.last().copied();
-    let output_path = insert_message_path(&tx, input_tip, input_path.len(), &r.response_messages)?;
+    let input_tip = input_path.ids.last().copied();
+    let output_path = insert_message_path(&tx, input_tip, input_path.ids.len(), &r.response_messages)?;
     let message_id = output_path
+      .ids
       .last()
-      .or(input_path.last())
+      .or(input_path.ids.last())
       .copied()
       .expect("record_tree rejects an empty input and output");
-    let input_ids = input_path.iter().copied().collect::<HashSet<_>>();
-    let parent = predecessor_for_message_path(&tx, &r.session_id, thread_id, &r.request_id, r.ts, &input_ids)?;
-    let parent_id = parent.as_ref().map(|parent| parent.node_id.as_str());
-    let common_prefix = parent.as_ref().map_or(0, |parent| parent.depth);
-    let request_delta_count = input_path.len().saturating_sub(common_prefix);
-    let parent_source = if parent.is_some() { "message_ancestor" } else { "none" };
+    let request_message_count = input_path.ids.len().saturating_sub(input_path.reused_prefix_messages);
 
     tx.execute(
       "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source, account_id, provider_id, model)
@@ -246,6 +242,7 @@ impl SessionsDb {
          END",
       params![r.session_id, thread_id, parent_thread_id, r.ts, thread_source],
     )?;
+    // The immutable message tree owns ancestry; each node bookmarks one tip and retains its creation-time reuse count.
     tx.execute(
       "INSERT INTO session_nodes
          (id, session_id, parent_id, request_id, ts, endpoint, status, account_id, provider_id, model,
@@ -261,8 +258,6 @@ impl SessionsDb {
          model = COALESCE(excluded.model, session_nodes.model),
          reduction_kind = excluded.reduction_kind,
          parent_source = excluded.parent_source,
-         common_prefix_messages = excluded.common_prefix_messages,
-         request_message_count = excluded.request_message_count,
          response_message_count = excluded.response_message_count,
          thread_id = excluded.thread_id,
          message_id = excluded.message_id,
@@ -271,7 +266,7 @@ impl SessionsDb {
       params![
         r.request_id,
         r.session_id,
-        parent_id,
+        None::<&str>,
         r.request_id,
         r.ts,
         r.endpoint,
@@ -279,14 +274,14 @@ impl SessionsDb {
         r.account_id.as_deref(),
         r.provider_id.as_deref(),
         r.model.as_deref(),
-        parent_source,
-        common_prefix as i64,
-        request_delta_count as i64,
-        output_path.len() as i64,
+        "none",
+        input_path.reused_prefix_messages as i64,
+        request_message_count as i64,
+        output_path.ids.len() as i64,
         thread_id,
         message_id.as_slice(),
-        input_path.len() as i64,
-        output_path.len() as i64,
+        input_path.ids.len() as i64,
+        output_path.ids.len() as i64,
       ],
     )?;
     tx.execute(
@@ -405,42 +400,9 @@ impl SessionsDb {
   }
 }
 
-struct MessagePredecessor {
-  node_id: String,
-  depth: usize,
-}
-
-fn predecessor_for_message_path(
-  conn: &Connection,
-  session_id: &str,
-  thread_id: &str,
-  request_id: &str,
-  ts: i64,
-  input_ids: &HashSet<MessageId>,
-) -> Result<Option<MessagePredecessor>> {
-  if input_ids.is_empty() {
-    return Ok(None);
-  }
-
-  let mut stmt = conn.prepare(
-    "SELECT n.id, n.message_id, message.depth
-     FROM session_nodes n
-     JOIN message_tree message ON message.id = n.message_id
-     WHERE n.session_id = ?1 AND n.thread_id = ?2 AND n.id != ?3 AND n.ts <= ?4
-     ORDER BY message.depth DESC, n.ts DESC, n.rowid DESC",
-  )?;
-  let mut rows = stmt.query(params![session_id, thread_id, request_id, ts])?;
-  while let Some(row) = rows.next()? {
-    let raw_id = row.get::<_, Vec<u8>>(1)?;
-    let message_id = decode_message_id(&raw_id)?;
-    if input_ids.contains(&message_id) {
-      return Ok(Some(MessagePredecessor {
-        node_id: row.get(0)?,
-        depth: required_count(Some(row.get(2)?), &encode_message_id(&message_id))?,
-      }));
-    }
-  }
-  Ok(None)
+struct MessagePath {
+  ids: Vec<MessageId>,
+  reused_prefix_messages: usize,
 }
 
 fn insert_message_path(
@@ -448,8 +410,9 @@ fn insert_message_path(
   mut parent_id: Option<MessageId>,
   parent_depth: usize,
   messages: &[MessageRecord],
-) -> Result<Vec<MessageId>> {
+) -> Result<MessagePath> {
   let mut ids = Vec::with_capacity(messages.len());
+  let mut reused_prefix_messages = 0;
   for (offset, message) in messages.iter().enumerate() {
     let depth = parent_depth + offset + 1;
     let message_hash = hash_message(message);
@@ -469,6 +432,9 @@ fn insert_message_path(
     )?;
     if inserted == 0 {
       validate_existing_message(tx, message_id, parent_id, depth, message_hash, message)?;
+      if reused_prefix_messages == offset {
+        reused_prefix_messages += 1;
+      }
     } else {
       for (part_index, part) in message.parts.iter().enumerate() {
         let part_hash = hash_part(&part.part_type, part.content.as_ref());
@@ -480,7 +446,10 @@ fn insert_message_path(
     ids.push(message_id);
     parent_id = Some(message_id);
   }
-  Ok(ids)
+  Ok(MessagePath {
+    ids,
+    reused_prefix_messages,
+  })
 }
 
 fn validate_existing_message(
@@ -632,6 +601,7 @@ fn select_tree_message_parts(conn: &Connection, message_id: &MessageId) -> Resul
   Ok(parts)
 }
 
+#[cfg(test)]
 fn required_count(value: Option<i64>, id: &str) -> Result<usize> {
   match value.and_then(|value| usize::try_from(value).ok()) {
     Some(value) => Ok(value),
@@ -1297,10 +1267,7 @@ mod tests {
       .collect::<rusqlite::Result<Vec<_>>>()
       .unwrap();
     assert_eq!(rows[0], ("req-1".into(), None, "message_tree".into(), 0, 2, 2, 1));
-    assert_eq!(
-      rows[1],
-      ("req-2".into(), Some("req-1".into()), "message_tree".into(), 3, 1, 4, 1,)
-    );
+    assert_eq!(rows[1], ("req-2".into(), None, "message_tree".into(), 3, 1, 4, 1,));
     assert_eq!(rows[2], ("req-3".into(), None, "message_tree".into(), 0, 2, 2, 0));
     assert_messages_eq(&db.materialize_request_messages("req-2").unwrap(), &second);
     assert_messages_eq(
@@ -1370,7 +1337,7 @@ mod tests {
   }
 
   #[test]
-  fn record_tree_links_only_message_ancestors_in_the_same_thread() {
+  fn record_tree_keeps_thread_metadata_without_node_lineage() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
     let mut db = SessionsDb::open(&path).unwrap();
@@ -1459,7 +1426,7 @@ mod tests {
         ),
         (
           "req-root-2".into(),
-          Some("req-root-1".into()),
+          None,
           "message_tree".into(),
           2,
           1,
@@ -1467,7 +1434,7 @@ mod tests {
         ),
         (
           "req-child-2".into(),
-          Some("req-child-1".into()),
+          None,
           "message_tree".into(),
           2,
           1,
@@ -1538,10 +1505,19 @@ mod tests {
 
     let nodes = db
       .conn
-      .prepare("SELECT id, parent_id FROM session_nodes ORDER BY ts")
+      .prepare(
+        "SELECT id, parent_id, common_prefix_messages, request_message_count
+         FROM session_nodes
+         ORDER BY ts",
+      )
       .unwrap()
       .query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        Ok((
+          row.get::<_, String>(0)?,
+          row.get::<_, Option<String>>(1)?,
+          row.get::<_, i64>(2)?,
+          row.get::<_, i64>(3)?,
+        ))
       })
       .unwrap()
       .collect::<rusqlite::Result<Vec<_>>>()
@@ -1549,9 +1525,9 @@ mod tests {
     assert_eq!(
       nodes,
       vec![
-        ("req-root".into(), None),
-        ("req-extension".into(), Some("req-root".into())),
-        ("req-branch".into(), Some("req-root".into())),
+        ("req-root".into(), None, 0, 1),
+        ("req-extension".into(), None, 2, 1),
+        ("req-branch".into(), None, 2, 1),
       ]
     );
 
@@ -1571,6 +1547,133 @@ mod tests {
   }
 
   #[test]
+  fn message_tree_reuse_count_is_global_not_session_lineage() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let shared = vec![msg("system", "instructions"), msg("user", "hello")];
+
+    db.record_tree(&thread_record(100, "thread-first", None, "req-first", shared.clone()))
+      .unwrap();
+    let mut second = thread_record(
+      110,
+      "thread-second",
+      None,
+      "req-second",
+      [shared, vec![msg("user", "continue")]].concat(),
+    );
+    second.session_id = "sess-2".into();
+    db.record_tree(&second).unwrap();
+
+    let node = db
+      .conn
+      .query_row(
+        "SELECT parent_id, parent_source, common_prefix_messages, request_message_count,
+                input_message_count
+         FROM session_nodes
+         WHERE id = 'req-second'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(node, (None, "none".into(), 2, 1, 3));
+  }
+
+  #[test]
+  fn message_tree_reuses_canonical_response_items_in_the_next_request() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let first_input = request_messages_from_json(
+      "responses",
+      &json!({
+        "input": [{"role": "user", "content": "inspect the session"}]
+      }),
+    );
+    let first_output = response_messages_from_body(
+      concat!(
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":",
+        "{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"ciphertext\",",
+        "\"summary\":[],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+        "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":",
+        "{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",",
+        "\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",",
+        "\"namespace\":\"functions\",\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+        "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+      )
+      .as_bytes(),
+    );
+    let mut first = thread_record(100, "thread-root", None, "req-first", first_input);
+    first.response_messages = first_output;
+    db.record_tree(&first).unwrap();
+
+    let next_input = request_messages_from_json(
+      "responses",
+      &json!({
+        "input": [
+          {"role": "user", "content": "inspect the session"},
+          {
+            "type": "reasoning",
+            "encrypted_content": "ciphertext",
+            "summary": [],
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+            "namespace": "functions",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "workspace"
+          }
+        ]
+      }),
+    );
+    db.record_tree(&thread_record(110, "thread-root", None, "req-next", next_input))
+      .unwrap();
+
+    let next_node = db
+      .conn
+      .query_row(
+        "SELECT next.parent_id, next.common_prefix_messages, next.request_message_count,
+                first.message_id = tip.parent_id
+         FROM session_nodes next
+         JOIN session_nodes first ON first.id = 'req-first'
+         JOIN message_tree tip ON tip.id = next.message_id
+         WHERE next.id = 'req-next'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, bool>(3)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(next_node, (None, 3, 1, true));
+  }
+
+  #[test]
   fn nodes_bookmark_final_message_and_reuse_identical_paths() {
     let dir = tempdir();
     let path = dir.join("sessions.db");
@@ -1578,6 +1681,7 @@ mod tests {
 
     let mut first = thread_record(100, "thread-root", None, "req-first", vec![msg("user", "hello")]);
     first.response_messages = vec![msg("assistant", "thinking"), msg("assistant", "done")];
+    db.record_tree(&first).unwrap();
     db.record_tree(&first).unwrap();
 
     let mut retry = first.clone();
@@ -1591,7 +1695,8 @@ mod tests {
     let nodes = db
       .conn
       .prepare(
-        "SELECT id, message_id, input_message_count, output_message_count
+        "SELECT id, message_id, common_prefix_messages, request_message_count,
+                input_message_count, output_message_count
          FROM session_nodes
          ORDER BY ts",
       )
@@ -1602,14 +1707,16 @@ mod tests {
           row.get::<_, Vec<u8>>(1)?,
           row.get::<_, i64>(2)?,
           row.get::<_, i64>(3)?,
+          row.get::<_, i64>(4)?,
+          row.get::<_, i64>(5)?,
         ))
       })
       .unwrap()
       .collect::<rusqlite::Result<Vec<_>>>()
       .unwrap();
-    assert_eq!((nodes[0].2, nodes[0].3), (1, 2));
-    assert_eq!((nodes[1].2, nodes[1].3), (1, 2));
-    assert_eq!((nodes[2].2, nodes[2].3), (1, 0));
+    assert_eq!((nodes[0].2, nodes[0].3, nodes[0].4, nodes[0].5), (0, 1, 1, 2));
+    assert_eq!((nodes[1].2, nodes[1].3, nodes[1].4, nodes[1].5), (1, 0, 1, 2));
+    assert_eq!((nodes[2].2, nodes[2].3, nodes[2].4, nodes[2].5), (1, 0, 1, 0));
     assert_eq!(nodes[0].1, nodes[1].1);
     assert_ne!(nodes[0].1, nodes[2].1);
 
@@ -2052,20 +2159,8 @@ mod tests {
     assert_eq!(
       continuations,
       vec![
-        (
-          "req-child-2".into(),
-          Some("req-child-1".into()),
-          "message_tree".into(),
-          1,
-          1,
-        ),
-        (
-          "req-root-2".into(),
-          Some("req-root-1".into()),
-          "message_tree".into(),
-          1,
-          1,
-        ),
+        ("req-child-2".into(), None, "message_tree".into(), 1, 1,),
+        ("req-root-2".into(), None, "message_tree".into(), 1, 1,),
       ]
     );
     let child_parent: String = sessions
@@ -2320,7 +2415,7 @@ mod tests {
         |r| r.get(0),
       )
       .unwrap();
-    assert_eq!(parent.as_deref(), Some("req-old"));
+    assert_eq!(parent, None);
   }
 
   #[test]
