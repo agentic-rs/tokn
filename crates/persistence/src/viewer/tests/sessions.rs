@@ -872,21 +872,29 @@ fn stored_node_elides_utf8_binary_types_and_embedded_media_payloads() {
     .unwrap()
     .unwrap();
   let parts = &detail.request_messages[0].parts;
-  for (part, expected_length) in parts[..7].iter().zip([
-    utf8_base64.len(),
-    raw_image_base64.len(),
-    image.len(),
-    audio.len(),
-    embedded.len(),
-    encrypted.len(),
-    blob.len(),
-  ]) {
+  for (index, expected_length) in [
+    (0, utf8_base64.len()),
+    (1, raw_image_base64.len()),
+    (2, image.len()),
+    (3, audio.len()),
+    (4, embedded.len()),
+    (6, blob.len()),
+  ] {
+    let part = &parts[index];
     assert_eq!(part.byte_length, expected_length as u64);
     assert!(matches!(
       part.content,
       SessionPartContent::Binary { byte_length } if byte_length == expected_length as u64
     ));
   }
+  assert_eq!(parts[5].byte_length, encrypted.len() as u64);
+  assert!(matches!(
+    parts[5].content,
+    SessionPartContent::Encrypted { byte_length } if byte_length == "ZW5jcnlwdGVk".len() as u64
+  ));
+  let serialized = serde_json::to_string(&detail).unwrap();
+  assert!(serialized.contains(r#""encoding":"encrypted","byte_length":12"#));
+  assert!(!serialized.contains("ZW5jcnlwdGVk"));
   assert!(matches!(
     parts[7].content,
     SessionPartContent::Json { ref value }

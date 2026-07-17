@@ -75,6 +75,7 @@ export interface SessionNodeSummary {
 export type SessionPartContent =
   | { encoding: "text"; value: string; truncated: boolean }
   | { encoding: "json"; value: unknown }
+  | { encoding: "encrypted"; byte_length: number }
   | { encoding: "binary"; byte_length: number }
   | {
       encoding: "omitted";

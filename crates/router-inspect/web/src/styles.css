@@ -1600,6 +1600,23 @@ dd {
   margin: 0;
 }
 
+.session-node-content-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.session-node-content-actions > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-content-boundary {
   display: grid;
   gap: 0.2rem;
@@ -1667,6 +1684,10 @@ dd {
 
 .session-message.tool {
   border-left-color: #a17b43;
+}
+
+.session-message.compaction {
+  border-left-color: #628b99;
 }
 
 .session-message > header {

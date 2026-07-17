@@ -359,6 +359,43 @@ mod tests {
   }
 
   #[test]
+  fn parses_completed_stream_items_when_final_output_is_empty() {
+    let messages = response_messages_from_body(
+      br#"event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"ZW5jcnlwdGVk"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","output":[]}}
+
+"#,
+    );
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "compaction");
+    assert_eq!(messages[0].parts.len(), 1);
+    assert_eq!(messages[0].parts[0].part_type, "compaction");
+    assert_eq!(
+      serde_json::from_slice::<Value>(&messages[0].parts[0].content).unwrap(),
+      serde_json::json!({"type":"compaction","encrypted_content":"ZW5jcnlwdGVk"})
+    );
+  }
+
+  #[test]
+  fn final_stream_output_takes_precedence_over_completed_items() {
+    let messages = response_messages_from_body(
+      br#"event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"stream item"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final output"}]}]}}
+
+"#,
+    );
+
+    assert_message(&messages[0], "assistant", "final output");
+  }
+
+  #[test]
   fn response_output_items_match_their_next_request_forms() {
     let sse = concat!(
       "event: response.function_call_arguments.delta\n",
