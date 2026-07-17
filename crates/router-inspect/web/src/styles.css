@@ -1579,6 +1579,32 @@ dd {
   gap: 0.45rem;
 }
 
+.session-node-token-usage {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  color: #a9c7f5;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-node-token-separator {
+  color: #526782;
+}
+
+.session-node-token-label {
+  color: #718cad;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-node-token-usage.muted {
+  color: var(--faint);
+}
+
 .session-node-primary time {
   margin-right: auto;
   color: #9ba9bd;

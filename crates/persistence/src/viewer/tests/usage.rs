@@ -52,5 +52,22 @@ fn session_usage_aggregates_only_matching_usage_database_rows() {
   assert_eq!(usage.cache_read_tokens, Some(200));
   assert_eq!(usage.cache_write_tokens, Some(10));
   assert_eq!(usage.reasoning_tokens, Some(12));
+  assert_eq!(usage.requests.len(), 3);
+  let request_1 = usage
+    .requests
+    .iter()
+    .find(|request| request.request_id == "request-1")
+    .unwrap();
+  assert_eq!(request_1.context_tokens, Some(100));
+  assert_eq!(request_1.input_delta_tokens, Some(20));
+  assert_eq!(request_1.output_tokens, Some(20));
+  let request_2 = usage
+    .requests
+    .iter()
+    .find(|request| request.request_id == "request-2")
+    .unwrap();
+  assert_eq!(request_2.context_tokens, Some(200));
+  assert_eq!(request_2.input_delta_tokens, Some(80));
+  assert_eq!(request_2.output_tokens, Some(30));
   assert_eq!(get_session_usage(&usage_db, "missing").unwrap(), None);
 }

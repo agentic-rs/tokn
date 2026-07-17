@@ -9,6 +9,7 @@ import type {
   SessionNodeDetail,
   SessionNodeSummary,
   SessionPart,
+  SessionRequestUsage,
   SessionSummary,
   SessionUsage,
   TimezoneMode
@@ -75,6 +76,16 @@ function formatByteSize(bytes: number): string {
 
 function formatTokenCount(tokens: number | null): string {
   return tokens === null ? "—" : tokens.toLocaleString();
+}
+
+function formatCompactTokenCount(tokens: number | null): string {
+  if (tokens === null) {
+    return "—";
+  }
+  return new Intl.NumberFormat(undefined, {
+    notation: "compact",
+    maximumFractionDigits: tokens >= 10_000 ? 1 : 0
+  }).format(tokens);
 }
 
 function requestSectionCopy(reduction_kind: string) {
@@ -616,7 +627,42 @@ export class SessionDetailView extends LitElement {
     `;
   }
 
-  private renderNode(row: SessionTreeRow, lane_count: number, loaded_parent?: SessionNodeSummary) {
+  private renderNodeUsage(usage: SessionRequestUsage | undefined) {
+    if (this.usage_state === "loading") {
+      return html`<span class="session-node-token-usage muted">Token usage loading…</span>`;
+    }
+    if (this.usage_state === "error") {
+      return html`<span class="session-node-token-usage muted">Token usage unavailable</span>`;
+    }
+    if (!usage) {
+      return html`<span class="session-node-token-usage muted">No token usage</span>`;
+    }
+    const context_title = usage.context_tokens === null ? "Context tokens unavailable" : `${usage.context_tokens.toLocaleString()} context tokens`;
+    const input_delta_title = usage.input_delta_tokens === null
+      ? "Input delta tokens unavailable"
+      : `${usage.input_delta_tokens.toLocaleString()} uncached input tokens`;
+    const output_title = usage.output_tokens === null ? "Output tokens unavailable" : `${usage.output_tokens.toLocaleString()} output tokens`;
+    return html`
+      <span class="session-node-token-usage">
+        <span class="session-node-token-label">tokens</span>
+        <span class="session-node-token-separator" aria-hidden="true">·</span>
+        <span title=${context_title}>${formatCompactTokenCount(usage.context_tokens)} context</span>
+        <span class="session-node-token-separator" aria-hidden="true">·</span>
+        <span title=${input_delta_title}>
+          ${usage.input_delta_tokens === null ? "—" : `+${formatCompactTokenCount(usage.input_delta_tokens)}`} input delta
+        </span>
+        <span class="session-node-token-separator" aria-hidden="true">·</span>
+        <span title=${output_title}>${formatCompactTokenCount(usage.output_tokens)} output</span>
+      </span>
+    `;
+  }
+
+  private renderNode(
+    row: SessionTreeRow,
+    lane_count: number,
+    usage_by_request: ReadonlyMap<string, SessionRequestUsage>,
+    loaded_parent?: SessionNodeSummary
+  ) {
     const node = row.node;
     const selected = node.node_id === this.selected_node_id;
     const outcome = statusOutcome(node.status);
@@ -681,6 +727,7 @@ export class SessionDetailView extends LitElement {
             <span aria-hidden="true">·</span>
             <span>${output_count.toLocaleString()} output</span>
           </span>
+          ${this.renderNodeUsage(usage_by_request.get(node.request_id))}
           <span class="session-node-id" title=${node.request_id}>
             request ${shortId(node.request_id)} · ${node.parent_node_id ? `parent ${shortId(node.parent_node_id)}` : "root"}
             ${parent_is_outside_snapshot ? " · outside snapshot" : ""}
@@ -735,6 +782,7 @@ export class SessionDetailView extends LitElement {
     }
 
     const { session, nodes } = this.detail;
+    const usage_by_request = new Map((this.usage?.requests ?? []).map((request) => [request.request_id, request]));
     const session_tree = buildSessionTree(nodes);
     const lane_count = Math.max(1, session_tree.max_lane_count);
     const omitted_nodes = Math.max(0, session.request_count - nodes.length);
@@ -847,7 +895,8 @@ export class SessionDetailView extends LitElement {
                   ${linked_tree
                     ? html`
                         <ol class="session-node-list linked-node-list">
-                          ${linked_tree.rows.map((row) => this.renderNode(row, linked_lane_count, linked_parent))}
+                          ${linked_tree.rows.map((row) =>
+                            this.renderNode(row, linked_lane_count, usage_by_request, linked_parent))}
                           ${this.renderTreeBoundary(linked_tree, linked_lane_count, false, 0, linked_parent)}
                         </ol>
                       `
@@ -871,7 +920,7 @@ export class SessionDetailView extends LitElement {
           ${nodes.length > 0
             ? html`
                 <ol class="session-node-list">
-                  ${session_tree.rows.map((row) => this.renderNode(row, lane_count))}
+                  ${session_tree.rows.map((row) => this.renderNode(row, lane_count, usage_by_request))}
                   ${this.renderTreeBoundary(session_tree, lane_count, this.detail.nodes_truncated, omitted_nodes)}
                 </ol>
               `

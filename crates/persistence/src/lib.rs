@@ -12,7 +12,8 @@ pub use viewer::{
   list_latest_requests, list_request_days, list_requests, list_sessions, list_sessions_from_db, LatestRequests,
   RequestDay, RequestDayState, RequestListOptions, SessionDetail, SessionMessage, SessionMessageTruncation,
   SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary, SessionPart, SessionPartContent,
-  SessionPartEncoding, SessionPartOmissionReason, SessionSummary, SessionUsage, StoredSessionDetail,
+  SessionPartEncoding, SessionPartOmissionReason, SessionRequestUsage, SessionSummary, SessionUsage,
+  StoredSessionDetail,
 };
 
 use bytes::Bytes;

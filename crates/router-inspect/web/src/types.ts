@@ -132,6 +132,14 @@ export interface SessionUsage {
   cache_read_tokens: number | null;
   cache_write_tokens: number | null;
   reasoning_tokens: number | null;
+  requests: SessionRequestUsage[];
+}
+
+export interface SessionRequestUsage {
+  request_id: string;
+  context_tokens: number | null;
+  input_delta_tokens: number | null;
+  output_tokens: number | null;
 }
 
 export interface SessionNodeDetail {

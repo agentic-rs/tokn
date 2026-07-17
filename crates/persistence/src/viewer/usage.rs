@@ -21,9 +21,20 @@ pub struct SessionUsage {
   pub cache_read_tokens: Option<u64>,
   pub cache_write_tokens: Option<u64>,
   pub reasoning_tokens: Option<u64>,
+  pub requests: Vec<SessionRequestUsage>,
 }
 
-/// Aggregate the provider-reported usage rows for one session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionRequestUsage {
+  pub request_id: String,
+  /// All provider-reported input tokens for this request.
+  pub context_tokens: Option<u64>,
+  /// Input tokens not covered by the provider-reported cache-read prefix.
+  pub input_delta_tokens: Option<u64>,
+  pub output_tokens: Option<u64>,
+}
+
+/// Load aggregate and per-request provider-reported usage for one session.
 ///
 /// A missing database or a session without usage rows returns `None`. The
 /// viewer deliberately opens usage storage read-only and never migrates it.
@@ -43,7 +54,15 @@ pub fn get_session_usage(usage_db: &Path, session_id: &str) -> Result<Option<Ses
   } else {
     select_legacy_usage(&conn, session_id, schema_version)?
   };
-  Ok(totals.map(|totals| SessionUsage {
+  let Some(totals) = totals else {
+    return Ok(None);
+  };
+  let requests = if schema_version >= USAGE_JSON_SCHEMA_VERSION {
+    select_json_request_usage(&conn, session_id)?
+  } else {
+    select_legacy_request_usage(&conn, session_id, schema_version)?
+  };
+  Ok(Some(SessionUsage {
     session_id: session_id.to_string(),
     request_count: totals.request_count,
     requests_with_usage: totals.requests_with_usage,
@@ -53,6 +72,7 @@ pub fn get_session_usage(usage_db: &Path, session_id: &str) -> Result<Option<Ses
     cache_read_tokens: totals.cache_read_tokens,
     cache_write_tokens: totals.cache_write_tokens,
     reasoning_tokens: totals.reasoning_tokens,
+    requests,
   }))
 }
 
@@ -90,6 +110,37 @@ fn select_json_usage(conn: &Connection, session_id: &str) -> Result<Option<Usage
     reasoning = json_token_sum("$.reasoning"),
   );
   select_usage_totals(conn, &sql, session_id)
+}
+
+fn select_json_request_usage(conn: &Connection, session_id: &str) -> Result<Vec<SessionRequestUsage>> {
+  let mut stmt = conn.prepare(
+    "SELECT
+       request_id,
+       CASE
+         WHEN json_valid(usage_json) AND json_type(usage_json, '$.input') IN ('integer', 'real')
+         THEN MAX(CAST(json_extract(usage_json, '$.input') AS INTEGER), 0)
+       END,
+       CASE
+         WHEN json_valid(usage_json) AND json_type(usage_json, '$.input') IN ('integer', 'real')
+         THEN MAX(
+           CAST(json_extract(usage_json, '$.input') AS INTEGER)
+             - CASE
+               WHEN json_type(usage_json, '$.cache_read') IN ('integer', 'real')
+               THEN MAX(CAST(json_extract(usage_json, '$.cache_read') AS INTEGER), 0)
+               ELSE 0
+             END,
+           0
+         )
+       END,
+       CASE
+         WHEN json_valid(usage_json) AND json_type(usage_json, '$.output') IN ('integer', 'real')
+         THEN MAX(CAST(json_extract(usage_json, '$.output') AS INTEGER), 0)
+       END
+     FROM requests
+     WHERE session_id = ?1 AND request_id IS NOT NULL AND request_id != ''",
+  )?;
+  let rows = stmt.query_map(params![session_id], request_usage_from_row)?;
+  rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
 }
 
 fn json_total_sum() -> String {
@@ -148,6 +199,42 @@ fn select_legacy_usage(conn: &Connection, session_id: &str, schema_version: u32)
      HAVING COUNT(*) > 0"
   );
   select_usage_totals(conn, &sql, session_id)
+}
+
+fn select_legacy_request_usage(
+  conn: &Connection,
+  session_id: &str,
+  schema_version: u32,
+) -> Result<Vec<SessionRequestUsage>> {
+  let (input_column, output_column, cache_read_column) = if schema_version >= USAGE_BREAKDOWN_SCHEMA_VERSION {
+    ("input_tok", "output_tok", "cached_tok")
+  } else {
+    ("prompt_tok", "completion_tok", "NULL")
+  };
+  let sql = format!(
+    "SELECT
+       request_id,
+       MAX({input_column}, 0),
+       CASE
+         WHEN {input_column} IS NOT NULL
+         THEN MAX({input_column} - COALESCE(MAX({cache_read_column}, 0), 0), 0)
+       END,
+       MAX({output_column}, 0)
+     FROM requests
+     WHERE session_id = ?1 AND request_id IS NOT NULL AND request_id != ''"
+  );
+  let mut stmt = conn.prepare(&sql)?;
+  let rows = stmt.query_map(params![session_id], request_usage_from_row)?;
+  rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+}
+
+fn request_usage_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRequestUsage> {
+  Ok(SessionRequestUsage {
+    request_id: row.get(0)?,
+    context_tokens: optional_nonnegative(row.get(1)?),
+    input_delta_tokens: optional_nonnegative(row.get(2)?),
+    output_tokens: optional_nonnegative(row.get(3)?),
+  })
 }
 
 fn select_usage_totals(conn: &Connection, sql: &str, session_id: &str) -> Result<Option<UsageTotals>> {

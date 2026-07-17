@@ -24,7 +24,7 @@ pub use sessions::{
   SessionMessage, SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary,
   SessionPart, SessionPartContent, SessionPartEncoding, SessionPartOmissionReason, SessionSummary, StoredSessionDetail,
 };
-pub use usage::{get_session_usage, SessionUsage};
+pub use usage::{get_session_usage, SessionRequestUsage, SessionUsage};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;

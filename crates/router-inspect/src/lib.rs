@@ -905,6 +905,9 @@ mod tests {
     assert!(body.contains(r#""input_tokens":120"#));
     assert!(body.contains(r#""output_tokens":30"#));
     assert!(body.contains(r#""cache_read_tokens":80"#));
+    assert!(body.contains(
+      r#""requests":[{"request_id":"stored-request","context_tokens":120,"input_delta_tokens":40,"output_tokens":30}]"#
+    ));
 
     let missing = get_response(&requests_dir, &sessions_db, "/api/session-usage?session_id=missing").await;
     assert_eq!(missing.status(), StatusCode::OK);
