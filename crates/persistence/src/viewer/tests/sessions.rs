@@ -474,6 +474,54 @@ fn stored_node_returns_full_input_from_an_independent_branch() {
 }
 
 #[test]
+fn stored_node_does_not_treat_cross_session_storage_reuse_as_ancestry() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  let mut sessions = SessionsDb::open(&sessions_db).unwrap();
+  let shared = message("user", vec![part("text", b"shared")]);
+  sessions
+    .record_tree(&semantic_record(
+      "first-session",
+      "first-node",
+      1_800_000_001_000,
+      vec![shared.clone()],
+      vec![],
+    ))
+    .unwrap();
+  sessions
+    .record_tree(&semantic_record(
+      "second-session",
+      "second-node",
+      1_800_000_002_000,
+      vec![shared, message("user", vec![part("text", b"new")])],
+      vec![],
+    ))
+    .unwrap();
+  drop(sessions);
+
+  let raw_counts = Connection::open(&sessions_db)
+    .unwrap()
+    .query_row(
+      "SELECT common_prefix_messages, request_message_count
+       FROM session_nodes
+       WHERE id = 'second-node'",
+      [],
+      |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .unwrap();
+  assert_eq!(raw_counts, (1, 1));
+
+  let detail = get_session_node_from_db(&sessions_db, "second-session", "second-node")
+    .unwrap()
+    .unwrap();
+  assert_eq!(detail.node.parent_node_id, None);
+  assert_eq!(detail.node.common_prefix_messages, 0);
+  assert_eq!(detail.node.request_message_count, 2);
+  assert_eq!(detail.request_messages.len(), 2);
+  assert_eq!(detail.truncation.request_messages.messages_total, 2);
+}
+
+#[test]
 fn stored_node_returns_empty_input_delta_when_node_reuses_parent_prefix() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
