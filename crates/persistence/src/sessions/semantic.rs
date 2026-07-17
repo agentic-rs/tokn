@@ -143,6 +143,7 @@ pub(super) fn response_messages_from_body(body: &[u8]) -> Vec<MessageRecord> {
 
 fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
   let mut completed = None;
+  let mut completed_items = Vec::new();
   let mut deltas = String::new();
   let mut structured_deltas = Vec::new();
   for event in text.split("\n\n") {
@@ -157,6 +158,12 @@ fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
       completed = value.get("response").cloned().or(Some(value));
       continue;
     }
+    if event_name == "response.output_item.done" {
+      if let Some(item) = value.get("item").cloned() {
+        completed_items.push(item);
+      }
+      continue;
+    }
     collect_text_delta(&value, &mut deltas, &mut structured_deltas);
   }
   if let Some(value) = completed {
@@ -164,6 +171,13 @@ fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
     if !messages.is_empty() {
       return messages;
     }
+  }
+  let completed_item_messages = completed_items
+    .iter()
+    .filter_map(|item| message_from_value_with_default_role(item, "assistant"))
+    .collect::<Vec<_>>();
+  if !completed_item_messages.is_empty() {
+    return completed_item_messages;
   }
   message_from_deltas(deltas, structured_deltas)
 }
@@ -318,6 +332,43 @@ mod tests {
     assert_message(&responses[0], "assistant", "response");
     assert_message(&chat[0], "assistant", "chat");
     assert_message(&messages[0], "assistant", "message");
+  }
+
+  #[test]
+  fn parses_completed_stream_items_when_final_output_is_empty() {
+    let messages = response_messages_from_body(
+      br#"event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"ZW5jcnlwdGVk"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","output":[]}}
+
+"#,
+    );
+
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].role, "compaction");
+    assert_eq!(messages[0].parts.len(), 1);
+    assert_eq!(messages[0].parts[0].part_type, "compaction");
+    assert_eq!(
+      serde_json::from_slice::<Value>(&messages[0].parts[0].content).unwrap(),
+      serde_json::json!({"type":"compaction","encrypted_content":"ZW5jcnlwdGVk"})
+    );
+  }
+
+  #[test]
+  fn final_stream_output_takes_precedence_over_completed_items() {
+    let messages = response_messages_from_body(
+      br#"event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"stream item"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final output"}]}]}}
+
+"#,
+    );
+
+    assert_message(&messages[0], "assistant", "final output");
   }
 
   fn assert_message(message: &MessageRecord, role: &str, text: &str) {

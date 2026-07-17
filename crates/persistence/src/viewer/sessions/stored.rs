@@ -830,6 +830,9 @@ fn decode_part_content(
   };
 
   let parsed_json = content_is_complete.then(|| serde_json::from_str(text).ok()).flatten();
+  if let Some(byte_length) = parsed_json.as_ref().and_then(encrypted_content_byte_length) {
+    return encrypted_part(byte_length);
+  }
   if parsed_json.as_ref().is_some_and(json_contains_embedded_binary) || is_data_url(text) {
     return binary_part(byte_length);
   }
@@ -953,6 +956,36 @@ fn json_contains_embedded_binary(value: &serde_json::Value) -> bool {
   json_contains_embedded_binary_with_context(value, false)
 }
 
+fn encrypted_content_byte_length(value: &serde_json::Value) -> Option<u64> {
+  let mut byte_length = 0;
+  let mut found = false;
+  accumulate_encrypted_content_byte_length(value, &mut byte_length, &mut found);
+  found.then_some(byte_length)
+}
+
+fn accumulate_encrypted_content_byte_length(value: &serde_json::Value, byte_length: &mut u64, found: &mut bool) {
+  match value {
+    serde_json::Value::Array(values) => {
+      for value in values {
+        accumulate_encrypted_content_byte_length(value, byte_length, found);
+      }
+    }
+    serde_json::Value::Object(object) => {
+      for (key, value) in object {
+        if normalized_json_key(key) == "encryptedcontent" {
+          if let Some(content) = value.as_str() {
+            *byte_length += content.len() as u64;
+            *found = true;
+          }
+        } else {
+          accumulate_encrypted_content_byte_length(value, byte_length, found);
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
 fn json_contains_embedded_binary_with_context(value: &serde_json::Value, binary_context: bool) -> bool {
   match value {
     serde_json::Value::String(value) => is_data_url(value),
@@ -1044,6 +1077,15 @@ fn is_data_url(value: &str) -> bool {
 fn binary_part(byte_length: u64) -> DecodedPart {
   DecodedPart {
     content: SessionPartContent::Binary { byte_length },
+    returned_bytes: 0,
+    truncated: false,
+    binary_elided: true,
+  }
+}
+
+fn encrypted_part(byte_length: u64) -> DecodedPart {
+  DecodedPart {
+    content: SessionPartContent::Encrypted { byte_length },
     returned_bytes: 0,
     truncated: false,
     binary_elided: true,

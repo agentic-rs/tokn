@@ -118,6 +118,9 @@ pub enum SessionPartContent {
   Json {
     value: Value,
   },
+  Encrypted {
+    byte_length: u64,
+  },
   Binary {
     byte_length: u64,
   },

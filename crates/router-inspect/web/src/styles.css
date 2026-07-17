@@ -1686,6 +1686,10 @@ dd {
   border-left-color: #a17b43;
 }
 
+.session-message.compaction {
+  border-left-color: #628b99;
+}
+
 .session-message > header {
   display: flex;
   align-items: center;

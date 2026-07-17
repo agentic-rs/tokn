@@ -40,6 +40,8 @@ function roleTone(role: string): string {
     case "tool":
     case "function":
       return "tool";
+    case "compaction":
+      return "compaction";
     default:
       return "user";
   }
@@ -243,6 +245,16 @@ export class SessionDetailView extends LitElement {
           <details class="session-structured-part">
             <summary>${part.part_type.replaceAll("_", " ")}</summary>
             <pre>${displayJson(part.content.value)}</pre>
+          </details>
+        `;
+      case "encrypted":
+        return html`
+          <details class="session-structured-part">
+            <summary>${part.part_type.replaceAll("_", " ")} · encrypted</summary>
+            <p>
+              ${formatByteSize(part.content.byte_length)} encrypted payload stored. Plaintext is unavailable and the
+              encrypted content is not returned to the viewer.
+            </p>
           </details>
         `;
       case "binary":
