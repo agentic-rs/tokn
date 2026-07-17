@@ -1,6 +1,7 @@
 use crate::{MessageRecord, PartRecord};
 use bytes::Bytes;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 pub(super) fn request_messages_from_json(endpoint: &str, value: &Value) -> Vec<MessageRecord> {
   let mut out = Vec::new();
@@ -74,12 +75,28 @@ fn message_from_value_with_default_role(value: &Value, default_role: &str) -> Op
     .get("content")
     .map(parts_from_value)
     .filter(|parts| !parts.is_empty())
-    .unwrap_or_else(|| vec![json_part(value)]);
+    .unwrap_or_else(|| vec![structured_message_part(value)]);
   Some(MessageRecord {
     role: role.to_string(),
     status: None,
     parts,
   })
+}
+
+fn structured_message_part(value: &Value) -> PartRecord {
+  let mut value = value.clone();
+  if let Some(obj) = value.as_object_mut() {
+    obj.remove("id");
+    obj.remove("status");
+    obj.remove("metadata");
+    if obj
+      .get("content")
+      .is_some_and(|content| content.is_null() || content.as_array().is_some_and(Vec::is_empty))
+    {
+      obj.remove("content");
+    }
+  }
+  json_part(&value)
 }
 
 fn parts_from_value(value: &Value) -> Vec<PartRecord> {
@@ -143,6 +160,7 @@ pub(super) fn response_messages_from_body(body: &[u8]) -> Vec<MessageRecord> {
 
 fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
   let mut completed = None;
+  let mut completed_items = BTreeMap::new();
   let mut deltas = String::new();
   let mut structured_deltas = Vec::new();
   for event in text.split("\n\n") {
@@ -153,17 +171,35 @@ fn response_messages_from_sse(text: &str) -> Vec<MessageRecord> {
     let Ok(value) = serde_json::from_str::<Value>(&data) else {
       continue;
     };
-    if event_name == "response.completed" {
-      completed = value.get("response").cloned().or(Some(value));
-      continue;
+    let event_type = value.get("type").and_then(Value::as_str).unwrap_or(event_name);
+    match event_type {
+      "response.completed" => {
+        completed = value.get("response").cloned().or(Some(value));
+      }
+      "response.output_item.done" => {
+        if let Some(item) = value.get("item") {
+          let index = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(completed_items.len() as u64);
+          completed_items.insert(index, item.clone());
+        }
+      }
+      _ => collect_text_delta(event_type, &value, &mut deltas, &mut structured_deltas),
     }
-    collect_text_delta(&value, &mut deltas, &mut structured_deltas);
   }
   if let Some(value) = completed {
     let messages = response_messages_from_json(&value);
     if !messages.is_empty() {
       return messages;
     }
+  }
+  let messages = completed_items
+    .values()
+    .filter_map(|item| message_from_value_with_default_role(item, "assistant"))
+    .collect::<Vec<_>>();
+  if !messages.is_empty() {
+    return messages;
   }
   message_from_deltas(deltas, structured_deltas)
 }
@@ -184,10 +220,12 @@ fn parse_sse_event(event: &str) -> (&str, String) {
   (event_name, data)
 }
 
-fn collect_text_delta(value: &Value, text: &mut String, structured: &mut Vec<PartRecord>) {
+fn collect_text_delta(event_type: &str, value: &Value, text: &mut String, structured: &mut Vec<PartRecord>) {
   if let Some(delta) = value.get("delta") {
-    if let Some(delta) = delta.as_str() {
-      text.push_str(delta);
+    if event_type == "response.output_text.delta" {
+      if let Some(delta) = delta.as_str() {
+        text.push_str(delta);
+      }
     } else if let Some(delta) = delta.as_object() {
       if let Some(value) = delta.get("text").and_then(Value::as_str) {
         text.push_str(value);
@@ -318,6 +356,65 @@ mod tests {
     assert_message(&responses[0], "assistant", "response");
     assert_message(&chat[0], "assistant", "chat");
     assert_message(&messages[0], "assistant", "message");
+  }
+
+  #[test]
+  fn response_output_items_match_their_next_request_forms() {
+    let sse = concat!(
+      "event: response.output_item.done\n",
+      "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":",
+      "{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"ciphertext\",",
+      "\"summary\":[],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+      "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+      "event: response.function_call_arguments.delta\n",
+      "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":1,",
+      "\"delta\":\"{\\\"cmd\\\":\\\"pwd\\\"}\"}\n\n",
+      "event: response.output_item.done\n",
+      "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":",
+      "{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",",
+      "\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",",
+      "\"namespace\":\"functions\",\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+      "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+      "event: response.completed\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+    );
+    let response = response_messages_from_body(sse.as_bytes());
+    let request = request_messages_from_json(
+      "responses",
+      &json!({
+        "input": [
+          {
+            "type": "reasoning",
+            "encrypted_content": "ciphertext",
+            "summary": [],
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+            "namespace": "functions",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          }
+        ]
+      }),
+    );
+
+    assert_records_eq(&response, &request);
+  }
+
+  fn assert_records_eq(actual: &[MessageRecord], expected: &[MessageRecord]) {
+    assert_eq!(actual.len(), expected.len());
+    for (actual, expected) in actual.iter().zip(expected) {
+      assert_eq!(actual.role, expected.role);
+      assert_eq!(actual.status, expected.status);
+      assert_eq!(actual.parts.len(), expected.parts.len());
+      for (actual, expected) in actual.parts.iter().zip(&expected.parts) {
+        assert_eq!(actual.part_type, expected.part_type);
+        assert_eq!(actual.content, expected.content);
+      }
+    }
   }
 
   fn assert_message(message: &MessageRecord, role: &str, text: &str) {

@@ -209,7 +209,7 @@ impl SessionsDb {
       .copied()
       .expect("record_tree rejects an empty input and output");
     let input_ids = input_path.iter().copied().collect::<HashSet<_>>();
-    let parent = predecessor_for_message_path(&tx, &r.session_id, thread_id, &r.request_id, r.ts, &input_ids)?;
+    let parent = nearest_node_ancestor(&tx, &r.session_id, thread_id, &r.request_id, r.ts, &input_ids)?;
     let parent_id = parent.as_ref().map(|parent| parent.node_id.as_str());
     let common_prefix = parent.as_ref().map_or(0, |parent| parent.depth);
     let request_delta_count = input_path.len().saturating_sub(common_prefix);
@@ -405,19 +405,19 @@ impl SessionsDb {
   }
 }
 
-struct MessagePredecessor {
+struct NodeAncestor {
   node_id: String,
   depth: usize,
 }
 
-fn predecessor_for_message_path(
+fn nearest_node_ancestor(
   conn: &Connection,
   session_id: &str,
   thread_id: &str,
   request_id: &str,
   ts: i64,
   input_ids: &HashSet<MessageId>,
-) -> Result<Option<MessagePredecessor>> {
+) -> Result<Option<NodeAncestor>> {
   if input_ids.is_empty() {
     return Ok(None);
   }
@@ -434,7 +434,7 @@ fn predecessor_for_message_path(
     let raw_id = row.get::<_, Vec<u8>>(1)?;
     let message_id = decode_message_id(&raw_id)?;
     if input_ids.contains(&message_id) {
-      return Ok(Some(MessagePredecessor {
+      return Ok(Some(NodeAncestor {
         node_id: row.get(0)?,
         depth: required_count(Some(row.get(2)?), &encode_message_id(&message_id))?,
       }));
@@ -1568,6 +1568,88 @@ mod tests {
       &db.materialize_response_messages("req-extension").unwrap(),
       &extension.response_messages,
     );
+  }
+
+  #[test]
+  fn message_tree_links_canonical_response_items_to_the_next_request() {
+    let dir = tempdir();
+    let path = dir.join("sessions.db");
+    let mut db = SessionsDb::open(&path).unwrap();
+    let first_input = request_messages_from_json(
+      "responses",
+      &json!({
+        "input": [{"role": "user", "content": "inspect the session"}]
+      }),
+    );
+    let first_output = response_messages_from_body(
+      concat!(
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":",
+        "{\"id\":\"rs_1\",\"type\":\"reasoning\",\"content\":[],\"encrypted_content\":\"ciphertext\",",
+        "\"summary\":[],\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+        "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+        "event: response.output_item.done\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":",
+        "{\"id\":\"fc_1\",\"type\":\"function_call\",\"status\":\"completed\",",
+        "\"call_id\":\"call_1\",\"name\":\"exec_command\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\",",
+        "\"namespace\":\"functions\",\"internal_chat_message_metadata_passthrough\":{\"turn_id\":\"turn-1\"},",
+        "\"metadata\":{\"turn_id\":\"turn-1\"}}}\n\n",
+        "event: response.completed\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[]}}\n\n",
+      )
+      .as_bytes(),
+    );
+    let mut first = thread_record(100, "thread-root", None, "req-first", first_input);
+    first.response_messages = first_output;
+    db.record_tree(&first).unwrap();
+
+    let next_input = request_messages_from_json(
+      "responses",
+      &json!({
+        "input": [
+          {"role": "user", "content": "inspect the session"},
+          {
+            "type": "reasoning",
+            "encrypted_content": "ciphertext",
+            "summary": [],
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "exec_command",
+            "arguments": "{\"cmd\":\"pwd\"}",
+            "namespace": "functions",
+            "internal_chat_message_metadata_passthrough": {"turn_id": "turn-1"}
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "workspace"
+          }
+        ]
+      }),
+    );
+    db.record_tree(&thread_record(110, "thread-root", None, "req-next", next_input))
+      .unwrap();
+
+    let parent = db
+      .conn
+      .query_row(
+        "SELECT parent_id, common_prefix_messages, request_message_count
+         FROM session_nodes
+         WHERE id = 'req-next'",
+        [],
+        |row| {
+          Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+          ))
+        },
+      )
+      .unwrap();
+    assert_eq!(parent, (Some("req-first".into()), 3, 1));
   }
 
   #[test]
