@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokn_core::event::{Event, EventHandler};
 use tokn_core::request_event::{ExtractedSummary, RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
+use tokn_headers::inbound::{first_present, PARENT_THREAD_ID_HEADERS, THREAD_ID_HEADERS};
 use tokn_headers::keys::X_PARENT_SESSION_ID;
 
 const PENDING_RETENTION_MS: i64 = 24 * 60 * 60 * 1_000;
@@ -23,6 +24,8 @@ struct PendingSession {
   ts: i64,
   endpoint: Option<String>,
   session_id: Option<String>,
+  thread_id: Option<String>,
+  parent_thread_id: Option<String>,
   parent_session_id: Option<String>,
   account_id: Option<String>,
   provider_id: Option<String>,
@@ -40,6 +43,8 @@ impl PendingSession {
       ts,
       endpoint: None,
       session_id: None,
+      thread_id: None,
+      parent_thread_id: None,
       parent_session_id: None,
       account_id: None,
       provider_id: None,
@@ -73,6 +78,8 @@ impl PendingSession {
     Some(TreeRequestRecord {
       ts: self.ts,
       session_id,
+      thread_id: self.thread_id,
+      parent_thread_id: self.parent_thread_id,
       parent_session_id: self.parent_session_id,
       request_id,
       endpoint,
@@ -113,6 +120,8 @@ impl SessionEventHandler {
           .entry(request_id)
           .or_insert_with(|| PendingSession::new(event.ts));
         pending.session_id = summary.session_id.as_ref().map(ToString::to_string);
+        pending.thread_id = first_present(&summary.headers, THREAD_ID_HEADERS).map(str::to_string);
+        pending.parent_thread_id = first_present(&summary.headers, PARENT_THREAD_ID_HEADERS).map(str::to_string);
         pending.parent_session_id = summary
           .headers
           .get(&X_PARENT_SESSION_ID)
@@ -248,6 +257,8 @@ mod tests {
     let mut handler = SessionEventHandler::new(path).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(&X_PARENT_SESSION_ID, "parent-session");
+    headers.insert("thread-id", "thread-live");
+    headers.insert("x-codex-parent-thread-id", "thread-parent");
 
     emit(
       &mut handler,
@@ -323,11 +334,11 @@ mod tests {
       }),
     );
 
-    let node: (String, String, i64, String, String, String) = handler
+    let node: (String, String, i64, String, String, String, String) = handler
       .db
       .conn
       .query_row(
-        "SELECT request_id, endpoint, status, account_id, provider_id, model
+        "SELECT request_id, endpoint, status, account_id, provider_id, model, thread_id
          FROM session_nodes WHERE session_id = 'session-live'",
         [],
         |row| {
@@ -338,6 +349,7 @@ mod tests {
             row.get(3)?,
             row.get(4)?,
             row.get(5)?,
+            row.get(6)?,
           ))
         },
       )
@@ -351,6 +363,26 @@ mod tests {
         "account-test".into(),
         "provider-test".into(),
         "gpt-test".into(),
+        "thread-live".into(),
+      )
+    );
+
+    let thread: (String, Option<String>, String) = handler
+      .db
+      .conn
+      .query_row(
+        "SELECT thread_id, parent_thread_id, source
+         FROM session_threads WHERE session_id = 'session-live'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+      )
+      .unwrap();
+    assert_eq!(
+      thread,
+      (
+        "thread-live".into(),
+        Some("thread-parent".into()),
+        "thread-header".into(),
       )
     );
 
@@ -365,7 +397,7 @@ mod tests {
       .unwrap();
     assert_eq!(relation, "parent-session");
 
-    let response = super::super::select_node_messages(&handler.db.conn, "req-live", "response").unwrap();
+    let response = handler.db.materialize_response_messages("req-live").unwrap();
     assert_eq!(response.len(), 1);
     assert_eq!(response[0].role, "assistant");
     assert_eq!(response[0].parts[0].content.as_ref(), b"hi there");
@@ -448,7 +480,7 @@ mod tests {
       .query_row("SELECT COUNT(*) FROM session_nodes", [], |row| row.get(0))
       .unwrap();
     assert_eq!(node_count, 1);
-    let response = super::super::select_node_messages(&handler.db.conn, "req-buffered", "response").unwrap();
+    let response = handler.db.materialize_response_messages("req-buffered").unwrap();
     assert_eq!(response[0].role, "assistant");
     assert_eq!(response[0].parts[0].content.as_ref(), b"buffered reply");
   }
@@ -492,7 +524,7 @@ mod tests {
       }),
     );
 
-    let request = super::super::select_node_messages(&handler.db.conn, "req-passthrough", "request").unwrap();
+    let request = handler.db.materialize_request_messages("req-passthrough").unwrap();
     assert_eq!(request.len(), 1);
     assert_eq!(request[0].role, "user");
     assert_eq!(request[0].parts[0].content.as_ref(), b"from decoded body");

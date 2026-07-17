@@ -1,5 +1,5 @@
 {
-  "expected_version": 4,
+  "expected_version": 5,
   "input": [
     {
       "table": "sessions",
@@ -15,6 +15,14 @@
     }
   ],
   "output": [
+    {
+      "table": "message_parts",
+      "columns": ["message_id", "part_index", "part_hash"]
+    },
+    {
+      "table": "message_tree",
+      "columns": ["id", "parent_id", "depth", "message_hash", "role", "status"]
+    },
     {
       "table": "node_messages",
       "columns": ["id", "node_id", "side", "message_seq", "role", "status"]
@@ -49,7 +57,10 @@
         "common_prefix_messages",
         "request_message_count",
         "response_message_count",
-        "thread_id"
+        "thread_id",
+        "message_id",
+        "input_message_count",
+        "output_message_count"
       ]
     },
     {

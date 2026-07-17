@@ -169,6 +169,10 @@ When `[db].enabled` is true, the gateway writes local SQLite state under
 - `requests/` stores day-rotated request databases named like
   `2026-06-09.db`.
 
+When a client supplies thread identifiers, session nodes reduce against the
+previous request in the same thread. Root and subagent thread relationships
+remain grouped under their shared session.
+
 Set `record_sessions = false` to disable live semantic capture without disabling request or usage persistence.
 
 The request DBs are not a single `requests.db` file. They record request and

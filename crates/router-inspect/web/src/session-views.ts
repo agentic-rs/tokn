@@ -72,6 +72,12 @@ function formatByteSize(bytes: number): string {
 
 function requestSectionCopy(reduction_kind: string) {
   switch (reduction_kind) {
+    case "message_tree":
+      return {
+        direction: "Complete",
+        title: "Input prefix",
+        empty_message: "No semantic input was stored for this observation."
+      };
     case "suffix_append":
       return {
         direction: "Appended",
@@ -518,6 +524,13 @@ export class SessionDetailView extends LitElement {
       parent_is_outside_snapshot ? "boundary-child" : "",
       row.has_topology_warning ? "topology-warning" : ""
     ].filter(Boolean).join(" ");
+    const input_count = node.reduction_kind === "message_tree"
+      ? node.input_message_count
+      : node.request_message_count;
+    const input_label = node.reduction_kind === "message_tree" ? "input" : "input delta";
+    const output_count = node.reduction_kind === "message_tree"
+      ? node.output_message_count
+      : node.response_message_count;
     return html`
       <li class=${node_classes}>
         <span class="session-node-graph" aria-hidden="true">
@@ -548,9 +561,9 @@ export class SessionDetailView extends LitElement {
           <span class="session-node-context">
             <span>${node.provider_id ?? "unknown provider"}</span>
             <span aria-hidden="true">·</span>
-            <span>${node.request_message_count.toLocaleString()} input delta</span>
+            <span>${input_count.toLocaleString()} ${input_label}</span>
             <span aria-hidden="true">·</span>
-            <span>${node.response_message_count.toLocaleString()} output</span>
+            <span>${output_count.toLocaleString()} output</span>
           </span>
           <span class="session-node-id" title=${node.request_id}>
             request ${shortId(node.request_id)} · ${node.parent_node_id ? `parent ${shortId(node.parent_node_id)}` : "root"}

@@ -335,7 +335,7 @@ fn stored_sessions_normalize_epoch_seconds_before_sorting_and_serializing() {
 }
 
 #[test]
-fn stored_node_returns_input_delta_and_tags_part_content() {
+fn stored_node_returns_full_input_prefix_and_tags_part_content() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -373,12 +373,15 @@ fn stored_node_returns_input_delta_and_tags_part_content() {
     .unwrap()
     .unwrap();
   assert_eq!(detail.node.parent_node_id.as_deref(), Some("root"));
-  assert_eq!(detail.node.reduction_kind, "suffix_append");
+  assert_eq!(detail.node.reduction_kind, "message_tree");
   assert_eq!(detail.node.common_prefix_messages, 1);
   assert_eq!(detail.node.request_message_count, 1);
-  assert_eq!(detail.request_messages.len(), 1);
+  assert_eq!(detail.node.message_id.as_ref().unwrap().len(), 64);
+  assert_eq!(detail.node.input_message_count, 2);
+  assert_eq!(detail.node.output_message_count, 1);
+  assert_eq!(detail.request_messages.len(), 2);
   assert!(matches!(
-    detail.request_messages[0].parts[0].content,
+    detail.request_messages[1].parts[0].content,
     SessionPartContent::Json { ref value } if value["tool"] == "search"
   ));
   assert_eq!(detail.response_messages.len(), 1);
@@ -391,20 +394,21 @@ fn stored_node_returns_input_delta_and_tags_part_content() {
     SessionPartContent::Binary { byte_length: 2 }
   ));
   assert_eq!(detail.request_messages[0].parts_total, 1);
+  assert_eq!(detail.request_messages[1].parts_total, 1);
   assert_eq!(detail.response_messages[0].parts_total, 3);
-  assert_eq!(detail.truncation.request_messages.messages_total, 1);
-  assert_eq!(detail.truncation.request_messages.messages_returned, 1);
+  assert_eq!(detail.truncation.request_messages.messages_total, 2);
+  assert_eq!(detail.truncation.request_messages.messages_returned, 2);
   assert_eq!(detail.truncation.request_messages.messages_omitted_before, 0);
   assert_eq!(detail.truncation.response_messages.messages_total, 1);
-  assert_eq!(detail.truncation.parts_total, 4);
-  assert_eq!(detail.truncation.parts_returned, 4);
+  assert_eq!(detail.truncation.parts_total, 5);
+  assert_eq!(detail.truncation.parts_returned, 5);
   assert_eq!(detail.truncation.parts_omitted, 0);
-  assert_eq!(detail.truncation.content_bytes_total, 34);
-  assert_eq!(detail.truncation.content_bytes_returned, 32);
+  assert_eq!(detail.truncation.content_bytes_total, 39);
+  assert_eq!(detail.truncation.content_bytes_returned, 37);
   assert_eq!(detail.truncation.content_parts_truncated, 0);
   assert_eq!(detail.truncation.binary_parts_elided, 1);
   let json = serde_json::to_value(&detail).unwrap();
-  assert_eq!(json["request_messages"][0]["parts"][0]["content"]["encoding"], "json");
+  assert_eq!(json["request_messages"][1]["parts"][0]["content"]["encoding"], "json");
   assert_eq!(
     json["response_messages"][0]["parts"][2]["content"]["encoding"],
     "binary"
@@ -414,7 +418,7 @@ fn stored_node_returns_input_delta_and_tags_part_content() {
 }
 
 #[test]
-fn stored_node_returns_conflict_snapshot() {
+fn stored_node_returns_full_input_from_an_independent_branch() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -453,7 +457,12 @@ fn stored_node_returns_conflict_snapshot() {
   let detail = get_session_node_from_db(&sessions_db, "conflict", "replacement")
     .unwrap()
     .unwrap();
-  assert_eq!(detail.node.reduction_kind, "conflict_snapshot");
+  assert_eq!(detail.node.parent_node_id, None);
+  assert_eq!(detail.node.reduction_kind, "message_tree");
+  assert_eq!(detail.node.common_prefix_messages, 0);
+  assert_eq!(detail.node.request_message_count, 1);
+  assert_eq!(detail.node.input_message_count, 1);
+  assert_eq!(detail.node.output_message_count, 0);
   assert_eq!(detail.request_messages.len(), 1);
   assert!(matches!(
     detail.request_messages[0].parts[0].content,
@@ -466,7 +475,7 @@ fn stored_node_returns_conflict_snapshot() {
 }
 
 #[test]
-fn stored_node_returns_an_empty_delta_when_input_matches_its_parent() {
+fn stored_node_returns_full_input_when_node_reuses_parent_prefix() {
   let dir = tempdir();
   let sessions_db = dir.join("sessions.db");
   let mut sessions = SessionsDb::open(&sessions_db).unwrap();
@@ -493,12 +502,62 @@ fn stored_node_returns_an_empty_delta_when_input_matches_its_parent() {
   let detail = get_session_node_from_db(&sessions_db, "unchanged", "child")
     .unwrap()
     .unwrap();
-  assert_eq!(detail.node.reduction_kind, "suffix_append");
+  assert_eq!(detail.node.reduction_kind, "message_tree");
   assert_eq!(detail.node.common_prefix_messages, 1);
   assert_eq!(detail.node.request_message_count, 0);
-  assert!(detail.request_messages.is_empty());
-  assert_eq!(detail.truncation.request_messages.messages_total, 0);
+  assert_eq!(detail.node.input_message_count, 1);
+  assert_eq!(detail.node.output_message_count, 1);
+  assert_eq!(detail.request_messages.len(), 1);
+  assert_eq!(detail.truncation.request_messages.messages_total, 1);
   assert_eq!(detail.response_messages.len(), 1);
+}
+
+#[test]
+fn stored_node_rejects_a_cyclic_message_tree() {
+  let dir = tempdir();
+  let sessions_db = dir.join("sessions.db");
+  let mut sessions = SessionsDb::open(&sessions_db).unwrap();
+  sessions
+    .record_tree(&semantic_record(
+      "cyclic",
+      "cyclic-node",
+      1_800_000_001_000,
+      vec![
+        message("user", vec![part("text", b"first")]),
+        message("user", vec![part("text", b"second")]),
+      ],
+      vec![],
+    ))
+    .unwrap();
+  drop(sessions);
+
+  let conn = Connection::open(&sessions_db).unwrap();
+  let tip_id = conn
+    .query_row(
+      "SELECT message_id FROM session_nodes WHERE id = 'cyclic-node'",
+      [],
+      |row| row.get::<_, Vec<u8>>(0),
+    )
+    .unwrap();
+  let root_id = conn
+    .query_row(
+      "SELECT parent_id FROM message_tree WHERE id = ?1",
+      params![tip_id.as_slice()],
+      |row| row.get::<_, Vec<u8>>(0),
+    )
+    .unwrap();
+  conn
+    .execute(
+      "UPDATE message_tree SET parent_id = ?1 WHERE id = ?2",
+      params![tip_id.as_slice(), root_id.as_slice()],
+    )
+    .unwrap();
+  drop(conn);
+
+  assert!(matches!(
+    get_session_node_from_db(&sessions_db, "cyclic", "cyclic-node"),
+    Err(crate::Error::InvalidMessageTree { .. })
+  ));
 }
 
 #[test]
@@ -759,6 +818,8 @@ fn semantic_record(
   TreeRequestRecord {
     ts,
     session_id: session_id.to_string(),
+    thread_id: None,
+    parent_thread_id: None,
     parent_session_id: None,
     request_id: request_id.to_string(),
     endpoint: "responses".to_string(),

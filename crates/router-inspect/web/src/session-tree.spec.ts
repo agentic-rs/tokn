@@ -17,6 +17,9 @@ function node(node_id: string, parent_node_id: string | null, ts: number, is_hea
     common_prefix_messages: 0,
     request_message_count: 1,
     response_message_count: 1,
+    message_id: null,
+    input_message_count: 1,
+    output_message_count: 1,
     is_head
   };
 }

@@ -51,10 +51,16 @@ pub struct SessionNodeSummary {
   pub common_prefix_messages: u64,
   pub request_message_count: u64,
   pub response_message_count: u64,
+  /// Hex-encoded prefix hash for message-tree nodes; null for untouched legacy nodes.
+  pub message_id: Option<String>,
+  /// Total input messages on the path, not only a node-local legacy delta.
+  pub input_message_count: u64,
+  /// Messages appended after the input boundary by this observation.
+  pub output_message_count: u64,
   pub is_head: bool,
 }
 
-/// Stored input delta or snapshot and captured response for one semantic node.
+/// Full stored input prefix and captured output suffix for one observation node.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionNodeDetail {
   pub node: SessionNodeSummary,

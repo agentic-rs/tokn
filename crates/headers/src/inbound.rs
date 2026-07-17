@@ -10,6 +10,15 @@ pub const SESSION_ID_HEADERS: &[&str] = &[
   "x-opencode-session",
 ];
 
+pub const THREAD_ID_HEADERS: &[&str] = &["thread-id", "thread_id"];
+
+pub const PARENT_THREAD_ID_HEADERS: &[&str] = &[
+  "x-codex-parent-thread-id",
+  "x-parent-thread-id",
+  "parent-thread-id",
+  "parent_thread_id",
+];
+
 pub const REQUEST_ID_HEADERS: &[&str] = &["x-request-id", "x-interaction-id", "x-opencode-request"];
 
 pub const PROJECT_ID_HEADERS: &[&str] = &["x-opencode-project", "x-project-cwd"];
@@ -82,5 +91,18 @@ mod tests {
     assert_eq!(vars.project_cwd.as_deref(), Some("/tmp/work"));
     assert_eq!(vars.interaction_id.as_deref(), Some("int_9"));
     assert_eq!(vars.account_id.as_deref(), Some("acct_42"));
+  }
+
+  #[test]
+  fn thread_headers_keep_thread_topology_separate_from_session_identity() {
+    let headers = header_map(&[
+      ("session-id", "session-root"),
+      ("thread-id", "thread-child"),
+      ("x-codex-parent-thread-id", "thread-root"),
+    ]);
+
+    assert_eq!(first_present(&headers, SESSION_ID_HEADERS), Some("session-root"));
+    assert_eq!(first_present(&headers, THREAD_ID_HEADERS), Some("thread-child"));
+    assert_eq!(first_present(&headers, PARENT_THREAD_ID_HEADERS), Some("thread-root"));
   }
 }
