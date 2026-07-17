@@ -38,7 +38,6 @@ pub struct StoredSessionDetail {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionNodeSummary {
   pub node_id: String,
-  /// Legacy observation lineage; new message-tree nodes leave this null.
   pub parent_node_id: Option<String>,
   pub request_id: String,
   pub ts: i64,
