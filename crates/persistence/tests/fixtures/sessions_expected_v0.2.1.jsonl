@@ -1,0 +1,2 @@
+{"table":"sessions","values":{"id":"sess-1","first_seen_ts":100,"last_seen_ts":120,"source":"header","account_id":"acct-1","provider_id":"prov-1","model":"model-1"}}
+{"table":"part_blobs","values":{"hash":"hash-1","part_type":"text","content":"hello"}}

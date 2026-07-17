@@ -6,6 +6,7 @@ const CURRENT_TS_MILLIS_SCHEMA_VERSION: u32 = 8;
 const SPLIT_REQUESTS_SCHEMA_VERSION: u32 = 7;
 const REQUEST_ID_SCHEMA_VERSION: u32 = 2;
 pub(super) const SESSION_TREE_SCHEMA_VERSION: u32 = 2;
+pub(super) const SESSION_MESSAGE_TREE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RequestSchema {

@@ -54,8 +54,10 @@ const REQUESTS_MIGRATIONS: &[Migration] = &[
 const SESSIONS_V0_0_0: &str = include_str!("../schemas/snapshot/sessions/v0.0.0.sql");
 const SESSIONS_V0_1_1: &str = include_str!("../schemas/snapshot/sessions/v0.1.1.sql");
 const SESSIONS_V0_2_0: &str = include_str!("../schemas/snapshot/sessions/v0.2.0.sql");
+const SESSIONS_V0_2_1: &str = include_str!("../schemas/snapshot/sessions/v0.2.1.sql");
 const SESSIONS_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/sessions/v0.0.0_v0.1.1_0001_0001.sql");
 const SESSIONS_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/sessions/v0.1.1_v0.2.0_0001_0002.sql");
+const SESSIONS_SQUASH_V0_2_1: &str = include_str!("../schemas/squash/sessions/v0.2.0_v0.2.1_0004_0005.sql");
 const SESSIONS_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -76,6 +78,11 @@ const SESSIONS_MIGRATIONS: &[Migration] = &[
     version: 4,
     name: "thread_lineage",
     sql: include_str!("../schemas/migrations/sessions/0004_thread_lineage.sql"),
+  },
+  Migration {
+    version: 5,
+    name: "message_tree",
+    sql: include_str!("../schemas/migrations/sessions/0005_message_tree.sql"),
   },
 ];
 
@@ -178,6 +185,19 @@ const SESSIONS_V0_2_0_CASE: DbCase = DbCase {
   expected_jsonl: include_str!("fixtures/sessions_expected_v0.2.0.jsonl"),
 };
 
+const SESSIONS_V0_2_1_CASE: DbCase = DbCase {
+  name: "sessions",
+  v0_0_0: SESSIONS_V0_0_0,
+  target_snapshot: SESSIONS_V0_2_1,
+  target_squash: SESSIONS_SQUASH_V0_2_1,
+  target_version: 5,
+  squash_start_version: 4,
+  migrations: SESSIONS_MIGRATIONS,
+  meta_json: include_str!("fixtures/sessions_meta_v0.2.1.json"),
+  seed_jsonl: include_str!("fixtures/sessions_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/sessions_expected_v0.2.1.jsonl"),
+};
+
 const USAGE_CASE: DbCase = DbCase {
   name: "usage",
   v0_0_0: USAGE_V0_0_0,
@@ -222,6 +242,11 @@ fn sessions_v0_1_1_migrations_and_squash_match_fixture() {
 #[test]
 fn sessions_v0_2_0_migrations_and_squash_match_fixture() {
   assert_case(SESSIONS_V0_2_0_CASE);
+}
+
+#[test]
+fn sessions_v0_2_1_migrations_and_squash_match_fixture() {
+  assert_case(SESSIONS_V0_2_1_CASE);
 }
 
 #[test]

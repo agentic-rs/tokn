@@ -66,6 +66,9 @@ export interface SessionNodeSummary {
   common_prefix_messages: number;
   request_message_count: number;
   response_message_count: number;
+  message_id: string | null;
+  input_message_count: number;
+  output_message_count: number;
   is_head: boolean;
 }
 
