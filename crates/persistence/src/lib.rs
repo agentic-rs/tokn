@@ -8,11 +8,12 @@ pub mod viewer;
 pub use requests::{read_request_row, RequestEventHandler};
 pub use sessions::SessionEventHandler;
 pub use viewer::{
-  get_request, get_session, get_session_from_db, get_session_node_from_db, is_valid_request_day, list_latest_requests,
-  list_request_days, list_requests, list_sessions, list_sessions_from_db, LatestRequests, RequestDay, RequestDayState,
-  RequestListOptions, SessionDetail, SessionMessage, SessionMessageTruncation, SessionNodeDetail,
-  SessionNodeDetailTruncation, SessionNodeSummary, SessionPart, SessionPartContent, SessionPartEncoding,
-  SessionPartOmissionReason, SessionSummary, StoredSessionDetail,
+  get_request, get_session, get_session_from_db, get_session_node_from_db, get_session_usage, is_valid_request_day,
+  list_latest_requests, list_request_days, list_requests, list_sessions, list_sessions_from_db, LatestRequests,
+  RequestDay, RequestDayState, RequestListOptions, SessionDetail, SessionMessage, SessionMessageTruncation,
+  SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary, SessionPart, SessionPartContent,
+  SessionPartEncoding, SessionPartOmissionReason, SessionRequestUsage, SessionSummary, SessionUsage,
+  StoredSessionDetail,
 };
 
 use bytes::Bytes;
@@ -58,6 +59,11 @@ pub enum Error {
     "sessions database schema version {version} does not support session viewing; version 2 or newer is required"
   ))]
   UnsupportedSessionSchema { version: u32 },
+
+  #[snafu(display(
+    "usage database schema version {version} does not support session usage; version 2 or newer is required"
+  ))]
+  UnsupportedUsageSchema { version: u32 },
 
   #[snafu(display("session node lineage is invalid at {node_id}"))]
   InvalidSessionLineage { node_id: String },

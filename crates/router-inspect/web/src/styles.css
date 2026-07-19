@@ -1178,7 +1178,7 @@ dd {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.55rem;
-  margin: 0 0 1.35rem;
+  margin: 0 0 0.7rem;
 }
 
 .session-metadata-grid > div {
@@ -1187,6 +1187,58 @@ dd {
   border-radius: 0.45rem;
   padding: 0.65rem 0.7rem;
   background: #0f151d;
+}
+
+.session-usage-panel {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 1.35rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.72rem;
+  background: #0d141d;
+}
+
+.session-usage-panel > header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.session-usage-panel > header .eyebrow {
+  margin-bottom: 0.18rem;
+}
+
+.session-usage-panel > header > span {
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+.session-usage-panel > .inline-state,
+.session-usage-panel > .inline-error {
+  margin: 0;
+}
+
+.session-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.session-usage-grid > div {
+  min-width: 0;
+  border: 1px solid #263548;
+  border-radius: 0.4rem;
+  padding: 0.55rem 0.62rem;
+  background: #101a26;
+}
+
+.session-usage-grid dd {
+  color: #d7e5fb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
 }
 
 .session-activity {
@@ -1527,6 +1579,32 @@ dd {
   gap: 0.45rem;
 }
 
+.session-node-token-usage {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.28rem;
+  color: #a9c7f5;
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-node-token-separator {
+  color: #526782;
+}
+
+.session-node-token-label {
+  color: #718cad;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-node-token-usage.muted {
+  color: var(--faint);
+}
+
 .session-node-primary time {
   margin-right: auto;
   color: #9ba9bd;
@@ -1814,6 +1892,10 @@ dd {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .session-usage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .flow-grid {
     grid-template-columns: 1fr;
   }
@@ -2007,6 +2089,16 @@ dd {
   }
 
   .session-metadata-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-usage-panel > header {
+    align-items: start;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .session-usage-grid {
     grid-template-columns: 1fr;
   }
 

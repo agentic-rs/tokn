@@ -10,6 +10,7 @@ mod days;
 mod requests;
 mod schema;
 mod sessions;
+mod usage;
 mod value;
 
 pub use days::{is_valid_request_day, list_request_days, RequestDay, RequestDayState};
@@ -23,6 +24,7 @@ pub use sessions::{
   SessionMessage, SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary,
   SessionPart, SessionPartContent, SessionPartEncoding, SessionPartOmissionReason, SessionSummary, StoredSessionDetail,
 };
+pub use usage::{get_session_usage, SessionRequestUsage, SessionUsage};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;

@@ -17,6 +17,7 @@ import type {
   SessionNodeDetail,
   SessionNodeSummary,
   SessionSummary,
+  SessionUsage,
   TimezoneMode,
   ViewerInfo,
   ViewName
@@ -72,11 +73,14 @@ class InspectApp extends LitElement {
     sessions: { attribute: false },
     selected_session: { attribute: false },
     selected_session_detail: { attribute: false },
+    selected_session_usage: { attribute: false },
     sessions_loading: { type: Boolean },
     sessions_error: { type: String },
     session_search_query: { type: String },
     session_detail_state: { type: String },
     session_detail_error: { type: String },
+    session_usage_state: { type: String },
+    session_usage_error: { type: String },
     selected_session_node_id: { type: String },
     selected_session_node_detail: { attribute: false },
     session_node_state: { type: String },
@@ -111,11 +115,14 @@ class InspectApp extends LitElement {
   declare sessions: SessionSummary[];
   declare selected_session: SessionSummary | undefined;
   declare selected_session_detail: SessionDetail | undefined;
+  declare selected_session_usage: SessionUsage | undefined;
   declare sessions_loading: boolean;
   declare sessions_error: string | undefined;
   declare session_search_query: string;
   declare session_detail_state: LoadState;
   declare session_detail_error: string | undefined;
+  declare session_usage_state: LoadState;
+  declare session_usage_error: string | undefined;
   declare selected_session_node_id: string | undefined;
   declare selected_session_node_detail: SessionNodeDetail | undefined;
   declare session_node_state: LoadState;
@@ -124,6 +131,7 @@ class InspectApp extends LitElement {
   private request_load_id = 0;
   private request_detail_load_id = 0;
   private session_detail_load_id = 0;
+  private session_usage_load_id = 0;
   private session_node_load_id = 0;
   private session_list_load_id = 0;
   private request_days_load_id = 0;
@@ -138,6 +146,7 @@ class InspectApp extends LitElement {
   private session_list_controller: AbortController | undefined;
   private session_list_load: Promise<boolean> | undefined;
   private session_detail_controller: AbortController | undefined;
+  private session_usage_controller: AbortController | undefined;
   private session_node_controller: AbortController | undefined;
   private navigation_workflow_id = 0;
   private readonly popstate_handler = () => void this.restoreFromHistory();
@@ -162,6 +171,7 @@ class InspectApp extends LitElement {
     this.sessions_loading = false;
     this.session_search_query = "";
     this.session_detail_state = "idle";
+    this.session_usage_state = "idle";
     this.session_node_state = "idle";
   }
 
@@ -182,6 +192,7 @@ class InspectApp extends LitElement {
     this.request_detail_controller?.abort();
     this.session_list_controller?.abort();
     this.session_detail_controller?.abort();
+    this.session_usage_controller?.abort();
     this.session_node_controller?.abort();
     super.disconnectedCallback();
   }
@@ -525,19 +536,25 @@ class InspectApp extends LitElement {
 
   private resetSessionSelection() {
     this.session_detail_controller?.abort();
+    this.session_usage_controller?.abort();
     this.session_node_controller?.abort();
     this.session_detail_controller = undefined;
+    this.session_usage_controller = undefined;
     this.session_node_controller = undefined;
     this.session_detail_load_id += 1;
+    this.session_usage_load_id += 1;
     this.session_node_load_id += 1;
     this.requested_session_id = undefined;
     this.requested_session_node_id = undefined;
     this.selected_session = undefined;
     this.selected_session_detail = undefined;
+    this.selected_session_usage = undefined;
     this.selected_session_node_id = undefined;
     this.selected_session_node_detail = undefined;
     this.session_detail_state = "idle";
     this.session_detail_error = undefined;
+    this.session_usage_state = "idle";
+    this.session_usage_error = undefined;
     this.session_node_state = "idle";
     this.session_node_error = undefined;
   }
@@ -843,6 +860,38 @@ class InspectApp extends LitElement {
     ].some((value) => value?.toLocaleLowerCase().includes(query)));
   }
 
+  private async loadSessionUsage(session_id: string, preserve: boolean): Promise<boolean> {
+    this.session_usage_controller?.abort();
+    const controller = new AbortController();
+    this.session_usage_controller = controller;
+    const load_id = ++this.session_usage_load_id;
+    if (!preserve) {
+      this.selected_session_usage = undefined;
+    }
+    this.session_usage_state = "loading";
+    this.session_usage_error = undefined;
+    try {
+      const params = new URLSearchParams({ session_id });
+      const usage = await fetchJson<SessionUsage | null>(`/api/session-usage?${params.toString()}`, controller.signal);
+      if (load_id === this.session_usage_load_id && this.session_usage_controller === controller) {
+        this.selected_session_usage = usage ?? undefined;
+        this.session_usage_state = "ready";
+        return true;
+      }
+      return false;
+    } catch (error) {
+      if (load_id === this.session_usage_load_id && !isAbortError(error)) {
+        this.session_usage_state = "error";
+        this.session_usage_error = errorMessage(error, "Unable to load session usage");
+      }
+      return false;
+    } finally {
+      if (this.session_usage_controller === controller) {
+        this.session_usage_controller = undefined;
+      }
+    }
+  }
+
   private async loadSession(
     session_id: string,
     session: SessionSummary | undefined,
@@ -866,6 +915,7 @@ class InspectApp extends LitElement {
       this.session_node_state = "idle";
       this.session_node_error = undefined;
     }
+    void this.loadSessionUsage(session_id, preserve);
     this.session_detail_state = "loading";
     this.session_detail_error = undefined;
     if (history_mode) {
@@ -1013,6 +1063,13 @@ class InspectApp extends LitElement {
         null,
         this.selected_session_node_id ?? this.requested_session_node_id
       );
+    }
+  }
+
+  private retrySessionUsage() {
+    const session_id = this.selected_session?.session_id ?? this.requested_session_id;
+    if (session_id !== undefined) {
+      void this.loadSessionUsage(session_id, Boolean(this.selected_session_usage));
     }
   }
 
@@ -1360,14 +1417,18 @@ class InspectApp extends LitElement {
       <session-detail-view
         .detail=${this.selected_session_detail}
         .node_detail=${this.selected_session_node_detail}
+        .usage=${this.selected_session_usage}
         .state=${this.session_detail_state}
         .error_message=${this.session_detail_error}
+        .usage_state=${this.session_usage_state}
+        .usage_error_message=${this.session_usage_error}
         .node_state=${this.session_node_state}
         .node_error_message=${this.session_node_error}
         .selected_node_id=${this.selected_session_node_id}
         .timezone=${this.timezone}
         @session-close=${() => void this.closeSessionDetail()}
         @session-retry=${this.retrySessionDetail}
+        @session-usage-retry=${this.retrySessionUsage}
         @session-node-retry=${this.retrySessionNode}
         @session-node-select=${(event: Event) => this.selectSessionNode(eventDetail<SessionNodeSummary>(event))}
         @open-request=${(event: Event) => void this.openRequestFromSession(eventDetail<SessionNodeSummary>(event))}
