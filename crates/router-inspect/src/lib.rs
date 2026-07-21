@@ -810,6 +810,7 @@ mod tests {
     assert_eq!(llm_summary.status(), StatusCode::OK);
     let llm_summary_body = response_body(llm_summary).await;
     assert!(llm_summary_body.contains(r#""messages":[{"index":0"#));
+    assert!(llm_summary_body.contains(r#""kind":"function_call""#));
     assert!(llm_summary_body.contains(r#""tool_definitions":[{"index":0"#));
     assert!(llm_summary_body.contains(r#""name":"lookup""#));
     assert!(llm_summary_body.contains(r#""description":"Find a record""#));
@@ -837,7 +838,7 @@ mod tests {
     let missing_llm_message = get_response(
       tempdir.path(),
       &sessions_db,
-      "/api/request-llm-message?day=2026-07-14&request_id=request%2Fone&row_id=1&index=1",
+      "/api/request-llm-message?day=2026-07-14&request_id=request%2Fone&row_id=1&index=2",
     )
     .await;
     assert_eq!(missing_llm_message.status(), StatusCode::NOT_FOUND);

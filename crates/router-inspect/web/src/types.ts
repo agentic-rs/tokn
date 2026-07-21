@@ -32,6 +32,8 @@ export interface LlmMessageSummary {
   role: string;
   phase: string;
   kind: string;
+  name: string | null;
+  call_id: string | null;
   preview: string | null;
   truncated: boolean;
   content_bytes: number;

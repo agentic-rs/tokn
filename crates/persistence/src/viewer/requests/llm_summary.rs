@@ -3,6 +3,7 @@ use rusqlite::types::ValueRef;
 use rusqlite::{params_from_iter, OptionalExtension};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
@@ -23,6 +24,8 @@ pub struct LlmMessageSummary {
   pub role: String,
   pub phase: String,
   pub kind: String,
+  pub name: Option<String>,
+  pub call_id: Option<String>,
   pub preview: Option<String>,
   pub truncated: bool,
   pub content_bytes: usize,
@@ -56,6 +59,14 @@ struct CollectedMessage {
   value: Value,
 }
 
+struct MessageMetadata<'a> {
+  role: &'a str,
+  phase: &'a str,
+  kind: &'a str,
+  name: Option<&'a str>,
+  call_id: Option<&'a str>,
+}
+
 struct CollectedToolDefinition {
   summary: LlmToolDefinitionSummary,
   value: Value,
@@ -65,6 +76,7 @@ struct CollectedToolDefinition {
 struct CollectedContent {
   messages: Vec<CollectedMessage>,
   tool_definitions: Vec<CollectedToolDefinition>,
+  tool_names_by_call_id: HashMap<String, String>,
   warnings: Vec<String>,
 }
 
@@ -356,18 +368,50 @@ fn collect_items(items: &[Value], phase: &str, content: &mut CollectedContent) {
 
 fn collect_item(item: &Value, phase: &str, content: &mut CollectedContent) {
   let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-  if is_tool_item_type(item_type) {
+  if item_type == "additional_tools" {
+    collect_tool_definitions(item.get("tools"), content);
     return;
   }
 
   let role = item.get("role").and_then(Value::as_str).or(match item_type {
     "compaction" => Some("compaction"),
+    "custom_tool_call" | "function_call" | "tool_call" | "reasoning" => Some("assistant"),
+    "custom_tool_call_output" | "function_call_output" | "tool_result" => Some("tool"),
     "message" => Some("assistant"),
     _ => None,
   });
   if let Some(role) = role {
     let kind = if item_type.is_empty() { "message" } else { item_type };
-    push_message(role, phase, kind, item.get("content").unwrap_or(item), item, content);
+    let call_id = item
+      .get("call_id")
+      .or_else(|| item.get("tool_call_id"))
+      .and_then(Value::as_str);
+    let explicit_name = item
+      .get("name")
+      .or_else(|| item.pointer("/function/name"))
+      .and_then(Value::as_str);
+    if is_tool_call_type(item_type) {
+      if let (Some(call_id), Some(name)) = (call_id, explicit_name) {
+        content
+          .tool_names_by_call_id
+          .insert(call_id.to_string(), name.to_string());
+      }
+    }
+    let name = explicit_name
+      .map(str::to_owned)
+      .or_else(|| call_id.and_then(|call_id| content.tool_names_by_call_id.get(call_id).cloned()));
+    push_message_with_metadata(
+      MessageMetadata {
+        role,
+        phase,
+        kind,
+        name: name.as_deref(),
+        call_id,
+      },
+      item.get("content").unwrap_or(item),
+      item,
+      content,
+    );
   }
 }
 
@@ -375,6 +419,26 @@ fn push_message(
   role: &str,
   phase: &str,
   kind: &str,
+  preview_value: &Value,
+  value: &Value,
+  content: &mut CollectedContent,
+) {
+  push_message_with_metadata(
+    MessageMetadata {
+      role,
+      phase,
+      kind,
+      name: None,
+      call_id: None,
+    },
+    preview_value,
+    value,
+    content,
+  );
+}
+
+fn push_message_with_metadata(
+  metadata: MessageMetadata<'_>,
   preview_value: &Value,
   value: &Value,
   content: &mut CollectedContent,
@@ -388,9 +452,11 @@ fn push_message(
   content.messages.push(CollectedMessage {
     summary: LlmMessageSummary {
       index,
-      role: truncate_label(role),
-      phase: phase.to_string(),
-      kind: truncate_label(kind),
+      role: truncate_label(metadata.role),
+      phase: metadata.phase.to_string(),
+      kind: truncate_label(metadata.kind),
+      name: metadata.name.map(truncate_label),
+      call_id: metadata.call_id.map(truncate_label),
       preview,
       truncated,
       content_bytes: serialized_len(value),
@@ -440,16 +506,8 @@ fn serialized_len(value: &Value) -> usize {
   value.as_str().map(str::len).unwrap_or_else(|| value.to_string().len())
 }
 
-fn is_tool_item_type(item_type: &str) -> bool {
-  matches!(
-    item_type,
-    "custom_tool_call"
-      | "function_call"
-      | "tool_call"
-      | "custom_tool_call_output"
-      | "function_call_output"
-      | "tool_result"
-  )
+fn is_tool_call_type(item_type: &str) -> bool {
+  matches!(item_type, "custom_tool_call" | "function_call" | "tool_call")
 }
 
 fn extract_text(value: &Value) -> Option<String> {
@@ -459,9 +517,18 @@ fn extract_text(value: &Value) -> Option<String> {
       let texts = parts.iter().filter_map(extract_text).collect::<Vec<_>>();
       (!texts.is_empty()).then(|| texts.join("\n"))
     }
-    Value::Object(object) => ["text", "input_text", "output_text", "content"]
-      .into_iter()
-      .find_map(|field| object.get(field).and_then(extract_text)),
+    Value::Object(object) => [
+      "text",
+      "input_text",
+      "output_text",
+      "content",
+      "output",
+      "arguments",
+      "input",
+      "summary",
+    ]
+    .into_iter()
+    .find_map(|field| object.get(field).and_then(extract_text)),
     _ => None,
   }
 }

@@ -4,7 +4,10 @@ import { fetchJson, isAbortError } from "./api";
 import { displayPath, formatTimestamp, numberField } from "./format";
 import { buildLlmRequestOverview, cacheReadPercent } from "./llm-request";
 import "./llm-expandable-item";
-import type { LlmRequestContentSummary, LoadState, TimezoneMode } from "./types";
+import type { LlmMessageSummary, LlmRequestContentSummary, LoadState, TimezoneMode } from "./types";
+
+const TOOL_CALL_KINDS = new Set(["custom_tool_call", "function_call", "tool_call"]);
+const TOOL_OUTPUT_KINDS = new Set(["custom_tool_call_output", "function_call_output", "tool_result"]);
 
 function displayValue(value: string | undefined): string {
   return value && value.length > 0 ? value : "—";
@@ -46,6 +49,26 @@ function statusTone(status: number | undefined): string {
     return "warning";
   }
   return "success";
+}
+
+function messageTitle(message: LlmMessageSummary): string {
+  if (!message.name) {
+    return message.role;
+  }
+  if (TOOL_OUTPUT_KINDS.has(message.kind)) {
+    return `tool ← ${message.name}`;
+  }
+  if (TOOL_CALL_KINDS.has(message.kind)) {
+    return `assistant → ${message.name}`;
+  }
+  return message.role;
+}
+
+function messageMeta(message: LlmMessageSummary): string {
+  const call_id = message.call_id
+    ? ` · call …${message.call_id.slice(-8)}`
+    : "";
+  return `${message.phase} · ${message.kind}${call_id}`;
 }
 
 function statusLabel(status: number | undefined): string {
@@ -175,15 +198,15 @@ export class LlmRequestOverview extends LitElement {
         <section class="llm-content-panel" aria-labelledby="llm-messages-heading">
           <header>
             <div><p class="eyebrow">Conversation</p><h3 id="llm-messages-heading">Messages</h3></div>
-            <span>${summary.messages.length} messages · newest below</span>
+            <span>${summary.messages.length} items · newest below</span>
           </header>
-          <div class="llm-message-list" tabindex="0" aria-label="All messages in chronological order">
+          <div class="llm-message-list" tabindex="0" aria-label="All conversation items in chronological order">
             ${summary.messages.length === 0
               ? html`<p class="llm-content-empty">No conversational messages recorded.</p>`
               : summary.messages.map((message) => html`
                   <llm-expandable-item
-                    .title=${message.role}
-                    .meta=${`${message.phase} · ${message.kind}`}
+                    .title=${messageTitle(message)}
+                    .meta=${messageMeta(message)}
                     .preview=${message.preview ?? undefined}
                     .size_label=${formatBytes(message.content_bytes)}
                     .load_url=${this.itemUrl("/api/request-llm-message", message.index)}

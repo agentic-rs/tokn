@@ -20,8 +20,15 @@ fn indexes_all_messages_and_tool_definitions_with_lazy_details() {
   let input = (0..8)
     .map(|index| json!({"role": "user", "content": [{"type": "input_text", "text": format!("message {index}")}]}))
     .chain([
-      json!({"type": "function_call", "name": "lookup", "arguments": "{\"id\":1}"}),
-      json!({"type": "function_call_output", "output": "result"}),
+      json!({
+        "type": "additional_tools",
+        "role": "developer",
+        "tools": [{"type": "function", "name": "browser", "description": "Open a page", "parameters": {"type": "object"}}]
+      }),
+      json!({"type": "function_call", "name": "lookup", "call_id": "call-1", "arguments": "{\"id\":1}"}),
+      json!({"type": "function_call_output", "call_id": "call-1", "output": "result"}),
+      json!({"type": "reasoning", "encrypted_content": "opaque"}),
+      json!({"type": "compaction", "encrypted_content": "summary"}),
     ])
     .collect::<Vec<_>>();
   let request_body = serde_json::to_vec(&json!({
@@ -60,13 +67,25 @@ fn indexes_all_messages_and_tool_definitions_with_lazy_details() {
   let summary = get_request_llm_summary(&dir, "2026-07-14", "request-llm-summary", None)
     .unwrap()
     .unwrap();
-  assert_eq!(summary.messages.len(), 9);
+  assert_eq!(summary.messages.len(), 14);
   assert_eq!(summary.messages.first().unwrap().index, 0);
   assert_eq!(summary.messages.first().unwrap().preview.as_deref(), Some("message 0"));
-  assert_eq!(summary.messages.last().unwrap().preview.as_deref(), Some("finished"));
+  assert_eq!(summary.messages[8].role, "assistant");
+  assert_eq!(summary.messages[8].kind, "function_call");
+  assert_eq!(summary.messages[8].name.as_deref(), Some("lookup"));
+  assert_eq!(summary.messages[8].call_id.as_deref(), Some("call-1"));
+  assert_eq!(summary.messages[8].preview.as_deref(), Some("{\"id\":1}"));
+  assert_eq!(summary.messages[9].role, "tool");
+  assert_eq!(summary.messages[9].name.as_deref(), Some("lookup"));
+  assert_eq!(summary.messages[9].preview.as_deref(), Some("result"));
+  assert_eq!(summary.messages[10].kind, "reasoning");
+  assert_eq!(summary.messages[11].kind, "compaction");
+  assert_eq!(summary.messages[12].preview.as_deref(), Some("finished"));
+  assert_eq!(summary.messages.last().unwrap().name.as_deref(), Some("shell"));
+  assert_eq!(summary.messages.last().unwrap().kind, "custom_tool_call");
   assert_eq!(summary.messages.last().unwrap().phase, "output");
-  assert_eq!(summary.messages.last().unwrap().index, 8);
-  assert_eq!(summary.tool_definitions.len(), 2);
+  assert_eq!(summary.messages.last().unwrap().index, 13);
+  assert_eq!(summary.tool_definitions.len(), 3);
   assert_eq!(summary.tool_definitions[0].name, "lookup");
   assert_eq!(
     summary.tool_definitions[0].description.as_deref(),
@@ -74,14 +93,15 @@ fn indexes_all_messages_and_tool_definitions_with_lazy_details() {
   );
   assert!(summary.tool_definitions[0].schema_bytes > 0);
   assert_eq!(summary.tool_definitions[1].name, "shell");
+  assert_eq!(summary.tool_definitions[2].name, "browser");
   assert!(summary.warning.is_none());
 
-  let message = get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 8)
+  let message = get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 9)
     .unwrap()
     .unwrap();
-  assert_eq!(message.index, 8);
-  assert_eq!(message.value["role"], "assistant");
-  assert_eq!(message.value["content"][0]["text"], "finished");
+  assert_eq!(message.index, 9);
+  assert_eq!(message.value["type"], "function_call_output");
+  assert_eq!(message.value["output"], "result");
 
   let definition = get_request_llm_tool_definition(&dir, "2026-07-14", "request-llm-summary", None, 0)
     .unwrap()
@@ -89,7 +109,7 @@ fn indexes_all_messages_and_tool_definitions_with_lazy_details() {
   assert_eq!(definition.index, 0);
   assert_eq!(definition.value["function"]["name"], "lookup");
   assert!(
-    get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 9)
+    get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 14)
       .unwrap()
       .is_none()
   );
