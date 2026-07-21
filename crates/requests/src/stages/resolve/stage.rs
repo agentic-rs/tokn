@@ -35,6 +35,8 @@ pub enum SelectorOutcome {
   SessionExpired { session_id: SmolStr },
   /// No account supports this endpoint+model combination.
   NoAccount,
+  /// A matching provider exists but is outside the caller's allowlist.
+  ProviderAccessDenied,
 }
 
 #[async_trait]
@@ -98,6 +100,10 @@ impl<S: AccountSelector + 'static> ResolveStage for PoolResolve<S> {
           })?,
           model: extracted.model.clone(),
         },
+      )),
+      SelectorOutcome::ProviderAccessDenied => Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::ProviderAccessDenied,
       )),
     }
   }

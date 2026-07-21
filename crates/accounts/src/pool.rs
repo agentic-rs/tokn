@@ -3,7 +3,7 @@ use super::handle::AccountHandle;
 use super::inventory::{AccountInventory, AccountPoolRuleset};
 use crate::routing::{RouteResolution, RouteSelector};
 use snafu::Snafu;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -219,11 +219,23 @@ impl AccountPool {
     route: &RouteResolution,
     requested: Endpoint,
   ) -> EndpointAcquire {
+    self.acquire_for_route_with_providers(session_id, route, requested, None)
+  }
+
+  /// Acquire an account while constraining candidates to providers allowed
+  /// by the authenticated client. `None` means every provider is allowed.
+  pub fn acquire_for_route_with_providers(
+    &self,
+    session_id: Option<&str>,
+    route: &RouteResolution,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> EndpointAcquire {
     if let Some(id) = session_id {
       match self.affinity.lookup(id) {
         Lookup::Hit(account_id) => {
           if let Some(acct) = self.account_by_id(&account_id) {
-            if acct.is_healthy() {
+            if provider_is_allowed(acct.provider.info().id.as_str(), allowed_providers) && acct.is_healthy() {
               if let Some(endpoint) = self.account_matching_route_endpoint(&acct, route, requested) {
                 self.record_session(id, &acct.id());
                 return EndpointAcquire::Account { acct, endpoint };
@@ -236,7 +248,7 @@ impl AccountPool {
       }
     }
 
-    match self.acquire_from_route(route, requested) {
+    match self.acquire_from_route(route, requested, allowed_providers) {
       Some((acct, endpoint)) => {
         if let Some(id) = session_id {
           self.record_session(id, &acct.id());
@@ -245,6 +257,20 @@ impl AccountPool {
       }
       None => EndpointAcquire::None,
     }
+  }
+
+  pub fn has_route_for_providers(
+    &self,
+    route: &RouteResolution,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> bool {
+    route_endpoint_order(route, requested).into_iter().any(|endpoint| {
+      self.buckets.iter().any(|(provider_id, bucket)| {
+        provider_is_allowed(provider_id, allowed_providers)
+          && provider_matches_route(bucket.provider.as_ref(), route, endpoint)
+      })
+    })
   }
 
   pub fn acquire_provider(&self, session_id: Option<&str>, provider_id: &str) -> SessionAcquire {
@@ -396,12 +422,21 @@ impl AccountPool {
     provider_matches_route(acct.provider.as_ref(), route, endpoint)
   }
 
-  fn acquire_from_route(&self, route: &RouteResolution, requested: Endpoint) -> Option<(Arc<AccountHandle>, Endpoint)> {
+  fn acquire_from_route(
+    &self,
+    route: &RouteResolution,
+    requested: Endpoint,
+    allowed_providers: Option<&BTreeSet<String>>,
+  ) -> Option<(Arc<AccountHandle>, Endpoint)> {
     for endpoint in route_endpoint_order(route, requested) {
       let candidates = self
         .buckets
-        .values()
-        .filter(|bucket| provider_matches_route(bucket.provider.as_ref(), route, endpoint))
+        .iter()
+        .filter(|(provider_id, bucket)| {
+          provider_is_allowed(provider_id, allowed_providers)
+            && provider_matches_route(bucket.provider.as_ref(), route, endpoint)
+        })
+        .map(|(_, bucket)| bucket)
         .collect::<Vec<_>>();
 
       for bucket in &candidates {
@@ -426,6 +461,12 @@ impl AccountPool {
     }
     None
   }
+}
+
+fn provider_is_allowed(provider_id: &str, allowed_providers: Option<&BTreeSet<String>>) -> bool {
+  allowed_providers
+    .map(|providers| providers.contains(provider_id))
+    .unwrap_or(true)
 }
 
 fn provider_matches_route(provider: &dyn Provider, route: &RouteResolution, endpoint: Endpoint) -> bool {
@@ -926,6 +967,49 @@ mod tests {
     assert_eq!(acct.provider.info().id, "provider-b");
     assert_eq!(acct.id(), "b1");
     assert_eq!(filtered.len(), 1);
+  }
+
+  #[test]
+  fn per_request_provider_allowlist_constrains_routing_and_affinity() {
+    let p = pool();
+    let route_a = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("model-a", None)
+      .unwrap();
+    let route_b = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("model-b", None)
+      .unwrap();
+    let only_a = ["provider-a".to_string()].into_iter().collect();
+    let only_b = ["provider-b".to_string()].into_iter().collect();
+
+    let EndpointAcquire::Account { acct, .. } = p.acquire_for_route_with_providers(
+      Some("shared-session"),
+      &route_a,
+      Endpoint::ChatCompletions,
+      Some(&only_a),
+    ) else {
+      panic!("expected provider-a account");
+    };
+    assert_eq!(acct.provider.info().id, "provider-a");
+
+    assert!(matches!(
+      p.acquire_for_route_with_providers(
+        Some("shared-session"),
+        &route_a,
+        Endpoint::ChatCompletions,
+        Some(&only_b),
+      ),
+      EndpointAcquire::None
+    ));
+
+    let EndpointAcquire::Account { acct, .. } = p.acquire_for_route_with_providers(
+      Some("shared-session"),
+      &route_b,
+      Endpoint::ChatCompletions,
+      Some(&only_b),
+    ) else {
+      panic!("expected provider-b account");
+    };
+    assert_eq!(acct.provider.info().id, "provider-b");
   }
 
   #[test]

@@ -21,7 +21,7 @@ pub struct ServeArgs {
   /// Override the proxy listener's default route mode when `--with-proxy` is enabled.
   #[arg(long, value_enum, requires = "with_proxy")]
   pub proxy_route_mode: Option<RouteModeArg>,
-  /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
+  /// Allow non-loopback binding. API keys protect /v1 routes, not the optional CONNECT proxy.
   #[arg(long)]
   pub insecure_allow_remote: bool,
   /// Skip outbound proxy for this run.
@@ -35,6 +35,7 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
     cfg.proxy = crate::config::ProxyConfig::default();
   }
   let accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path))?;
+  let access = crate::server_runtime::load_access_store()?;
 
   let host = args.host.unwrap_or_else(|| cfg.server.host.clone());
   let port = args.port.unwrap_or(cfg.server.port);
@@ -46,7 +47,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
   let server_mode = effective_server_mode(&cfg);
   let proxy_route_override = args.proxy_route_mode.map(Into::into);
   let proxy_mode = proxy_route_override.unwrap_or(cfg.proxy_mode.route_mode);
-  let app_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), server_mode)?;
+  let mut app_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), server_mode)?;
+  app_state.access = access;
   let n = app_state.pool.len();
   let app_live = tokn_router::api::LiveAppState::new(app_state);
   let proxy_live = if args.with_proxy {
@@ -158,8 +160,10 @@ fn install_reload_endpoint(
       let accounts = crate::server_runtime::load_accounts(Some(&resolved_cfg_path)).map_err(|e| e.to_string())?;
       let server_mode = effective_server_mode(&cfg);
       let proxy_mode = proxy_route_override.unwrap_or(cfg.proxy_mode.route_mode);
-      let app_state = crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), server_mode)
-        .map_err(|e| e.to_string())?;
+      let mut app_state =
+        crate::server_runtime::build_state_for_route_mode(&cfg, &accounts, events.clone(), server_mode)
+          .map_err(|e| e.to_string())?;
+      app_state.access = crate::server_runtime::load_access_store().map_err(|e| e.to_string())?;
       let proxy_state = if with_proxy {
         Some(
           crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), proxy_mode)

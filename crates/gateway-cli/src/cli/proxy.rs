@@ -56,7 +56,7 @@ pub struct StartArgs {
   pub passthrough: bool,
   #[arg(long)]
   pub ca_dir: Option<PathBuf>,
-  /// Allow binding to non-loopback addresses (insecure: there is no client auth in v1).
+  /// Allow non-loopback binding (insecure: the CONNECT proxy has no client authentication).
   #[arg(long)]
   pub insecure_allow_remote: bool,
   /// Skip outbound proxy for this run.

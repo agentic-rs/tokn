@@ -1,11 +1,12 @@
 use super::error::ApiError;
 use super::{AppState, LiveAppState, RequestPolicyRuntime};
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Map, Value};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tokn_access::AccessContext;
 use tokn_accounts::routing::route_mode_as_str;
 use tokn_config::RouteMode;
 use tracing::{debug, instrument, warn};
@@ -15,20 +16,31 @@ use tracing::{debug, instrument, warn};
 /// `"x_tokn_router"` so OpenAI-shape stays intact for legacy clients while
 /// richer consumers (TUIs, dashboards) can pick up capabilities/costs/limits.
 #[instrument(name = "list_models", skip_all, fields(accounts = tracing::field::Empty, models = tracing::field::Empty))]
-pub async fn list_models(State(s): State<LiveAppState>) -> Result<Json<Value>, ApiError> {
+pub async fn list_models(
+  State(s): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
+) -> Result<Json<Value>, ApiError> {
   let s = s.current();
   let policy = s.default_policy.clone();
-  list_models_for_policy(s, policy).await
+  list_models_for_policy(s, policy, &access).await
 }
 
-async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) -> Result<Json<Value>, ApiError> {
+async fn list_models_for_policy(
+  s: AppState,
+  policy: Arc<RequestPolicyRuntime>,
+  access: &AccessContext,
+) -> Result<Json<Value>, ApiError> {
   let mut out: Vec<Value> = Vec::new();
   let mut seen: HashSet<String> = HashSet::new();
   let mut last_err: Option<String> = None;
 
-  let accounts = model_accounts(policy.as_ref());
+  let accounts = model_accounts(policy.as_ref(), access);
   let span = tracing::Span::current();
   span.record("accounts", accounts.len());
+
+  if accounts.is_empty() {
+    return Ok(model_list(policy.mode, out));
+  }
 
   for acct in accounts {
     let provider = acct.provider.clone();
@@ -66,19 +78,27 @@ async fn list_models_for_policy(s: AppState, policy: Arc<RequestPolicyRuntime>) 
     let msg = last_err.unwrap_or_else(|| "no models available".into());
     return Err(ApiError::upstream(StatusCode::BAD_GATEWAY, msg));
   }
-  Ok(Json(json!({
-    "object": "list",
-    "route_mode": route_mode_as_str(policy.mode),
-    "data": out,
-  })))
+  Ok(model_list(policy.mode, out))
 }
 
-fn model_accounts(policy: &RequestPolicyRuntime) -> Vec<std::sync::Arc<tokn_accounts::AccountHandle>> {
+fn model_list(mode: RouteMode, data: Vec<Value>) -> Json<Value> {
+  Json(json!({
+    "object": "list",
+    "route_mode": route_mode_as_str(mode),
+    "data": data,
+  }))
+}
+
+fn model_accounts(
+  policy: &RequestPolicyRuntime,
+  access: &AccessContext,
+) -> Vec<std::sync::Arc<tokn_accounts::AccountHandle>> {
   let default_provider_id = policy.default_provider_id.as_deref();
   policy
     .pool
     .all()
     .iter()
+    .filter(|acct| access.providers.allows(acct.provider.info().id.as_str()))
     .filter(|acct| match policy.mode {
       RouteMode::Passthrough | RouteMode::Switch => default_provider_id
         .map(|provider_id| acct.provider.info().id == provider_id)
@@ -199,6 +219,7 @@ fn enrich(entry: &mut Value, upstream_id: &str, rendered_id: &str, provider: &dy
 /// Profile-prefixed variant: `/{profile}/v1/models`
 pub async fn list_models_with_profile(
   State(s): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   Path(profile): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
   let s = s.current();
@@ -207,5 +228,5 @@ pub async fn list_models_with_profile(
     .get(&profile)
     .cloned()
     .ok_or_else(|| ApiError::bad_request(format!("unknown profile '{profile}'")))?;
-  list_models_for_policy(s, policy).await
+  list_models_for_policy(s, policy, &access).await
 }

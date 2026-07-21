@@ -30,6 +30,14 @@ pub type ApiError = Error;
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
+  /// No valid client API key was supplied. Maps to 401.
+  #[snafu(display("{message}"))]
+  Unauthorized { message: String },
+
+  /// The authenticated API key cannot use the resolved provider. Maps to 403.
+  #[snafu(display("{message}"))]
+  Forbidden { message: String },
+
   /// Request was malformed (JSON missing required fields, etc.). Maps to 400.
   #[snafu(display("{message}"))]
   BadRequest { message: String },
@@ -66,6 +74,12 @@ pub enum Error {
 }
 
 impl Error {
+  pub fn unauthorized(msg: impl Into<String>) -> Self {
+    Error::Unauthorized { message: msg.into() }
+  }
+  pub fn forbidden(msg: impl Into<String>) -> Self {
+    Error::Forbidden { message: msg.into() }
+  }
   pub fn upstream(status: StatusCode, body: impl Into<String>) -> Self {
     Error::Upstream {
       status,
@@ -116,6 +130,8 @@ impl Error {
 
   pub(crate) fn status(&self) -> StatusCode {
     match self {
+      Error::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+      Error::Forbidden { .. } => StatusCode::FORBIDDEN,
       Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
       Error::UnsupportedMediaType { .. } => StatusCode::UNSUPPORTED_MEDIA_TYPE,
       Error::Upstream { status, .. } => *status,
@@ -128,6 +144,8 @@ impl Error {
 
   fn kind(&self) -> &'static str {
     match self {
+      Error::Unauthorized { .. } => "authentication_error",
+      Error::Forbidden { .. } => "permission_error",
       Error::BadRequest { .. } => "bad_request",
       Error::UnsupportedMediaType { .. } => "unsupported_media_type",
       Error::Upstream { .. } => "upstream_error",
@@ -140,6 +158,7 @@ impl Error {
 
   fn message(&self) -> String {
     match self {
+      Error::Unauthorized { message } | Error::Forbidden { message } => message.clone(),
       Error::BadRequest { message } => message.clone(),
       Error::UnsupportedMediaType { message } => message.clone(),
       Error::Upstream { status, body } => {
@@ -189,6 +208,8 @@ mod tests {
 
   #[test]
   fn status_mapping() {
+    assert_eq!(Error::unauthorized("x").status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(Error::forbidden("x").status(), StatusCode::FORBIDDEN);
     assert_eq!(Error::bad_request("x").status(), StatusCode::BAD_REQUEST);
     assert_eq!(
       Error::unsupported_media_type("x").status(),
@@ -206,6 +227,8 @@ mod tests {
 
   #[test]
   fn kind_names_are_stable() {
+    assert_eq!(Error::unauthorized("x").kind(), "authentication_error");
+    assert_eq!(Error::forbidden("x").kind(), "permission_error");
     assert_eq!(Error::bad_request("x").kind(), "bad_request");
     assert_eq!(Error::unsupported_media_type("x").kind(), "unsupported_media_type");
     assert_eq!(Error::upstream(StatusCode::BAD_GATEWAY, "x").kind(), "upstream_error");

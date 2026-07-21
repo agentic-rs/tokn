@@ -2603,6 +2603,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokn-access"
+version = "0.2.1"
+dependencies = [
+ "anyhow",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tempfile",
+ "time",
+ "tokn-core",
+ "uuid",
+]
+
+[[package]]
 name = "tokn-accounts"
 version = "0.2.1"
 dependencies = [
@@ -2801,6 +2818,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokn-access",
  "tokn-agent-migration",
  "tokn-auth",
  "tokn-catalogue",
@@ -3035,9 +3053,11 @@ dependencies = [
  "sha2",
  "smol_str",
  "snafu",
+ "tempfile",
  "time",
  "tokio",
  "tokio-rustls",
+ "tokn-access",
  "tokn-accounts",
  "tokn-auth",
  "tokn-catalogue",

@@ -1,3 +1,4 @@
+pub mod access;
 pub mod codec;
 pub mod endpoints;
 pub mod error;
@@ -105,6 +106,8 @@ impl LiveAppState {
 
 #[derive(Clone)]
 pub struct AppState {
+  /// Inbound client credentials and per-key provider authorization.
+  pub access: Arc<tokn_access::AccessStore>,
   pub inventory: Arc<AccountInventory>,
   pub pool: Arc<AccountPool>,
   pub provider_registry: Arc<ProviderRegistry>,
@@ -305,7 +308,8 @@ pub fn router_live(state: LiveAppState) -> Router {
     .merge(profile_routes)
     .route("/admin/config/reload", post(admin_config_reload))
     .route("/healthz", get(health))
-    .with_state(state)
+    .with_state(state.clone())
+    .layer(middleware::from_fn_with_state(state.clone(), access::authenticate))
     // Layers run outermost-first on request, innermost-first on response.
     // SetRequestIdLayer with MakeRequestUuid only assigns a fresh UUID when
     // the inbound request lacks the header, so client-supplied ids pass
@@ -431,6 +435,7 @@ fn build_state_inner(
   let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
   let proxy_switch_pipeline = build_proxy_switch_pipeline(pool.clone(), http.clone(), events.clone());
   Ok(AppState {
+    access: Arc::new(tokn_access::AccessStore::disabled()),
     inventory,
     pool,
     provider_registry,
@@ -998,6 +1003,94 @@ mod tests {
         br#"{"model":"glm-4.7","messages":[{"role":"user","content":"hi"}],"stream":false}"#,
       )))
       .unwrap()
+  }
+
+  fn state_with_api_key(providers: Vec<String>) -> (AppState, String) {
+    let temp = tempfile::tempdir().unwrap();
+    let access = tokn_access::AccessStore::open(temp.path().join("access.db")).unwrap();
+    let created = access.create_key("test-client", providers).unwrap();
+    let mut state = build_state(
+      &Config::default(),
+      &[core_account(zai_account())],
+      Arc::new(EventBus::noop()),
+    )
+    .unwrap();
+    state.access = Arc::new(access);
+    (state, created.token)
+  }
+
+  #[tokio::test]
+  async fn configured_api_keys_require_authentication() {
+    let (state, _) = state_with_api_key(Vec::new());
+    let response = router(state)
+      .oneshot(Request::get("/v1/providers").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+      response.headers().get(axum::http::header::WWW_AUTHENTICATE).unwrap(),
+      "Bearer"
+    );
+  }
+
+  #[tokio::test]
+  async fn wildcard_api_key_can_list_every_configured_provider() {
+    let (state, token) = state_with_api_key(Vec::new());
+    let response = router(state)
+      .oneshot(
+        Request::get("/v1/providers")
+          .header("authorization", format!("Bearer {token}"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["data"][0]["id"], "zai-coding-plan");
+  }
+
+  #[tokio::test]
+  async fn provider_restricted_key_filters_discovery_and_denies_routing() {
+    let (state, token) = state_with_api_key(vec!["openai".into()]);
+    let app = router(state);
+    let providers = app
+      .clone()
+      .oneshot(
+        Request::get("/v1/providers")
+          .header("authorization", format!("Bearer {token}"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(providers.status(), StatusCode::OK);
+    let body = to_bytes(providers.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["data"].as_array().unwrap().len(), 0);
+
+    let models = app
+      .clone()
+      .oneshot(
+        Request::get("/v1/models")
+          .header("authorization", format!("Bearer {token}"))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(models.status(), StatusCode::OK);
+    let body = to_bytes(models.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["data"].as_array().unwrap().len(), 0);
+
+    let mut request = chat_request("restricted-key");
+    request
+      .headers_mut()
+      .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    let denied = app.oneshot(request).await.unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
   }
 
   async fn one_shot_models_upstream(

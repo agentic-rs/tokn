@@ -79,6 +79,10 @@ pub fn load_accounts(config_path: Option<&Path>) -> Result<Vec<AccountConfig>> {
   Ok(store.accounts)
 }
 
+pub fn load_access_store() -> Result<Arc<tokn_access::AccessStore>> {
+  Ok(Arc::new(tokn_access::AccessStore::open_default()?))
+}
+
 pub fn build_state(
   cfg: &Config,
   accounts: &[AccountConfig],
@@ -137,7 +141,7 @@ pub fn is_loopback(host: &str) -> bool {
 pub fn ensure_bind_host(host: &str, insecure_allow_remote: bool) -> Result<()> {
   if !insecure_allow_remote && !is_loopback(host) {
     anyhow::bail!(
-      "refusing to bind to non-loopback host '{host}' without --insecure-allow-remote (no client auth in v1)"
+      "refusing to bind to non-loopback host '{host}' without --insecure-allow-remote; API-key auth covers /v1 routes, not every listener or route"
     );
   }
   Ok(())
