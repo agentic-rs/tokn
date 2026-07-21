@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use serde_json::Value;
 use tokn_core::pipeline::{ParsedRequest, RequestMeta};
 use tokn_core::util::initiator::{classify_initiator, classify_initiator_responses};
-use tokn_headers::inbound::{PROJECT_ID_HEADERS, REQUEST_ID_HEADERS, SESSION_ID_HEADERS};
+use tokn_headers::inbound::{inbound_correlation, PROJECT_ID_HEADERS, REQUEST_ID_HEADERS};
 
 #[derive(Clone, Debug)]
 pub(crate) struct HeaderExtract {
@@ -67,7 +67,10 @@ pub(crate) trait RequestParser: Send + Sync {
 
   fn parse(&self, headers: HeaderMap, body: Value) -> ParsedRequest {
     let body_meta = request_body_extract(&headers, &body);
-    let session_id = first_header(&headers, SESSION_ID_HEADERS).map(str::to_string);
+    let inbound_headers: tokn_headers::HeaderMap = (&headers).into();
+    let session_id = inbound_correlation(&inbound_headers)
+      .session_id
+      .map(|value| value.to_string());
     let request_id = first_header(&headers, REQUEST_ID_HEADERS).map(str::to_string);
     let project_id = first_header(&headers, PROJECT_ID_HEADERS).map(str::to_string);
 
@@ -84,7 +87,7 @@ pub(crate) trait RequestParser: Send + Sync {
         project_id,
         initiator: body_meta.initiator,
         header_initiator: body_meta.header_initiator,
-        inbound_headers: (&headers).into(),
+        inbound_headers,
       },
       body,
     }

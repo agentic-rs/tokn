@@ -22,7 +22,7 @@ use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
 use tokn_core::util::initiator::{classify_initiator as classify_chat_initiator, classify_initiator_responses};
-use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
+use tokn_headers::inbound::{first_present_smol, inbound_correlation, PROJECT_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
 pub struct DefaultExtract;
@@ -57,7 +57,7 @@ impl ExtractStage for DefaultExtract {
       .clone()
       .or_else(|| classify_initiator(&body_json).map(SmolStr::new));
 
-    let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
+    let session_id = inbound_correlation(&headers).session_id;
     let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
 
     let route_mode_hint = header_str(&headers, "x-route-mode")
@@ -131,7 +131,7 @@ mod tests {
   use std::sync::Arc;
   use tokn_core::provider::Endpoint;
   use tokn_core::AgentId;
-  use tokn_headers::inbound::first_present;
+  use tokn_headers::inbound::{first_present, SESSION_ID_HEADERS};
 
   fn ctx() -> PipelineCtx {
     PipelineCtx::new(
@@ -270,5 +270,18 @@ mod tests {
     let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
     assert_eq!(ex.session_id.as_deref(), first_present(&ex.headers, SESSION_ID_HEADERS));
     assert_eq!(ex.project_id.as_deref(), Some("proj-9"));
+  }
+
+  #[tokio::test]
+  async fn session_id_falls_back_to_codex_turn_metadata() {
+    let body = serde_json::json!({"model": "m"});
+    let headers = header_map(&[(
+      "x-codex-turn-metadata",
+      r#"{"session_id":"session-meta","thread_id":"thread-meta","turn_id":"turn-meta"}"#,
+    )]);
+
+    let ex = DefaultExtract.extract(&ctx(), raw(headers, body)).await.unwrap();
+
+    assert_eq!(ex.session_id.as_deref(), Some("session-meta"));
   }
 }

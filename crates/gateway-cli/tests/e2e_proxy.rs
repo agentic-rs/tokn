@@ -134,7 +134,10 @@ async fn proxy_passthrough_modes_return_expected_results_and_persist_request_row
       .uri("/v1/chat/completions")
       .header("content-type", "application/json")
       .header("authorization", "Bearer client-token")
-      .header("x-session-id", "sess-proxy-1")
+      .header(
+        "x-codex-turn-metadata",
+        r#"{"session_id":"sess-proxy-1","thread_id":"thread-proxy-1","turn_id":"turn-proxy-1"}"#,
+      )
       .header("x-request-id", request_id)
       .body(())
       .unwrap();
@@ -163,6 +166,12 @@ async fn proxy_passthrough_modes_return_expected_results_and_persist_request_row
   for case in cases {
     let row = harness.row(case.name).await;
     assert_proxy_row(&row, case, &inbound_body);
+    assert_eq!(
+      harness.usage_session_id(case.name).as_deref(),
+      Some("sess-proxy-1"),
+      "{}",
+      case.name
+    );
   }
 }
 
