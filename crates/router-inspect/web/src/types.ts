@@ -27,6 +27,38 @@ export interface RequestPayload {
   value: unknown;
 }
 
+export interface LlmMessageSummary {
+  index: number;
+  role: string;
+  phase: string;
+  kind: string;
+  name: string | null;
+  call_id: string | null;
+  preview: string | null;
+  truncated: boolean;
+  content_bytes: number;
+}
+
+export interface LlmToolDefinitionSummary {
+  index: number;
+  name: string;
+  kind: string;
+  description: string | null;
+  truncated: boolean;
+  schema_bytes: number;
+}
+
+export interface LlmRequestContentSummary {
+  messages: LlmMessageSummary[];
+  tool_definitions: LlmToolDefinitionSummary[];
+  warning: string | null;
+}
+
+export interface LlmItemDetail {
+  index: number;
+  value: unknown;
+}
+
 export interface RequestPage {
   requests: RequestSummary[];
   next_cursor: string | null;

@@ -11,6 +11,8 @@
     "src/session-tree.spec.ts",
     "src/web-search.ts",
     "src/web-search.spec.ts",
+    "src/llm-request.ts",
+    "src/llm-request-overview.spec.ts",
     "src/types.ts"
   ]
 }

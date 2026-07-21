@@ -15,7 +15,10 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use tokn_persistence::viewer::{get_request_payload, RequestCursor, RequestPayloadField};
+use tokn_persistence::viewer::{
+  get_request_llm_message, get_request_llm_summary, get_request_llm_tool_definition, get_request_payload,
+  RequestCursor, RequestPayloadField,
+};
 use tokn_persistence::{
   get_request, get_session_from_db, get_session_node_from_db, get_session_usage, is_valid_request_day,
   list_latest_requests, list_request_days, list_request_url_paths, list_requests, list_sessions_from_db,
@@ -94,6 +97,14 @@ struct RequestPayloadQuery {
   request_id: String,
   row_id: Option<i64>,
   field: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestLlmItemQuery {
+  day: String,
+  request_id: String,
+  row_id: Option<i64>,
+  index: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -199,6 +210,9 @@ fn router(state: InspectState) -> Router {
     .route("/api/requests", get(requests))
     .route("/api/requests/latest", get(latest_requests))
     .route("/api/request", get(request_detail))
+    .route("/api/request-llm-summary", get(request_llm_summary))
+    .route("/api/request-llm-message", get(request_llm_message))
+    .route("/api/request-llm-tool-definition", get(request_llm_tool_definition))
     .route("/api/request-payload", get(request_payload))
     .route("/api/sessions", get(sessions))
     .route("/api/session", get(session_detail))
@@ -338,6 +352,62 @@ async fn request_payload(
       .map_err(|_| ApiError::unavailable("request day"))?;
   let payload = payload.ok_or_else(|| ApiError::not_found("request payload"))?;
   Ok(json_response(StatusCode::OK, payload))
+}
+
+async fn request_llm_summary(
+  State(state): State<InspectState>,
+  Query(query): Query<RequestDetailQuery>,
+) -> Result<Response, ApiError> {
+  validate_request_day(&query.day)?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let request_id = query.request_id;
+  let row_id = query.row_id;
+  let summary = tokio::task::spawn_blocking(move || get_request_llm_summary(&requests_dir, &day, &request_id, row_id))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(|_| ApiError::unavailable("request day"))?;
+  let summary = summary.ok_or_else(|| ApiError::not_found("request LLM summary"))?;
+  Ok(json_response(StatusCode::OK, summary))
+}
+
+async fn request_llm_message(
+  State(state): State<InspectState>,
+  Query(query): Query<RequestLlmItemQuery>,
+) -> Result<Response, ApiError> {
+  validate_request_day(&query.day)?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let request_id = query.request_id;
+  let row_id = query.row_id;
+  let index = query.index;
+  let message =
+    tokio::task::spawn_blocking(move || get_request_llm_message(&requests_dir, &day, &request_id, row_id, index))
+      .await
+      .map_err(ApiError::internal)?
+      .map_err(|_| ApiError::unavailable("request day"))?;
+  let message = message.ok_or_else(|| ApiError::not_found("request LLM message"))?;
+  Ok(json_response(StatusCode::OK, message))
+}
+
+async fn request_llm_tool_definition(
+  State(state): State<InspectState>,
+  Query(query): Query<RequestLlmItemQuery>,
+) -> Result<Response, ApiError> {
+  validate_request_day(&query.day)?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let request_id = query.request_id;
+  let row_id = query.row_id;
+  let index = query.index;
+  let definition = tokio::task::spawn_blocking(move || {
+    get_request_llm_tool_definition(&requests_dir, &day, &request_id, row_id, index)
+  })
+  .await
+  .map_err(ApiError::internal)?
+  .map_err(|_| ApiError::unavailable("request day"))?;
+  let definition = definition.ok_or_else(|| ApiError::not_found("request LLM tool definition"))?;
+  Ok(json_response(StatusCode::OK, definition))
 }
 
 fn validate_request_day(day: &str) -> Result<(), ApiError> {
@@ -694,6 +764,14 @@ mod tests {
     let conn = open_day_db(&tempdir.path().join("2026-07-14.db")).unwrap();
     conn
       .execute(
+        "UPDATE request_downstream
+         SET inbound_req_body = '{\"input\":[{\"role\":\"user\",\"content\":\"hello\"},{\"type\":\"function_call\",\"name\":\"lookup\",\"arguments\":\"{}\"}],\"tools\":[{\"type\":\"function\",\"name\":\"lookup\",\"description\":\"Find a record\",\"parameters\":{\"type\":\"object\"}}]}'
+         WHERE request_id = ?1",
+        params!["request/one"],
+      )
+      .unwrap();
+    conn
+      .execute(
         "INSERT INTO request_upstream (request_id, outbound_resp_body) VALUES (?1, ?2)",
         params!["request/one", &[0xff_u8, 0x00]],
       )
@@ -721,7 +799,49 @@ mod tests {
     assert_eq!(json_payload.status(), StatusCode::OK);
     let json_payload_body = response_body(json_payload).await;
     assert!(json_payload_body.contains(r#""field":"inbound_req_body""#));
-    assert!(json_payload_body.contains(r#""input":"hello""#));
+    assert!(json_payload_body.contains(r#""role":"user""#));
+
+    let llm_summary = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-llm-summary?day=2026-07-14&request_id=request%2Fone&row_id=1",
+    )
+    .await;
+    assert_eq!(llm_summary.status(), StatusCode::OK);
+    let llm_summary_body = response_body(llm_summary).await;
+    assert!(llm_summary_body.contains(r#""messages":[{"index":0"#));
+    assert!(llm_summary_body.contains(r#""kind":"function_call""#));
+    assert!(llm_summary_body.contains(r#""tool_definitions":[{"index":0"#));
+    assert!(llm_summary_body.contains(r#""name":"lookup""#));
+    assert!(llm_summary_body.contains(r#""description":"Find a record""#));
+
+    let llm_message = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-llm-message?day=2026-07-14&request_id=request%2Fone&row_id=1&index=0",
+    )
+    .await;
+    assert_eq!(llm_message.status(), StatusCode::OK);
+    assert!(response_body(llm_message).await.contains(r#""content":"hello""#));
+
+    let llm_tool = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-llm-tool-definition?day=2026-07-14&request_id=request%2Fone&row_id=1&index=0",
+    )
+    .await;
+    assert_eq!(llm_tool.status(), StatusCode::OK);
+    assert!(response_body(llm_tool)
+      .await
+      .contains(r#""parameters":{"type":"object"}"#));
+
+    let missing_llm_message = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-llm-message?day=2026-07-14&request_id=request%2Fone&row_id=1&index=2",
+    )
+    .await;
+    assert_eq!(missing_llm_message.status(), StatusCode::NOT_FOUND);
 
     let binary_payload = get_response(
       tempdir.path(),
@@ -749,6 +869,14 @@ mod tests {
     )
     .await;
     assert_eq!(missing_request.status(), StatusCode::NOT_FOUND);
+
+    let missing_llm_summary = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/request-llm-summary?day=2026-07-14&request_id=missing",
+    )
+    .await;
+    assert_eq!(missing_llm_summary.status(), StatusCode::NOT_FOUND);
 
     let mismatched_identity = get_response(
       tempdir.path(),

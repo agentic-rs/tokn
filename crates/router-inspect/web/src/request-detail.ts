@@ -1,9 +1,11 @@
 import { LitElement, html, nothing } from "lit";
 import "./payload-panel";
+import "./llm-request-overview";
 import "./web-search-detail";
 import { displayPath, formatTimestamp, numberField, shortId, stringField } from "./format";
 import type { DetailTab, LoadState, RequestDetail, RequestSummary, TimezoneMode } from "./types";
 import { isCodexWebSearchEndpoint } from "./web-search";
+import { isLlmRequest } from "./llm-request";
 
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -121,6 +123,18 @@ export class RequestDetailView extends LitElement {
   }
 
   private renderOverview(request: Record<string, unknown>) {
+    if (isLlmRequest(request) && this.detail) {
+      return html`
+        <llm-request-overview
+          .request=${request}
+          .day=${this.detail.day}
+          .request_id=${stringField(request, "request_id") ?? this.summary?.request_id ?? ""}
+          .row_id=${this.detail.row_id}
+          .timezone=${this.timezone}
+        ></llm-request-overview>
+      `;
+    }
+
     const ts = numberField(request, "ts");
     const latency = nestedValue(request, "ctx_json", "latency_ms");
     const stream = nestedValue(request, "params_json", "stream");
