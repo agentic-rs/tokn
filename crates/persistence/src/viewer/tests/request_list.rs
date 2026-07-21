@@ -1,7 +1,8 @@
 use crate::requests::open_day_db;
 
 use super::super::{
-  list_latest_requests, list_requests, list_sessions, InvalidRequestCursor, RequestCursor, RequestListOptions,
+  list_latest_requests, list_request_url_paths, list_requests, list_sessions, InvalidRequestCursor, RequestCursor,
+  RequestListOptions,
 };
 use super::support::{request_ids, tempdir, write_request};
 
@@ -179,6 +180,68 @@ fn exact_status_filter_uses_downstream_then_upstream_then_lifecycle_precedence()
     .unwrap();
     assert!(page.requests.is_empty());
   }
+}
+
+#[test]
+fn lists_and_filters_normalized_url_paths_across_raw_url_variants() {
+  let dir = tempdir();
+  for request_id in ["search-relative", "search-absolute", "responses"] {
+    write_request(
+      &dir,
+      "2026-07-14",
+      request_id,
+      1_784_444_800_000,
+      Some("session-1"),
+      Some("openai"),
+    );
+  }
+  let conn = open_day_db(&dir.join("2026-07-14.db")).unwrap();
+  conn
+    .execute(
+      "UPDATE request_downstream SET inbound_req_url = ?2 WHERE request_id = ?1",
+      ["search-relative", "/backend-api/codex/alpha/search?client_version=1"],
+    )
+    .unwrap();
+  conn
+    .execute(
+      "UPDATE request_downstream SET inbound_req_url = ?2 WHERE request_id = ?1",
+      [
+        "search-absolute",
+        "https://chatgpt.com/backend-api/codex/alpha/search?client_version=2",
+      ],
+    )
+    .unwrap();
+
+  let paths = list_request_url_paths(&dir, "2026-07-14").unwrap();
+  assert_eq!(paths[0].url_path, "/backend-api/codex/alpha/search");
+  assert_eq!(paths[0].request_count, 2);
+  assert!(paths
+    .iter()
+    .any(|path| path.url_path == "/v1/responses" && path.request_count == 1));
+
+  let mut options = RequestListOptions {
+    day: Some("2026-07-14".to_string()),
+    url_path: Some("/backend-api/codex/alpha/search".to_string()),
+    limit: Some(1),
+    ..RequestListOptions::default()
+  };
+  let first = list_requests(&dir, &options).unwrap();
+  assert_eq!(first.requests.len(), 1);
+  assert!(first.next_cursor.is_some());
+  options.cursor = Some(RequestCursor::decode(first.next_cursor.as_deref().unwrap()).unwrap());
+  let second = list_requests(&dir, &options).unwrap();
+  assert_eq!(second.requests.len(), 1);
+  assert!(second.next_cursor.is_none());
+  let ids = first
+    .requests
+    .iter()
+    .chain(&second.requests)
+    .map(|request| request.request_id.as_str())
+    .collect::<std::collections::HashSet<_>>();
+  assert_eq!(
+    ids,
+    std::collections::HashSet::from(["search-relative", "search-absolute"])
+  );
 }
 
 #[test]

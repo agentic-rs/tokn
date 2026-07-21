@@ -1,7 +1,9 @@
 import { LitElement, html, nothing } from "lit";
 import "./payload-panel";
+import "./web-search-detail";
 import { displayPath, formatTimestamp, numberField, shortId, stringField } from "./format";
 import type { DetailTab, LoadState, RequestDetail, RequestSummary, TimezoneMode } from "./types";
+import { isCodexWebSearchEndpoint } from "./web-search";
 
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -135,6 +137,17 @@ export class RequestDetailView extends LitElement {
     const inbound_status = numberField(request, "inbound_resp_status");
     const outbound_status = numberField(request, "outbound_resp_status");
     const final_status = numberField(request, "status");
+    const request_id = stringField(request, "request_id") ?? this.summary?.request_id;
+    const row_id = this.detail?.row_id;
+    const endpoint = stringField(request, "inbound_req_url") ?? stringField(request, "endpoint");
+    const search_detail = this.detail && request_id && row_id && isCodexWebSearchEndpoint(endpoint)
+      ? html`
+          <web-search-detail
+            .request_url=${payloadUrl(this.detail.day, request_id, row_id, "inbound_req_body")}
+            .response_url=${payloadUrl(this.detail.day, request_id, row_id, "inbound_resp_body")}
+          ></web-search-detail>
+        `
+      : nothing;
     return html`
       <section class="flow-grid" aria-label="Request flow">
         <div>
@@ -164,10 +177,24 @@ export class RequestDetailView extends LitElement {
           `
         )}
       </dl>
+      ${search_detail}
+      <div class="payload-stack">
+        <payload-panel label="Usage" .value=${request.usage_json}></payload-panel>
+      </div>
+    `;
+  }
+
+  private renderRaw(request: Record<string, unknown>) {
+    return html`
+      <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
       <div class="payload-stack">
         <payload-panel label="Request parameters" .value=${request.params_json}></payload-panel>
-        <payload-panel label="Usage" .value=${request.usage_json}></payload-panel>
         <payload-panel label="Request context" .value=${request.ctx_json}></payload-panel>
+        <payload-panel
+          label="Persisted overview record"
+          .value=${request}
+          .redact_record_headers=${true}
+        ></payload-panel>
       </div>
     `;
   }
@@ -257,14 +284,7 @@ export class RequestDetailView extends LitElement {
       case "provider":
         return this.renderProvider(request, day, request_id, row_id);
       case "raw":
-        return html`
-          <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
-          <payload-panel
-            label="Persisted overview record"
-            .value=${request}
-            .redact_record_headers=${true}
-          ></payload-panel>
-        `;
+        return this.renderRaw(request);
       default:
         return this.renderOverview(request);
     }

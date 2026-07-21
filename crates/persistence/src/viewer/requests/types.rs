@@ -12,9 +12,17 @@ pub struct RequestListOptions {
   pub cursor: Option<RequestCursor>,
   pub session_id: Option<String>,
   pub provider_id: Option<String>,
+  pub url_path: Option<String>,
   pub status: Option<u16>,
   pub errors_only: bool,
   pub query: Option<String>,
+}
+
+/// One normalized inbound URL path available on a request day.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RequestUrlPath {
+  pub url_path: String,
+  pub request_count: u64,
 }
 
 impl RequestListOptions {

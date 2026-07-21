@@ -1,10 +1,10 @@
-(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const i of document.querySelectorAll('link[rel="modulepreload"]'))t(i);new MutationObserver(i=>{for(const n of i)if(n.type==="childList")for(const r of n.addedNodes)r.tagName==="LINK"&&r.rel==="modulepreload"&&t(r)}).observe(document,{childList:!0,subtree:!0});function s(i){const n={};return i.integrity&&(n.integrity=i.integrity),i.referrerPolicy&&(n.referrerPolicy=i.referrerPolicy),i.crossOrigin==="use-credentials"?n.credentials="include":i.crossOrigin==="anonymous"?n.credentials="omit":n.credentials="same-origin",n}function t(i){if(i.ep)return;i.ep=!0;const n=s(i);fetch(i.href,n)}})();const ee=globalThis,he=ee.ShadowRoot&&(ee.ShadyCSS===void 0||ee.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,De=Symbol(),$e=new WeakMap;let Fe=class{constructor(e,s,t){if(this._$cssResult$=!0,t!==De)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=e,this.t=s}get styleSheet(){let e=this.o;const s=this.t;if(he&&e===void 0){const t=s!==void 0&&s.length===1;t&&(e=$e.get(s)),e===void 0&&((this.o=e=new CSSStyleSheet).replaceSync(this.cssText),t&&$e.set(s,e))}return e}toString(){return this.cssText}};const Ve=o=>new Fe(typeof o=="string"?o:o+"",void 0,De),We=(o,e)=>{if(he)o.adoptedStyleSheets=e.map(s=>s instanceof CSSStyleSheet?s:s.styleSheet);else for(const s of e){const t=document.createElement("style"),i=ee.litNonce;i!==void 0&&t.setAttribute("nonce",i),t.textContent=s.cssText,o.appendChild(t)}},ge=he?o=>o:o=>o instanceof CSSStyleSheet?(e=>{let s="";for(const t of e.cssRules)s+=t.cssText;return Ve(s)})(o):o;const{is:Je,defineProperty:Ke,getOwnPropertyDescriptor:Ge,getOwnPropertyNames:Ye,getOwnPropertySymbols:Ze,getPrototypeOf:Qe}=Object,ie=globalThis,ve=ie.trustedTypes,Xe=ve?ve.emptyScript:"",es=ie.reactiveElementPolyfillSupport,B=(o,e)=>o,ce={toAttribute(o,e){switch(e){case Boolean:o=o?Xe:null;break;case Object:case Array:o=o==null?o:JSON.stringify(o)}return o},fromAttribute(o,e){let s=o;switch(e){case Boolean:s=o!==null;break;case Number:s=o===null?null:Number(o);break;case Object:case Array:try{s=JSON.parse(o)}catch{s=null}}return s}},Te=(o,e)=>!Je(o,e),me={attribute:!0,type:String,converter:ce,reflect:!1,useDefault:!1,hasChanged:Te};Symbol.metadata??=Symbol("metadata"),ie.litPropertyMetadata??=new WeakMap;let O=class extends HTMLElement{static addInitializer(e){this._$Ei(),(this.l??=[]).push(e)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(e,s=me){if(s.state&&(s.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(e)&&((s=Object.create(s)).wrapped=!0),this.elementProperties.set(e,s),!s.noAccessor){const t=Symbol(),i=this.getPropertyDescriptor(e,t,s);i!==void 0&&Ke(this.prototype,e,i)}}static getPropertyDescriptor(e,s,t){const{get:i,set:n}=Ge(this.prototype,e)??{get(){return this[s]},set(r){this[s]=r}};return{get:i,set(r){const c=i?.call(this);n?.call(this,r),this.requestUpdate(e,c,t)},configurable:!0,enumerable:!0}}static getPropertyOptions(e){return this.elementProperties.get(e)??me}static _$Ei(){if(this.hasOwnProperty(B("elementProperties")))return;const e=Qe(this);e.finalize(),e.l!==void 0&&(this.l=[...e.l]),this.elementProperties=new Map(e.elementProperties)}static finalize(){if(this.hasOwnProperty(B("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(B("properties"))){const s=this.properties,t=[...Ye(s),...Ze(s)];for(const i of t)this.createProperty(i,s[i])}const e=this[Symbol.metadata];if(e!==null){const s=litPropertyMetadata.get(e);if(s!==void 0)for(const[t,i]of s)this.elementProperties.set(t,i)}this._$Eh=new Map;for(const[s,t]of this.elementProperties){const i=this._$Eu(s,t);i!==void 0&&this._$Eh.set(i,s)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(e){const s=[];if(Array.isArray(e)){const t=new Set(e.flat(1/0).reverse());for(const i of t)s.unshift(ge(i))}else e!==void 0&&s.push(ge(e));return s}static _$Eu(e,s){const t=s.attribute;return t===!1?void 0:typeof t=="string"?t:typeof e=="string"?e.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(e=>this.enableUpdating=e),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(e=>e(this))}addController(e){(this._$EO??=new Set).add(e),this.renderRoot!==void 0&&this.isConnected&&e.hostConnected?.()}removeController(e){this._$EO?.delete(e)}_$E_(){const e=new Map,s=this.constructor.elementProperties;for(const t of s.keys())this.hasOwnProperty(t)&&(e.set(t,this[t]),delete this[t]);e.size>0&&(this._$Ep=e)}createRenderRoot(){const e=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return We(e,this.constructor.elementStyles),e}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(e=>e.hostConnected?.())}enableUpdating(e){}disconnectedCallback(){this._$EO?.forEach(e=>e.hostDisconnected?.())}attributeChangedCallback(e,s,t){this._$AK(e,t)}_$ET(e,s){const t=this.constructor.elementProperties.get(e),i=this.constructor._$Eu(e,t);if(i!==void 0&&t.reflect===!0){const n=(t.converter?.toAttribute!==void 0?t.converter:ce).toAttribute(s,t.type);this._$Em=e,n==null?this.removeAttribute(i):this.setAttribute(i,n),this._$Em=null}}_$AK(e,s){const t=this.constructor,i=t._$Eh.get(e);if(i!==void 0&&this._$Em!==i){const n=t.getPropertyOptions(i),r=typeof n.converter=="function"?{fromAttribute:n.converter}:n.converter?.fromAttribute!==void 0?n.converter:ce;this._$Em=i;const c=r.fromAttribute(s,n.type);this[i]=c??this._$Ej?.get(i)??c,this._$Em=null}}requestUpdate(e,s,t,i=!1,n){if(e!==void 0){const r=this.constructor;if(i===!1&&(n=this[e]),t??=r.getPropertyOptions(e),!((t.hasChanged??Te)(n,s)||t.useDefault&&t.reflect&&n===this._$Ej?.get(e)&&!this.hasAttribute(r._$Eu(e,t))))return;this.C(e,s,t)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(e,s,{useDefault:t,reflect:i,wrapped:n},r){t&&!(this._$Ej??=new Map).has(e)&&(this._$Ej.set(e,r??s??this[e]),n!==!0||r!==void 0)||(this._$AL.has(e)||(this.hasUpdated||t||(s=void 0),this._$AL.set(e,s)),i===!0&&this._$Em!==e&&(this._$Eq??=new Set).add(e))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(s){Promise.reject(s)}const e=this.scheduleUpdate();return e!=null&&await e,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(const[i,n]of this._$Ep)this[i]=n;this._$Ep=void 0}const t=this.constructor.elementProperties;if(t.size>0)for(const[i,n]of t){const{wrapped:r}=n,c=this[i];r!==!0||this._$AL.has(i)||c===void 0||this.C(i,void 0,n,c)}}let e=!1;const s=this._$AL;try{e=this.shouldUpdate(s),e?(this.willUpdate(s),this._$EO?.forEach(t=>t.hostUpdate?.()),this.update(s)):this._$EM()}catch(t){throw e=!1,this._$EM(),t}e&&this._$AE(s)}willUpdate(e){}_$AE(e){this._$EO?.forEach(s=>s.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(e)),this.updated(e)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(e){return!0}update(e){this._$Eq&&=this._$Eq.forEach(s=>this._$ET(s,this[s])),this._$EM()}updated(e){}firstUpdated(e){}};O.elementStyles=[],O.shadowRootOptions={mode:"open"},O[B("elementProperties")]=new Map,O[B("finalized")]=new Map,es?.({ReactiveElement:O}),(ie.reactiveElementVersions??=[]).push("2.1.2");const pe=globalThis,be=o=>o,te=pe.trustedTypes,we=te?te.createPolicy("lit-html",{createHTML:o=>o}):void 0,Oe="$lit$",E=`lit$${Math.random().toFixed(9).slice(2)}$`,Me="?"+E,ss=`<${Me}>`,U=document,W=()=>U.createComment(""),J=o=>o===null||typeof o!="object"&&typeof o!="function",ye=Array.isArray,ts=o=>ye(o)||typeof o?.[Symbol.iterator]=="function",ne=`[ 	
-\f\r]`,I=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,qe=/-->/g,Se=/>/g,x=RegExp(`>|${ne}(?:([^\\s"'>=/]+)(${ne}*=${ne}*(?:[^ 	
-\f\r"'\`<>=]|("|')|))|$)`,"g"),ke=/'/g,Ae=/"/g,ze=/^(?:script|style|textarea|title)$/i,is=o=>(e,...s)=>({_$litType$:o,strings:e,values:s}),a=is(1),z=Symbol.for("lit-noChange"),u=Symbol.for("lit-nothing"),Re=new WeakMap,L=U.createTreeWalker(U,129);function He(o,e){if(!ye(o)||!o.hasOwnProperty("raw"))throw Error("invalid template strings array");return we!==void 0?we.createHTML(e):e}const os=(o,e)=>{const s=o.length-1,t=[];let i,n=e===2?"<svg>":e===3?"<math>":"",r=I;for(let c=0;c<s;c++){const l=o[c];let d,_,h=-1,p=0;for(;p<l.length&&(r.lastIndex=p,_=r.exec(l),_!==null);)p=r.lastIndex,r===I?_[1]==="!--"?r=qe:_[1]!==void 0?r=Se:_[2]!==void 0?(ze.test(_[2])&&(i=RegExp("</"+_[2],"g")),r=x):_[3]!==void 0&&(r=x):r===x?_[0]===">"?(r=i??I,h=-1):_[1]===void 0?h=-2:(h=r.lastIndex-_[2].length,d=_[1],r=_[3]===void 0?x:_[3]==='"'?Ae:ke):r===Ae||r===ke?r=x:r===qe||r===Se?r=I:(r=x,i=void 0);const y=r===x&&o[c+1].startsWith("/>")?" ":"";n+=r===I?l+ss:h>=0?(t.push(d),l.slice(0,h)+Oe+l.slice(h)+E+y):l+E+(h===-2?c:y)}return[He(o,n+(o[s]||"<?>")+(e===2?"</svg>":e===3?"</math>":"")),t]};class K{constructor({strings:e,_$litType$:s},t){let i;this.parts=[];let n=0,r=0;const c=e.length-1,l=this.parts,[d,_]=os(e,s);if(this.el=K.createElement(d,t),L.currentNode=this.el.content,s===2||s===3){const h=this.el.content.firstChild;h.replaceWith(...h.childNodes)}for(;(i=L.nextNode())!==null&&l.length<c;){if(i.nodeType===1){if(i.hasAttributes())for(const h of i.getAttributeNames())if(h.endsWith(Oe)){const p=_[r++],y=i.getAttribute(h).split(E),$=/([.?@])?(.*)/.exec(p);l.push({type:1,index:n,name:$[2],strings:y,ctor:$[1]==="."?rs:$[1]==="?"?as:$[1]==="@"?ds:oe}),i.removeAttribute(h)}else h.startsWith(E)&&(l.push({type:6,index:n}),i.removeAttribute(h));if(ze.test(i.tagName)){const h=i.textContent.split(E),p=h.length-1;if(p>0){i.textContent=te?te.emptyScript:"";for(let y=0;y<p;y++)i.append(h[y],W()),L.nextNode(),l.push({type:2,index:++n});i.append(h[p],W())}}}else if(i.nodeType===8)if(i.data===Me)l.push({type:2,index:n});else{let h=-1;for(;(h=i.data.indexOf(E,h+1))!==-1;)l.push({type:7,index:n}),h+=E.length-1}n++}}static createElement(e,s){const t=U.createElement("template");return t.innerHTML=e,t}}function H(o,e,s=o,t){if(e===z)return e;let i=t!==void 0?s._$Co?.[t]:s._$Cl;const n=J(e)?void 0:e._$litDirective$;return i?.constructor!==n&&(i?._$AO?.(!1),n===void 0?i=void 0:(i=new n(o),i._$AT(o,s,t)),t!==void 0?(s._$Co??=[])[t]=i:s._$Cl=i),i!==void 0&&(e=H(o,i._$AS(o,e.values),i,t)),e}class ns{constructor(e,s){this._$AV=[],this._$AN=void 0,this._$AD=e,this._$AM=s}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(e){const{el:{content:s},parts:t}=this._$AD,i=(e?.creationScope??U).importNode(s,!0);L.currentNode=i;let n=L.nextNode(),r=0,c=0,l=t[0];for(;l!==void 0;){if(r===l.index){let d;l.type===2?d=new G(n,n.nextSibling,this,e):l.type===1?d=new l.ctor(n,l.name,l.strings,this,e):l.type===6&&(d=new ls(n,this,e)),this._$AV.push(d),l=t[++c]}r!==l?.index&&(n=L.nextNode(),r++)}return L.currentNode=U,i}p(e){let s=0;for(const t of this._$AV)t!==void 0&&(t.strings!==void 0?(t._$AI(e,t,s),s+=t.strings.length-2):t._$AI(e[s])),s++}}class G{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(e,s,t,i){this.type=2,this._$AH=u,this._$AN=void 0,this._$AA=e,this._$AB=s,this._$AM=t,this.options=i,this._$Cv=i?.isConnected??!0}get parentNode(){let e=this._$AA.parentNode;const s=this._$AM;return s!==void 0&&e?.nodeType===11&&(e=s.parentNode),e}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(e,s=this){e=H(this,e,s),J(e)?e===u||e==null||e===""?(this._$AH!==u&&this._$AR(),this._$AH=u):e!==this._$AH&&e!==z&&this._(e):e._$litType$!==void 0?this.$(e):e.nodeType!==void 0?this.T(e):ts(e)?this.k(e):this._(e)}O(e){return this._$AA.parentNode.insertBefore(e,this._$AB)}T(e){this._$AH!==e&&(this._$AR(),this._$AH=this.O(e))}_(e){this._$AH!==u&&J(this._$AH)?this._$AA.nextSibling.data=e:this.T(U.createTextNode(e)),this._$AH=e}$(e){const{values:s,_$litType$:t}=e,i=typeof t=="number"?this._$AC(e):(t.el===void 0&&(t.el=K.createElement(He(t.h,t.h[0]),this.options)),t);if(this._$AH?._$AD===i)this._$AH.p(s);else{const n=new ns(i,this),r=n.u(this.options);n.p(s),this.T(r),this._$AH=n}}_$AC(e){let s=Re.get(e.strings);return s===void 0&&Re.set(e.strings,s=new K(e)),s}k(e){ye(this._$AH)||(this._$AH=[],this._$AR());const s=this._$AH;let t,i=0;for(const n of e)i===s.length?s.push(t=new G(this.O(W()),this.O(W()),this,this.options)):t=s[i],t._$AI(n),i++;i<s.length&&(this._$AR(t&&t._$AB.nextSibling,i),s.length=i)}_$AR(e=this._$AA.nextSibling,s){for(this._$AP?.(!1,!0,s);e!==this._$AB;){const t=be(e).nextSibling;be(e).remove(),e=t}}setConnected(e){this._$AM===void 0&&(this._$Cv=e,this._$AP?.(e))}}class oe{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(e,s,t,i,n){this.type=1,this._$AH=u,this._$AN=void 0,this.element=e,this.name=s,this._$AM=i,this.options=n,t.length>2||t[0]!==""||t[1]!==""?(this._$AH=Array(t.length-1).fill(new String),this.strings=t):this._$AH=u}_$AI(e,s=this,t,i){const n=this.strings;let r=!1;if(n===void 0)e=H(this,e,s,0),r=!J(e)||e!==this._$AH&&e!==z,r&&(this._$AH=e);else{const c=e;let l,d;for(e=n[0],l=0;l<n.length-1;l++)d=H(this,c[t+l],s,l),d===z&&(d=this._$AH[l]),r||=!J(d)||d!==this._$AH[l],d===u?e=u:e!==u&&(e+=(d??"")+n[l+1]),this._$AH[l]=d}r&&!i&&this.j(e)}j(e){e===u?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,e??"")}}class rs extends oe{constructor(){super(...arguments),this.type=3}j(e){this.element[this.name]=e===u?void 0:e}}class as extends oe{constructor(){super(...arguments),this.type=4}j(e){this.element.toggleAttribute(this.name,!!e&&e!==u)}}class ds extends oe{constructor(e,s,t,i,n){super(e,s,t,i,n),this.type=5}_$AI(e,s=this){if((e=H(this,e,s,0)??u)===z)return;const t=this._$AH,i=e===u&&t!==u||e.capture!==t.capture||e.once!==t.once||e.passive!==t.passive,n=e!==u&&(t===u||i);i&&this.element.removeEventListener(this.name,this,t),n&&this.element.addEventListener(this.name,this,e),this._$AH=e}handleEvent(e){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,e):this._$AH.handleEvent(e)}}class ls{constructor(e,s,t){this.element=e,this.type=6,this._$AN=void 0,this._$AM=s,this.options=t}get _$AU(){return this._$AM._$AU}_$AI(e){H(this,e)}}const cs=pe.litHtmlPolyfillSupport;cs?.(K,G),(pe.litHtmlVersions??=[]).push("3.3.3");const _s=(o,e,s)=>{const t=s?.renderBefore??e;let i=t._$litPart$;if(i===void 0){const n=s?.renderBefore??null;t._$litPart$=i=new G(e.insertBefore(W(),n),n,void 0,s??{})}return i._$AI(o),i};const fe=globalThis;class w extends O{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){const e=super.createRenderRoot();return this.renderOptions.renderBefore??=e.firstChild,e}update(e){const s=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(e),this._$Do=_s(s,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return z}}w._$litElement$=!0,w.finalized=!0,fe.litElementHydrateSupport?.({LitElement:w});const us=fe.litElementPolyfillSupport;us?.({LitElement:w});(fe.litElementVersions??=[]).push("4.2.2");class Ie extends Error{status;constructor(e,s){super(s),this.name="HttpError",this.status=e}}async function m(o,e){const s=await fetch(o,{cache:"no-store",signal:e});if(!s.ok){const t=await s.json().catch(()=>({}));throw new Ie(s.status,t.error??`Request failed (${s.status})`)}return s.json()}function R(o){return o instanceof Error&&o.name==="AbortError"}function j(o,e,s=!1){const t=s?{hour:"2-digit",minute:"2-digit",second:"2-digit"}:{dateStyle:"medium",timeStyle:"medium"};return e==="utc"&&(t.timeZone="UTC"),new Intl.DateTimeFormat(void 0,t).format(new Date(o))}function hs(o,e){const s=new Date(o),t=new Date,i=e==="utc"?s.getUTCFullYear():s.getFullYear(),n=e==="utc"?t.getUTCFullYear():t.getFullYear(),r={month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"};return i!==n&&(r.year="numeric"),e==="utc"&&(r.timeZone="UTC"),new Intl.DateTimeFormat(void 0,r).format(s)}function ps(o,e){const s=Math.max(0,e-o);if(s<1e3)return`${s.toLocaleString()} ms`;const t=Math.floor(s/1e3);if(t<60)return`${t}s`;const i=Math.floor(t/60);if(i<60)return`${i}m ${t%60}s`;const n=Math.floor(i/60);return n<24?`${n}h ${i%60}m`:`${Math.floor(n/24)}d ${n%24}h`}function M(o){return`${o.day}:${o.row_id}`}function b(o,e=10){return o?o.length>e?`…${o.slice(-e)}`:o:"—"}function ys(o){const e=o.inbound_req_url??o.endpoint;return F(e)}function Ee(o){const e=o.toLowerCase().replaceAll("_","-");return e==="authorization"||e==="password"||e==="code"||e==="signature"||e==="sig"||e.includes("api-key")||e.includes("access-key")||e.includes("token")||e.includes("secret")||e.includes("credential")}function F(o){if(!o)return"unknown endpoint";try{const e=new URL(o,window.location.origin);for(const s of new Set(e.searchParams.keys()))Ee(s)&&e.searchParams.set(s,"REDACTED");return`${e.pathname}${e.search}`}catch{return o.replace(/([?&]([^=&]+)=)([^&]*)/g,(e,s,t)=>{let i=t;try{i=decodeURIComponent(t)}catch{}return Ee(i)?`${s}REDACTED`:e})}}function fs(o){if(o.request_error)return{label:"ERR",tone:"error",title:o.request_error};const e=o.inbound_resp_status??o.outbound_resp_status??o.status;if(e===null)return{label:"—",tone:"neutral",title:"No response status persisted"};const s=o.inbound_resp_status!==null?"Client response":o.outbound_resp_status!==null?"Provider response":"Request";return e>=400?{label:String(e),tone:"error",title:`${s}: ${e}`}:e>=300?{label:String(e),tone:"warning",title:`${s}: ${e}`}:{label:String(e),tone:"success",title:`${s}: ${e}`}}function $s(o){const e=o.status;return e===null?{label:"—",tone:"neutral",title:"No status stored for the current session head"}:e>=400?{label:String(e),tone:"error",title:`Current head status: ${e}`}:e>=300?{label:String(e),tone:"warning",title:`Current head status: ${e}`}:{label:String(e),tone:"success",title:`Current head status: ${e}`}}function P(o){return o.detail}function v(o,e){const s=o[e];return typeof s=="string"?s:void 0}function Q(o,e){const s=o[e];return typeof s=="number"?s:void 0}const re="••••••••";function ae(o){const e=o.toLowerCase().replaceAll("_","-");return e==="authorization"||e==="proxy-authorization"||e==="cookie"||e==="set-cookie"||e.includes("api-key")||e.includes("token")||e.includes("secret")}function V(o){if(Array.isArray(o))return o.length===2&&typeof o[0]=="string"&&ae(o[0])?[o[0],re]:o.map(e=>V(e));if(o!==null&&typeof o=="object")return Object.fromEntries(Object.entries(o).map(([e,s])=>[e,ae(e)?re:V(s)]));if(typeof o=="string")try{return V(JSON.parse(o))}catch{return o.replace(/^([^:\r\n]+)(:\s*)(.*)$/gm,(e,s,t)=>ae(s.trim())?`${s}${t}${re}`:e)}return o}function _e(o){return Array.isArray(o)?o.map(e=>_e(e)):o!==null&&typeof o=="object"?Object.fromEntries(Object.entries(o).map(([e,s])=>[e,gs(e)?V(s):_e(s)])):o}function gs(o){const e=o.replace(/([a-z0-9])([A-Z])/g,"$1_$2").toLowerCase().replace(/[-\s]+/g,"_");return e==="headers"||e.endsWith("_headers")}function ue(o){return Array.isArray(o)?o.map(e=>ue(e)):o!==null&&typeof o=="object"?Object.fromEntries(Object.entries(o).map(([e,s])=>[e,e.toLowerCase().endsWith("_url")&&typeof s=="string"?F(s):ue(s)])):o}function vs(o){if(typeof o=="string")try{return JSON.stringify(JSON.parse(o),null,2)}catch{return o}return JSON.stringify(o,null,2)??String(o)}function ms(o){if(Array.isArray(o))return`${o.length} item${o.length===1?"":"s"}`;if(o!==null&&typeof o=="object"){const e=Object.keys(o).length;return`${e} field${e===1?"":"s"}`}return typeof o=="string"?`${new Blob([o]).size.toLocaleString()} bytes`:typeof o}class bs extends w{static properties={label:{type:String},value:{attribute:!1},load_url:{type:String},is_headers:{type:Boolean},redact_record_headers:{type:Boolean},open:{type:Boolean,state:!0},wrap:{type:Boolean,state:!0},revealed:{type:Boolean,state:!0},copy_state:{type:String,state:!0},load_state:{type:String,state:!0},loaded_value:{attribute:!1,state:!0},error_message:{type:String,state:!0}};load_controller;copy_timeout;constructor(){super(),this.label="Payload",this.is_headers=!1,this.redact_record_headers=!1,this.open=!1,this.wrap=!0,this.revealed=!1,this.copy_state="idle",this.load_state="idle"}createRenderRoot(){return this}disconnectedCallback(){this.load_controller?.abort(),this.copy_timeout!==void 0&&window.clearTimeout(this.copy_timeout),super.disconnectedCallback()}willUpdate(e){!e.has("value")&&!e.has("load_url")||(this.load_controller?.abort(),this.load_controller=void 0,this.copy_timeout!==void 0&&(window.clearTimeout(this.copy_timeout),this.copy_timeout=void 0),this.open=!1,this.revealed=!1,this.copy_state="idle",this.load_state="idle",this.loaded_value=void 0,this.error_message=void 0)}effectiveValue(){return this.load_state==="ready"?this.loaded_value:this.value}displayedValue(){const e=this.effectiveValue(),s=this.redact_record_headers?ue(e):e,t=this.revealed?s:this.redact_record_headers?_e(s):this.is_headers?V(s):s;return vs(t)}toggleOpen(e){this.open=e.currentTarget.open,this.open&&this.value===void 0&&this.load_url&&this.load_state==="idle"&&this.loadPayload()}async loadPayload(){const e=this.load_url;if(!e)return;this.load_controller?.abort();const s=new AbortController;this.load_controller=s,this.load_state="loading",this.error_message=void 0;try{const t=await m(e,s.signal);if(this.load_controller!==s||this.load_url!==e)return;const i=new URL(e,window.location.origin).searchParams.get("field");if(!i||t.field!==i)throw new Error("Payload response did not match the requested field");this.loaded_value=t.value,this.load_state="ready"}catch(t){if(this.load_controller!==s||R(t))return;this.load_state="error",this.error_message=t instanceof Error?t.message:"Unable to load payload"}finally{this.load_controller===s&&(this.load_controller=void 0)}}async copyValue(){try{await navigator.clipboard.writeText(this.displayedValue()),this.copy_state="copied",this.copy_timeout!==void 0&&window.clearTimeout(this.copy_timeout),this.copy_timeout=window.setTimeout(()=>{this.copy_state="idle",this.copy_timeout=void 0},1500)}catch{this.copy_state="error"}}render(){if(!this.load_url&&(this.value===null||this.value===void 0||this.value===""))return u;const e=this.effectiveValue(),s=this.is_headers||this.redact_record_headers,t=this.load_state==="loading"?"Loading…":this.load_state==="error"?"Load failed":e===null?"No payload":e===void 0?"Load on open":ms(e);return a`
+(function(){const e=document.createElement("link").relList;if(e&&e.supports&&e.supports("modulepreload"))return;for(const n of document.querySelectorAll('link[rel="modulepreload"]'))s(n);new MutationObserver(n=>{for(const o of n)if(o.type==="childList")for(const r of o.addedNodes)r.tagName==="LINK"&&r.rel==="modulepreload"&&s(r)}).observe(document,{childList:!0,subtree:!0});function t(n){const o={};return n.integrity&&(o.integrity=n.integrity),n.referrerPolicy&&(o.referrerPolicy=n.referrerPolicy),n.crossOrigin==="use-credentials"?o.credentials="include":n.crossOrigin==="anonymous"?o.credentials="omit":o.credentials="same-origin",o}function s(n){if(n.ep)return;n.ep=!0;const o=t(n);fetch(n.href,o)}})();const se=globalThis,fe=se.ShadowRoot&&(se.ShadyCSS===void 0||se.ShadyCSS.nativeShadow)&&"adoptedStyleSheets"in Document.prototype&&"replace"in CSSStyleSheet.prototype,Be=Symbol(),be=new WeakMap;let Ge=class{constructor(e,t,s){if(this._$cssResult$=!0,s!==Be)throw Error("CSSResult is not constructable. Use `unsafeCSS` or `css` instead.");this.cssText=e,this.t=t}get styleSheet(){let e=this.o;const t=this.t;if(fe&&e===void 0){const s=t!==void 0&&t.length===1;s&&(e=be.get(t)),e===void 0&&((this.o=e=new CSSStyleSheet).replaceSync(this.cssText),s&&be.set(t,e))}return e}toString(){return this.cssText}};const Ye=i=>new Ge(typeof i=="string"?i:i+"",void 0,Be),Qe=(i,e)=>{if(fe)i.adoptedStyleSheets=e.map(t=>t instanceof CSSStyleSheet?t:t.styleSheet);else for(const t of e){const s=document.createElement("style"),n=se.litNonce;n!==void 0&&s.setAttribute("nonce",n),s.textContent=t.cssText,i.appendChild(s)}},me=fe?i=>i:i=>i instanceof CSSStyleSheet?(e=>{let t="";for(const s of e.cssRules)t+=s.cssText;return Ye(t)})(i):i;const{is:Xe,defineProperty:et,getOwnPropertyDescriptor:tt,getOwnPropertyNames:st,getOwnPropertySymbols:it,getPrototypeOf:nt}=Object,oe=globalThis,we=oe.trustedTypes,ot=we?we.emptyScript:"",rt=oe.reactiveElementPolyfillSupport,F=(i,e)=>i,he={toAttribute(i,e){switch(e){case Boolean:i=i?ot:null;break;case Object:case Array:i=i==null?i:JSON.stringify(i)}return i},fromAttribute(i,e){let t=i;switch(e){case Boolean:t=i!==null;break;case Number:t=i===null?null:Number(i);break;case Object:case Array:try{t=JSON.parse(i)}catch{t=null}}return t}},He=(i,e)=>!Xe(i,e),qe={attribute:!0,type:String,converter:he,reflect:!1,useDefault:!1,hasChanged:He};Symbol.metadata??=Symbol("metadata"),oe.litPropertyMetadata??=new WeakMap;let z=class extends HTMLElement{static addInitializer(e){this._$Ei(),(this.l??=[]).push(e)}static get observedAttributes(){return this.finalize(),this._$Eh&&[...this._$Eh.keys()]}static createProperty(e,t=qe){if(t.state&&(t.attribute=!1),this._$Ei(),this.prototype.hasOwnProperty(e)&&((t=Object.create(t)).wrapped=!0),this.elementProperties.set(e,t),!t.noAccessor){const s=Symbol(),n=this.getPropertyDescriptor(e,s,t);n!==void 0&&et(this.prototype,e,n)}}static getPropertyDescriptor(e,t,s){const{get:n,set:o}=tt(this.prototype,e)??{get(){return this[t]},set(r){this[t]=r}};return{get:n,set(r){const c=n?.call(this);o?.call(this,r),this.requestUpdate(e,c,s)},configurable:!0,enumerable:!0}}static getPropertyOptions(e){return this.elementProperties.get(e)??qe}static _$Ei(){if(this.hasOwnProperty(F("elementProperties")))return;const e=nt(this);e.finalize(),e.l!==void 0&&(this.l=[...e.l]),this.elementProperties=new Map(e.elementProperties)}static finalize(){if(this.hasOwnProperty(F("finalized")))return;if(this.finalized=!0,this._$Ei(),this.hasOwnProperty(F("properties"))){const t=this.properties,s=[...st(t),...it(t)];for(const n of s)this.createProperty(n,t[n])}const e=this[Symbol.metadata];if(e!==null){const t=litPropertyMetadata.get(e);if(t!==void 0)for(const[s,n]of t)this.elementProperties.set(s,n)}this._$Eh=new Map;for(const[t,s]of this.elementProperties){const n=this._$Eu(t,s);n!==void 0&&this._$Eh.set(n,t)}this.elementStyles=this.finalizeStyles(this.styles)}static finalizeStyles(e){const t=[];if(Array.isArray(e)){const s=new Set(e.flat(1/0).reverse());for(const n of s)t.unshift(me(n))}else e!==void 0&&t.push(me(e));return t}static _$Eu(e,t){const s=t.attribute;return s===!1?void 0:typeof s=="string"?s:typeof e=="string"?e.toLowerCase():void 0}constructor(){super(),this._$Ep=void 0,this.isUpdatePending=!1,this.hasUpdated=!1,this._$Em=null,this._$Ev()}_$Ev(){this._$ES=new Promise(e=>this.enableUpdating=e),this._$AL=new Map,this._$E_(),this.requestUpdate(),this.constructor.l?.forEach(e=>e(this))}addController(e){(this._$EO??=new Set).add(e),this.renderRoot!==void 0&&this.isConnected&&e.hostConnected?.()}removeController(e){this._$EO?.delete(e)}_$E_(){const e=new Map,t=this.constructor.elementProperties;for(const s of t.keys())this.hasOwnProperty(s)&&(e.set(s,this[s]),delete this[s]);e.size>0&&(this._$Ep=e)}createRenderRoot(){const e=this.shadowRoot??this.attachShadow(this.constructor.shadowRootOptions);return Qe(e,this.constructor.elementStyles),e}connectedCallback(){this.renderRoot??=this.createRenderRoot(),this.enableUpdating(!0),this._$EO?.forEach(e=>e.hostConnected?.())}enableUpdating(e){}disconnectedCallback(){this._$EO?.forEach(e=>e.hostDisconnected?.())}attributeChangedCallback(e,t,s){this._$AK(e,s)}_$ET(e,t){const s=this.constructor.elementProperties.get(e),n=this.constructor._$Eu(e,s);if(n!==void 0&&s.reflect===!0){const o=(s.converter?.toAttribute!==void 0?s.converter:he).toAttribute(t,s.type);this._$Em=e,o==null?this.removeAttribute(n):this.setAttribute(n,o),this._$Em=null}}_$AK(e,t){const s=this.constructor,n=s._$Eh.get(e);if(n!==void 0&&this._$Em!==n){const o=s.getPropertyOptions(n),r=typeof o.converter=="function"?{fromAttribute:o.converter}:o.converter?.fromAttribute!==void 0?o.converter:he;this._$Em=n;const c=r.fromAttribute(t,o.type);this[n]=c??this._$Ej?.get(n)??c,this._$Em=null}}requestUpdate(e,t,s,n=!1,o){if(e!==void 0){const r=this.constructor;if(n===!1&&(o=this[e]),s??=r.getPropertyOptions(e),!((s.hasChanged??He)(o,t)||s.useDefault&&s.reflect&&o===this._$Ej?.get(e)&&!this.hasAttribute(r._$Eu(e,s))))return;this.C(e,t,s)}this.isUpdatePending===!1&&(this._$ES=this._$EP())}C(e,t,{useDefault:s,reflect:n,wrapped:o},r){s&&!(this._$Ej??=new Map).has(e)&&(this._$Ej.set(e,r??t??this[e]),o!==!0||r!==void 0)||(this._$AL.has(e)||(this.hasUpdated||s||(t=void 0),this._$AL.set(e,t)),n===!0&&this._$Em!==e&&(this._$Eq??=new Set).add(e))}async _$EP(){this.isUpdatePending=!0;try{await this._$ES}catch(t){Promise.reject(t)}const e=this.scheduleUpdate();return e!=null&&await e,!this.isUpdatePending}scheduleUpdate(){return this.performUpdate()}performUpdate(){if(!this.isUpdatePending)return;if(!this.hasUpdated){if(this.renderRoot??=this.createRenderRoot(),this._$Ep){for(const[n,o]of this._$Ep)this[n]=o;this._$Ep=void 0}const s=this.constructor.elementProperties;if(s.size>0)for(const[n,o]of s){const{wrapped:r}=o,c=this[n];r!==!0||this._$AL.has(n)||c===void 0||this.C(n,void 0,o,c)}}let e=!1;const t=this._$AL;try{e=this.shouldUpdate(t),e?(this.willUpdate(t),this._$EO?.forEach(s=>s.hostUpdate?.()),this.update(t)):this._$EM()}catch(s){throw e=!1,this._$EM(),s}e&&this._$AE(t)}willUpdate(e){}_$AE(e){this._$EO?.forEach(t=>t.hostUpdated?.()),this.hasUpdated||(this.hasUpdated=!0,this.firstUpdated(e)),this.updated(e)}_$EM(){this._$AL=new Map,this.isUpdatePending=!1}get updateComplete(){return this.getUpdateComplete()}getUpdateComplete(){return this._$ES}shouldUpdate(e){return!0}update(e){this._$Eq&&=this._$Eq.forEach(t=>this._$ET(t,this[t])),this._$EM()}updated(e){}firstUpdated(e){}};z.elementStyles=[],z.shadowRootOptions={mode:"open"},z[F("elementProperties")]=new Map,z[F("finalized")]=new Map,rt?.({ReactiveElement:z}),(oe.reactiveElementVersions??=[]).push("2.1.2");const ge=globalThis,Se=i=>i,ne=ge.trustedTypes,ke=ne?ne.createPolicy("lit-html",{createHTML:i=>i}):void 0,Ie="$lit$",C=`lit$${Math.random().toFixed(9).slice(2)}$`,je="?"+C,at=`<${je}>`,N=document,K=()=>N.createComment(""),Z=i=>i===null||typeof i!="object"&&typeof i!="function",$e=Array.isArray,dt=i=>$e(i)||typeof i?.[Symbol.iterator]=="function",ae=`[ 	
+\f\r]`,j=/<(?:(!--|\/[^a-zA-Z])|(\/?[a-zA-Z][^>\s]*)|(\/?$))/g,Ae=/-->/g,Re=/>/g,L=RegExp(`>|${ae}(?:([^\\s"'>=/]+)(${ae}*=${ae}*(?:[^ 	
+\f\r"'\`<>=]|("|')|))|$)`,"g"),xe=/'/g,Ee=/"/g,Fe=/^(?:script|style|textarea|title)$/i,lt=i=>(e,...t)=>({_$litType$:i,strings:e,values:t}),a=lt(1),H=Symbol.for("lit-noChange"),_=Symbol.for("lit-nothing"),Ce=new WeakMap,P=N.createTreeWalker(N,129);function Ve(i,e){if(!$e(i)||!i.hasOwnProperty("raw"))throw Error("invalid template strings array");return ke!==void 0?ke.createHTML(e):e}const ct=(i,e)=>{const t=i.length-1,s=[];let n,o=e===2?"<svg>":e===3?"<math>":"",r=j;for(let c=0;c<t;c++){const l=i[c];let d,u,h=-1,p=0;for(;p<l.length&&(r.lastIndex=p,u=r.exec(l),u!==null);)p=r.lastIndex,r===j?u[1]==="!--"?r=Ae:u[1]!==void 0?r=Re:u[2]!==void 0?(Fe.test(u[2])&&(n=RegExp("</"+u[2],"g")),r=L):u[3]!==void 0&&(r=L):r===L?u[0]===">"?(r=n??j,h=-1):u[1]===void 0?h=-2:(h=r.lastIndex-u[2].length,d=u[1],r=u[3]===void 0?L:u[3]==='"'?Ee:xe):r===Ee||r===xe?r=L:r===Ae||r===Re?r=j:(r=L,n=void 0);const y=r===L&&i[c+1].startsWith("/>")?" ":"";o+=r===j?l+at:h>=0?(s.push(d),l.slice(0,h)+Ie+l.slice(h)+C+y):l+C+(h===-2?c:y)}return[Ve(i,o+(i[t]||"<?>")+(e===2?"</svg>":e===3?"</math>":"")),s]};class G{constructor({strings:e,_$litType$:t},s){let n;this.parts=[];let o=0,r=0;const c=e.length-1,l=this.parts,[d,u]=ct(e,t);if(this.el=G.createElement(d,s),P.currentNode=this.el.content,t===2||t===3){const h=this.el.content.firstChild;h.replaceWith(...h.childNodes)}for(;(n=P.nextNode())!==null&&l.length<c;){if(n.nodeType===1){if(n.hasAttributes())for(const h of n.getAttributeNames())if(h.endsWith(Ie)){const p=u[r++],y=n.getAttribute(h).split(C),f=/([.?@])?(.*)/.exec(p);l.push({type:1,index:o,name:f[2],strings:y,ctor:f[1]==="."?_t:f[1]==="?"?ht:f[1]==="@"?pt:re}),n.removeAttribute(h)}else h.startsWith(C)&&(l.push({type:6,index:o}),n.removeAttribute(h));if(Fe.test(n.tagName)){const h=n.textContent.split(C),p=h.length-1;if(p>0){n.textContent=ne?ne.emptyScript:"";for(let y=0;y<p;y++)n.append(h[y],K()),P.nextNode(),l.push({type:2,index:++o});n.append(h[p],K())}}}else if(n.nodeType===8)if(n.data===je)l.push({type:2,index:o});else{let h=-1;for(;(h=n.data.indexOf(C,h+1))!==-1;)l.push({type:7,index:o}),h+=C.length-1}o++}}static createElement(e,t){const s=N.createElement("template");return s.innerHTML=e,s}}function I(i,e,t=i,s){if(e===H)return e;let n=s!==void 0?t._$Co?.[s]:t._$Cl;const o=Z(e)?void 0:e._$litDirective$;return n?.constructor!==o&&(n?._$AO?.(!1),o===void 0?n=void 0:(n=new o(i),n._$AT(i,t,s)),s!==void 0?(t._$Co??=[])[s]=n:t._$Cl=n),n!==void 0&&(e=I(i,n._$AS(i,e.values),n,s)),e}class ut{constructor(e,t){this._$AV=[],this._$AN=void 0,this._$AD=e,this._$AM=t}get parentNode(){return this._$AM.parentNode}get _$AU(){return this._$AM._$AU}u(e){const{el:{content:t},parts:s}=this._$AD,n=(e?.creationScope??N).importNode(t,!0);P.currentNode=n;let o=P.nextNode(),r=0,c=0,l=s[0];for(;l!==void 0;){if(r===l.index){let d;l.type===2?d=new Y(o,o.nextSibling,this,e):l.type===1?d=new l.ctor(o,l.name,l.strings,this,e):l.type===6&&(d=new yt(o,this,e)),this._$AV.push(d),l=s[++c]}r!==l?.index&&(o=P.nextNode(),r++)}return P.currentNode=N,n}p(e){let t=0;for(const s of this._$AV)s!==void 0&&(s.strings!==void 0?(s._$AI(e,s,t),t+=s.strings.length-2):s._$AI(e[t])),t++}}class Y{get _$AU(){return this._$AM?._$AU??this._$Cv}constructor(e,t,s,n){this.type=2,this._$AH=_,this._$AN=void 0,this._$AA=e,this._$AB=t,this._$AM=s,this.options=n,this._$Cv=n?.isConnected??!0}get parentNode(){let e=this._$AA.parentNode;const t=this._$AM;return t!==void 0&&e?.nodeType===11&&(e=t.parentNode),e}get startNode(){return this._$AA}get endNode(){return this._$AB}_$AI(e,t=this){e=I(this,e,t),Z(e)?e===_||e==null||e===""?(this._$AH!==_&&this._$AR(),this._$AH=_):e!==this._$AH&&e!==H&&this._(e):e._$litType$!==void 0?this.$(e):e.nodeType!==void 0?this.T(e):dt(e)?this.k(e):this._(e)}O(e){return this._$AA.parentNode.insertBefore(e,this._$AB)}T(e){this._$AH!==e&&(this._$AR(),this._$AH=this.O(e))}_(e){this._$AH!==_&&Z(this._$AH)?this._$AA.nextSibling.data=e:this.T(N.createTextNode(e)),this._$AH=e}$(e){const{values:t,_$litType$:s}=e,n=typeof s=="number"?this._$AC(e):(s.el===void 0&&(s.el=G.createElement(Ve(s.h,s.h[0]),this.options)),s);if(this._$AH?._$AD===n)this._$AH.p(t);else{const o=new ut(n,this),r=o.u(this.options);o.p(t),this.T(r),this._$AH=o}}_$AC(e){let t=Ce.get(e.strings);return t===void 0&&Ce.set(e.strings,t=new G(e)),t}k(e){$e(this._$AH)||(this._$AH=[],this._$AR());const t=this._$AH;let s,n=0;for(const o of e)n===t.length?t.push(s=new Y(this.O(K()),this.O(K()),this,this.options)):s=t[n],s._$AI(o),n++;n<t.length&&(this._$AR(s&&s._$AB.nextSibling,n),t.length=n)}_$AR(e=this._$AA.nextSibling,t){for(this._$AP?.(!1,!0,t);e!==this._$AB;){const s=Se(e).nextSibling;Se(e).remove(),e=s}}setConnected(e){this._$AM===void 0&&(this._$Cv=e,this._$AP?.(e))}}class re{get tagName(){return this.element.tagName}get _$AU(){return this._$AM._$AU}constructor(e,t,s,n,o){this.type=1,this._$AH=_,this._$AN=void 0,this.element=e,this.name=t,this._$AM=n,this.options=o,s.length>2||s[0]!==""||s[1]!==""?(this._$AH=Array(s.length-1).fill(new String),this.strings=s):this._$AH=_}_$AI(e,t=this,s,n){const o=this.strings;let r=!1;if(o===void 0)e=I(this,e,t,0),r=!Z(e)||e!==this._$AH&&e!==H,r&&(this._$AH=e);else{const c=e;let l,d;for(e=o[0],l=0;l<o.length-1;l++)d=I(this,c[s+l],t,l),d===H&&(d=this._$AH[l]),r||=!Z(d)||d!==this._$AH[l],d===_?e=_:e!==_&&(e+=(d??"")+o[l+1]),this._$AH[l]=d}r&&!n&&this.j(e)}j(e){e===_?this.element.removeAttribute(this.name):this.element.setAttribute(this.name,e??"")}}class _t extends re{constructor(){super(...arguments),this.type=3}j(e){this.element[this.name]=e===_?void 0:e}}class ht extends re{constructor(){super(...arguments),this.type=4}j(e){this.element.toggleAttribute(this.name,!!e&&e!==_)}}class pt extends re{constructor(e,t,s,n,o){super(e,t,s,n,o),this.type=5}_$AI(e,t=this){if((e=I(this,e,t,0)??_)===H)return;const s=this._$AH,n=e===_&&s!==_||e.capture!==s.capture||e.once!==s.once||e.passive!==s.passive,o=e!==_&&(s===_||n);n&&this.element.removeEventListener(this.name,this,s),o&&this.element.addEventListener(this.name,this,e),this._$AH=e}handleEvent(e){typeof this._$AH=="function"?this._$AH.call(this.options?.host??this.element,e):this._$AH.handleEvent(e)}}class yt{constructor(e,t,s){this.element=e,this.type=6,this._$AN=void 0,this._$AM=t,this.options=s}get _$AU(){return this._$AM._$AU}_$AI(e){I(this,e)}}const ft=ge.litHtmlPolyfillSupport;ft?.(G,Y),(ge.litHtmlVersions??=[]).push("3.3.3");const gt=(i,e,t)=>{const s=t?.renderBefore??e;let n=s._$litPart$;if(n===void 0){const o=t?.renderBefore??null;s._$litPart$=n=new Y(e.insertBefore(K(),o),o,void 0,t??{})}return n._$AI(i),n};const ve=globalThis;class w extends z{constructor(){super(...arguments),this.renderOptions={host:this},this._$Do=void 0}createRenderRoot(){const e=super.createRenderRoot();return this.renderOptions.renderBefore??=e.firstChild,e}update(e){const t=this.render();this.hasUpdated||(this.renderOptions.isConnected=this.isConnected),super.update(e),this._$Do=gt(t,this.renderRoot,this.renderOptions)}connectedCallback(){super.connectedCallback(),this._$Do?.setConnected(!0)}disconnectedCallback(){super.disconnectedCallback(),this._$Do?.setConnected(!1)}render(){return H}}w._$litElement$=!0,w.finalized=!0,ve.litElementHydrateSupport?.({LitElement:w});const $t=ve.litElementPolyfillSupport;$t?.({LitElement:w});(ve.litElementVersions??=[]).push("4.2.2");class We extends Error{status;constructor(e,t){super(t),this.name="HttpError",this.status=e}}async function b(i,e){const t=await fetch(i,{cache:"no-store",signal:e});if(!t.ok){const s=await t.json().catch(()=>({}));throw new We(t.status,s.error??`Request failed (${t.status})`)}return t.json()}function k(i){return i instanceof Error&&i.name==="AbortError"}function V(i,e,t=!1){const s=t?{hour:"2-digit",minute:"2-digit",second:"2-digit"}:{dateStyle:"medium",timeStyle:"medium"};return e==="utc"&&(s.timeZone="UTC"),new Intl.DateTimeFormat(void 0,s).format(new Date(i))}function vt(i,e){const t=new Date(i),s=new Date,n=e==="utc"?t.getUTCFullYear():t.getFullYear(),o=e==="utc"?s.getUTCFullYear():s.getFullYear(),r={month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"};return n!==o&&(r.year="numeric"),e==="utc"&&(r.timeZone="UTC"),new Intl.DateTimeFormat(void 0,r).format(t)}function bt(i,e){const t=Math.max(0,e-i);if(t<1e3)return`${t.toLocaleString()} ms`;const s=Math.floor(t/1e3);if(s<60)return`${s}s`;const n=Math.floor(s/60);if(n<60)return`${n}m ${s%60}s`;const o=Math.floor(n/60);return o<24?`${o}h ${n%60}m`:`${Math.floor(o/24)}d ${o%24}h`}function B(i){return`${i.day}:${i.row_id}`}function A(i,e=10){return i?i.length>e?`…${i.slice(-e)}`:i:"—"}function mt(i){const e=i.inbound_req_url??i.endpoint;return W(e)}function Le(i){const e=i.toLowerCase().replaceAll("_","-");return e==="authorization"||e==="password"||e==="code"||e==="signature"||e==="sig"||e.includes("api-key")||e.includes("access-key")||e.includes("token")||e.includes("secret")||e.includes("credential")}function W(i){if(!i)return"unknown endpoint";try{const e=new URL(i,window.location.origin);for(const t of new Set(e.searchParams.keys()))Le(t)&&e.searchParams.set(t,"REDACTED");return`${e.pathname}${e.search}`}catch{return i.replace(/([?&]([^=&]+)=)([^&]*)/g,(e,t,s)=>{let n=s;try{n=decodeURIComponent(s)}catch{}return Le(n)?`${t}REDACTED`:e})}}function wt(i){if(i.request_error)return{label:"ERR",tone:"error",title:i.request_error};const e=i.inbound_resp_status??i.outbound_resp_status??i.status;if(e===null)return{label:"—",tone:"neutral",title:"No response status persisted"};const t=i.inbound_resp_status!==null?"Client response":i.outbound_resp_status!==null?"Provider response":"Request";return e>=400?{label:String(e),tone:"error",title:`${t}: ${e}`}:e>=300?{label:String(e),tone:"warning",title:`${t}: ${e}`}:{label:String(e),tone:"success",title:`${t}: ${e}`}}function qt(i){const e=i.status;return e===null?{label:"—",tone:"neutral",title:"No status stored for the current session head"}:e>=400?{label:String(e),tone:"error",title:`Current head status: ${e}`}:e>=300?{label:String(e),tone:"warning",title:`Current head status: ${e}`}:{label:String(e),tone:"success",title:`Current head status: ${e}`}}function D(i){return i.detail}function v(i,e){const t=i[e];return typeof t=="string"?t:void 0}function ee(i,e){const t=i[e];return typeof t=="number"?t:void 0}const de="••••••••";function le(i){const e=i.toLowerCase().replaceAll("_","-");return e==="authorization"||e==="proxy-authorization"||e==="cookie"||e==="set-cookie"||e.includes("api-key")||e.includes("token")||e.includes("secret")}function J(i){if(Array.isArray(i))return i.length===2&&typeof i[0]=="string"&&le(i[0])?[i[0],de]:i.map(e=>J(e));if(i!==null&&typeof i=="object")return Object.fromEntries(Object.entries(i).map(([e,t])=>[e,le(e)?de:J(t)]));if(typeof i=="string")try{return J(JSON.parse(i))}catch{return i.replace(/^([^:\r\n]+)(:\s*)(.*)$/gm,(e,t,s)=>le(t.trim())?`${t}${s}${de}`:e)}return i}function pe(i){return Array.isArray(i)?i.map(e=>pe(e)):i!==null&&typeof i=="object"?Object.fromEntries(Object.entries(i).map(([e,t])=>[e,St(e)?J(t):pe(t)])):i}function St(i){const e=i.replace(/([a-z0-9])([A-Z])/g,"$1_$2").toLowerCase().replace(/[-\s]+/g,"_");return e==="headers"||e.endsWith("_headers")}function ye(i){return Array.isArray(i)?i.map(e=>ye(e)):i!==null&&typeof i=="object"?Object.fromEntries(Object.entries(i).map(([e,t])=>[e,e.toLowerCase().endsWith("_url")&&typeof t=="string"?W(t):ye(t)])):i}function kt(i){if(typeof i=="string")try{return JSON.stringify(JSON.parse(i),null,2)}catch{return i}return JSON.stringify(i,null,2)??String(i)}function At(i){if(Array.isArray(i))return`${i.length} item${i.length===1?"":"s"}`;if(i!==null&&typeof i=="object"){const e=Object.keys(i).length;return`${e} field${e===1?"":"s"}`}return typeof i=="string"?`${new Blob([i]).size.toLocaleString()} bytes`:typeof i}class Rt extends w{static properties={label:{type:String},value:{attribute:!1},load_url:{type:String},is_headers:{type:Boolean},redact_record_headers:{type:Boolean},open:{type:Boolean,state:!0},wrap:{type:Boolean,state:!0},revealed:{type:Boolean,state:!0},copy_state:{type:String,state:!0},load_state:{type:String,state:!0},loaded_value:{attribute:!1,state:!0},error_message:{type:String,state:!0}};load_controller;copy_timeout;constructor(){super(),this.label="Payload",this.is_headers=!1,this.redact_record_headers=!1,this.open=!1,this.wrap=!0,this.revealed=!1,this.copy_state="idle",this.load_state="idle"}createRenderRoot(){return this}disconnectedCallback(){this.load_controller?.abort(),this.copy_timeout!==void 0&&window.clearTimeout(this.copy_timeout),super.disconnectedCallback()}willUpdate(e){!e.has("value")&&!e.has("load_url")||(this.load_controller?.abort(),this.load_controller=void 0,this.copy_timeout!==void 0&&(window.clearTimeout(this.copy_timeout),this.copy_timeout=void 0),this.open=!1,this.revealed=!1,this.copy_state="idle",this.load_state="idle",this.loaded_value=void 0,this.error_message=void 0)}effectiveValue(){return this.load_state==="ready"?this.loaded_value:this.value}displayedValue(){const e=this.effectiveValue(),t=this.redact_record_headers?ye(e):e,s=this.revealed?t:this.redact_record_headers?pe(t):this.is_headers?J(t):t;return kt(s)}toggleOpen(e){this.open=e.currentTarget.open,this.open&&this.value===void 0&&this.load_url&&this.load_state==="idle"&&this.loadPayload()}async loadPayload(){const e=this.load_url;if(!e)return;this.load_controller?.abort();const t=new AbortController;this.load_controller=t,this.load_state="loading",this.error_message=void 0;try{const s=await b(e,t.signal);if(this.load_controller!==t||this.load_url!==e)return;const n=new URL(e,window.location.origin).searchParams.get("field");if(!n||s.field!==n)throw new Error("Payload response did not match the requested field");this.loaded_value=s.value,this.load_state="ready"}catch(s){if(this.load_controller!==t||k(s))return;this.load_state="error",this.error_message=s instanceof Error?s.message:"Unable to load payload"}finally{this.load_controller===t&&(this.load_controller=void 0)}}async copyValue(){try{await navigator.clipboard.writeText(this.displayedValue()),this.copy_state="copied",this.copy_timeout!==void 0&&window.clearTimeout(this.copy_timeout),this.copy_timeout=window.setTimeout(()=>{this.copy_state="idle",this.copy_timeout=void 0},1500)}catch{this.copy_state="error"}}render(){if(!this.load_url&&(this.value===null||this.value===void 0||this.value===""))return _;const e=this.effectiveValue(),t=this.is_headers||this.redact_record_headers,s=this.load_state==="loading"?"Loading…":this.load_state==="error"?"Load failed":e===null?"No payload":e===void 0?"Load on open":At(e);return a`
       <details class="payload-panel" ?open=${this.open} @toggle=${this.toggleOpen}>
         <summary>
           <span>${this.label}</span>
-          <span class="payload-summary">${t}</span>
+          <span class="payload-summary">${s}</span>
         </summary>
         ${this.open?this.load_state==="loading"?a`<div class="payload-state" role="status"><span class="spinner" aria-hidden="true"></span>Loading payload…</div>`:this.load_state==="error"?a`
                   <div class="payload-state payload-error" role="alert">
@@ -19,7 +19,7 @@
                       <button type="button" aria-pressed=${String(this.wrap)} @click=${()=>this.wrap=!this.wrap}>
                         ${this.wrap?"No wrap":"Wrap"}
                       </button>
-                      ${s?a`
+                      ${t?a`
                             <button
                               type="button"
                               class=${this.revealed?"danger-button":""}
@@ -28,15 +28,84 @@
                             >
                               ${this.revealed?"Hide sensitive":"Reveal sensitive"}
                             </button>
-                          `:u}
+                          `:_}
                       <span class="payload-security-note">
-                        ${s&&!this.revealed?"Sensitive headers redacted":""}
+                        ${t&&!this.revealed?"Sensitive headers redacted":""}
                       </span>
                     </div>
                     <pre class=${this.wrap?"wrap":"nowrap"}><code>${this.displayedValue()}</code></pre>
-                  `:u}
+                  `:_}
       </details>
-    `}}customElements.define("payload-panel",bs);const C=[{id:"overview",label:"Overview"},{id:"client",label:"Client"},{id:"provider",label:"Provider"},{id:"raw",label:"Raw"}];function N(o){return o==null||o===""?"—":typeof o=="boolean"?o?"Yes":"No":String(o)}function ws(o){if(o!==null&&typeof o=="object"&&!Array.isArray(o))return o;if(typeof o=="string")try{const e=JSON.parse(o);return e!==null&&typeof e=="object"&&!Array.isArray(e)?e:void 0}catch{return}}function xe(o,e,s){return ws(o[e])?.[s]??o[s]}function A(o,e,s,t){return`/api/request-payload?${new URLSearchParams({day:o,request_id:e,row_id:s,field:t}).toString()}`}function Ce(o){return o===void 0?"neutral":o>=400?"error":o>=300?"warning":"success"}class qs extends w{static properties={detail:{attribute:!1},summary:{attribute:!1},state:{type:String},error_message:{type:String},active_tab:{type:String},timezone:{type:String}};createRenderRoot(){return this}openSession(e){this.dispatchEvent(new CustomEvent("open-session",{detail:e,bubbles:!0,composed:!0}))}retry(){this.dispatchEvent(new CustomEvent("detail-retry",{bubbles:!0,composed:!0}))}close(){this.dispatchEvent(new CustomEvent("detail-close",{bubbles:!0,composed:!0}))}selectTab(e){this.dispatchEvent(new CustomEvent("detail-tab-change",{detail:e,bubbles:!0,composed:!0}))}tabKeydown(e){const s=C.findIndex(r=>r.id===this.active_tab);let t;if(e.key==="ArrowRight"?t=(s+1)%C.length:e.key==="ArrowLeft"?t=(s-1+C.length)%C.length:e.key==="Home"?t=0:e.key==="End"&&(t=C.length-1),t===void 0)return;e.preventDefault();const i=C[t];this.selectTab(i.id),this.querySelectorAll("[role=tab]")[t]?.focus()}renderOverview(e){const s=Q(e,"ts"),t=xe(e,"ctx_json","latency_ms"),i=xe(e,"params_json","stream"),n=[["Timestamp",s===void 0?void 0:j(s,this.timezone)],["Storage day",this.detail?.day],["Endpoint",e.endpoint],["Model",e.model],["Provider",e.provider_id],["Account",e.account_id],["Latency",typeof t=="number"?`${t} ms`:t],["Streaming",i]],r=Q(e,"inbound_resp_status"),c=Q(e,"outbound_resp_status"),l=Q(e,"status");return a`
+    `}}customElements.define("payload-panel",Rt);const Ue="/backend-api/codex/alpha/search";function E(i){return i!==null&&typeof i=="object"&&!Array.isArray(i)?i:void 0}function $(i){return typeof i=="string"&&i.length>0?i:void 0}function Je(i){return Array.isArray(i)?i.filter(e=>typeof e=="string"):[]}function ce(i){return typeof i=="number"&&Number.isFinite(i)?i:void 0}function xt(i,e){const t=E(e);switch(i){case"search_query":{const s=$(t?.q);return s?{kind:i,value:s,domains:Je(t?.domains),recency_days:ce(t?.recency)}:void 0}case"open":{const s=$(t?.ref_id);return s?{kind:i,value:s,line_number:ce(t?.lineno)}:void 0}case"click":{const s=$(t?.ref_id),n=ce(t?.id);return s&&n!==void 0?{kind:i,value:s,link_id:n}:void 0}case"find":{const s=$(t?.ref_id),n=$(t?.pattern);return s&&n?{kind:i,value:s,pattern:n}:void 0}default:return}}function Et(i){const e=E(i);return e?Object.entries(e).flatMap(([t,s])=>Array.isArray(s)?s.flatMap(n=>{const o=xt(t,n);return o?[o]:[]}):[]):[]}function Ct(i){if(i.length===0)return"No operations";if(new Set(i.map(s=>s.kind)).size!==1)return`${i.length} operations`;const t={search_query:["query","queries"],open:["page open","page opens"],click:["link click","link clicks"],find:["find","finds"]}[i[0].kind];return`${i.length} ${t[i.length===1?0:1]}`}function Lt(i){const e=E(i);if(!e)return;const t={type:$(e.type),domain:$(e.domain),ref_id:$(e.ref_id),snippet:$(e.snippet),title:$(e.title),url:$(e.url)};return Object.values(t).some(s=>s!==void 0)?t:void 0}function Ut(i){if(Array.isArray(i))for(const e of i){const s=E(e)?.content;if(Array.isArray(s))for(const n of s){const o=E(n),r=$(o?.text)??$(o?.input_text);if(r)return r}}}function Pt(i){const e=i.replace(/\s/g,"");if(!e||!/^[A-Za-z0-9_\-+/]*={0,2}$/.test(e))return;const t=e.replace(/=+$/,"").length;if(t%4!==1)return Math.floor(t*3/4)}function Nt(i,e){const t=E(i),s=E(e),n=E(t?.commands),o=E(t?.settings),r=Array.isArray(s?.results)?s.results:[],c=$(s?.encrypted_output);return{operations:Et(n),response_length:$(n?.response_length),allowed_callers:Je(o?.allowed_callers),external_web_access:typeof o?.external_web_access=="boolean"?o.external_web_access:void 0,prompt:Ut(t?.input),output:$(s?.output),results:r.flatMap(l=>{const d=Lt(l);return d?[d]:[]}),encrypted_output_bytes:c?Pt(c):void 0}}function Dt(i){if(typeof i!="string")return!1;try{return new URL(i,"http://localhost").pathname===Ue}catch{return i.split("?",1)[0]===Ue}}function Pe(i){if(i)try{const e=new URL(i);return e.protocol==="http:"||e.protocol==="https:"?e.href:void 0}catch{return}}function Tt(i){return i<1e3?`${i} B`:i<1e6?`${(i/1e3).toFixed(1)} KB`:`${(i/1e6).toFixed(1)} MB`}function Ot(i){return{search_query:"Query",open:"Open",click:"Click",find:"Find"}[i.kind]}function Mt(i){switch(i.kind){case"search_query":{const e=[];return i.domains.length>0&&e.push(`Domains: ${i.domains.join(", ")}`),i.recency_days!==void 0&&e.push(`Last ${i.recency_days} days`),e.join(" · ")||void 0}case"open":return i.line_number===void 0?void 0:`Starting at line ${i.line_number}`;case"click":return`Link ${i.link_id}`;case"find":return`Pattern: ${i.pattern}`}}class zt extends w{static properties={request_url:{type:String},response_url:{type:String},load_state:{type:String,state:!0},request_payload:{attribute:!1,state:!0},response_payload:{attribute:!1,state:!0},error_message:{type:String,state:!0}};load_controller;constructor(){super(),this.request_url="",this.response_url="",this.load_state="idle"}createRenderRoot(){return this}disconnectedCallback(){this.load_controller?.abort(),super.disconnectedCallback()}updated(e){(e.has("request_url")||e.has("response_url"))&&this.load()}async load(){if(!this.request_url||!this.response_url)return;const e=this.request_url,t=this.response_url;this.load_controller?.abort();const s=new AbortController;this.load_controller=s,this.load_state="loading",this.error_message=void 0;try{const[n,o]=await Promise.all([b(e,s.signal),b(t,s.signal)]);if(this.load_controller!==s||this.request_url!==e||this.response_url!==t)return;if(n.field!=="inbound_req_body"||o.field!=="inbound_resp_body")throw new Error("Search payload response did not match the requested fields");this.request_payload=n.value,this.response_payload=o.value,this.load_state="ready"}catch(n){if(this.load_controller!==s||k(n))return;this.load_state="error",this.error_message=n instanceof Error?n.message:"Unable to load web search"}finally{this.load_controller===s&&(this.load_controller=void 0)}}render(){if(this.load_state==="loading"||this.load_state==="idle")return a`
+        <section class="web-search-inspection web-search-state" aria-label="Web search" aria-live="polite">
+          <span class="spinner" aria-hidden="true"></span>
+          <span>Loading web search…</span>
+        </section>
+      `;if(this.load_state==="error")return a`
+        <section class="web-search-inspection web-search-state error-state" aria-label="Web search" role="alert">
+          <div><strong>Web search could not be loaded</strong><span>${this.error_message}</span></div>
+          <button type="button" @click=${()=>{this.load()}}>Retry</button>
+        </section>
+      `;const e=Nt(this.request_payload,this.response_payload);return a`
+      <section class="web-search-inspection" aria-label="Web search">
+        <header class="web-search-heading">
+          <div>
+            <p class="eyebrow">Codex web search</p>
+            <h3>${Ct(e.operations)}</h3>
+          </div>
+          <div class="web-search-metrics">
+            <span><strong>${e.results.length}</strong> results</span>
+            ${e.response_length?a`<span><strong>${e.response_length}</strong> response</span>`:_}
+            ${e.encrypted_output_bytes!==void 0?a`<span title="Decoded encrypted payload size"><strong>${Tt(e.encrypted_output_bytes)}</strong> encrypted</span>`:_}
+          </div>
+        </header>
+
+        <div class="web-search-operations">
+          ${e.operations.length===0?a`<p class="web-search-empty">No supported web operation was persisted.</p>`:e.operations.map((t,s)=>{const n=Mt(t),o=t.kind==="open"?Pe(t.value):void 0;return a`
+                  <article>
+                    <span class="web-search-operation-index">${s+1}</span>
+                    <div>
+                      <span class="web-search-operation-kind">${Ot(t)}</span>
+                      ${o?a`<a href=${o} target="_blank" rel="noopener noreferrer"><code>${t.value}</code></a>`:a`<code>${t.value}</code>`}
+                      ${n?a`<p>${n}</p>`:_}
+                    </div>
+                  </article>
+                `})}
+        </div>
+
+        <dl class="web-search-settings">
+          <div><dt>Caller</dt><dd>${e.allowed_callers.join(", ")||"—"}</dd></div>
+          <div><dt>External web access</dt><dd>${e.external_web_access===void 0?"—":String(e.external_web_access)}</dd></div>
+        </dl>
+
+        <div class="web-search-results">
+          <h4>Results</h4>
+          ${e.results.length===0?a`<p class="web-search-empty">No structured results were returned.</p>`:e.results.map((t,s)=>{const n=Pe(t.url);return a`
+                  <article class="web-search-result">
+                    <span class="web-search-result-index">${s+1}</span>
+                    <div>
+                      <div class="web-search-result-title">
+                        ${n?a`<a href=${n} target="_blank" rel="noopener noreferrer">${t.title??t.url}</a>`:a`<strong>${t.title??t.url??"Untitled result"}</strong>`}
+                        <span>${t.domain??""}</span>
+                      </div>
+                      ${t.snippet?a`<p>${t.snippet}</p>`:_}
+                      ${t.ref_id?a`<code>${t.ref_id}</code>`:_}
+                    </div>
+                  </article>
+                `})}
+        </div>
+
+        <div class="payload-stack web-search-payloads">
+          ${e.output?a`<payload-panel label="Synthesized search output" .value=${e.output}></payload-panel>`:_}
+          ${e.prompt?a`<payload-panel label="Prompt context sent to search" .value=${e.prompt}></payload-panel>`:_}
+        </div>
+      </section>
+    `}}customElements.define("web-search-detail",zt);const U=[{id:"overview",label:"Overview"},{id:"client",label:"Client"},{id:"provider",label:"Provider"},{id:"raw",label:"Raw"}];function T(i){return i==null||i===""?"—":typeof i=="boolean"?i?"Yes":"No":String(i)}function Bt(i){if(i!==null&&typeof i=="object"&&!Array.isArray(i))return i;if(typeof i=="string")try{const e=JSON.parse(i);return e!==null&&typeof e=="object"&&!Array.isArray(e)?e:void 0}catch{return}}function Ne(i,e,t){return Bt(i[e])?.[t]??i[t]}function q(i,e,t,s){return`/api/request-payload?${new URLSearchParams({day:i,request_id:e,row_id:t,field:s}).toString()}`}function De(i){return i===void 0?"neutral":i>=400?"error":i>=300?"warning":"success"}class Ht extends w{static properties={detail:{attribute:!1},summary:{attribute:!1},state:{type:String},error_message:{type:String},active_tab:{type:String},timezone:{type:String}};createRenderRoot(){return this}openSession(e){this.dispatchEvent(new CustomEvent("open-session",{detail:e,bubbles:!0,composed:!0}))}retry(){this.dispatchEvent(new CustomEvent("detail-retry",{bubbles:!0,composed:!0}))}close(){this.dispatchEvent(new CustomEvent("detail-close",{bubbles:!0,composed:!0}))}selectTab(e){this.dispatchEvent(new CustomEvent("detail-tab-change",{detail:e,bubbles:!0,composed:!0}))}tabKeydown(e){const t=U.findIndex(r=>r.id===this.active_tab);let s;if(e.key==="ArrowRight"?s=(t+1)%U.length:e.key==="ArrowLeft"?s=(t-1+U.length)%U.length:e.key==="Home"?s=0:e.key==="End"&&(s=U.length-1),s===void 0)return;e.preventDefault();const n=U[s];this.selectTab(n.id),this.querySelectorAll("[role=tab]")[s]?.focus()}renderOverview(e){const t=ee(e,"ts"),s=Ne(e,"ctx_json","latency_ms"),n=Ne(e,"params_json","stream"),o=[["Timestamp",t===void 0?void 0:V(t,this.timezone)],["Storage day",this.detail?.day],["Endpoint",e.endpoint],["Model",e.model],["Provider",e.provider_id],["Account",e.account_id],["Latency",typeof s=="number"?`${s} ms`:s],["Streaming",n]],r=ee(e,"inbound_resp_status"),c=ee(e,"outbound_resp_status"),l=ee(e,"status"),d=v(e,"request_id")??this.summary?.request_id,u=this.detail?.row_id,h=v(e,"inbound_req_url")??v(e,"endpoint"),p=this.detail&&d&&u&&Dt(h)?a`
+          <web-search-detail
+            .request_url=${q(this.detail.day,d,u,"inbound_req_body")}
+            .response_url=${q(this.detail.day,d,u,"inbound_resp_body")}
+          ></web-search-detail>
+        `:_;return a`
       <section class="flow-grid" aria-label="Request flow">
         <div>
           <span>Client request</span>
@@ -45,107 +114,110 @@
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div>
           <span>Provider response</span>
-          <strong class="status-text ${Ce(c)}">${N(c)}</strong>
+          <strong class="status-text ${De(c)}">${T(c)}</strong>
         </div>
         <span class="flow-arrow" aria-hidden="true">→</span>
         <div>
           <span>Client response</span>
-          <strong class="status-text ${Ce(r??l)}">
-            ${N(r??l)}
+          <strong class="status-text ${De(r??l)}">
+            ${T(r??l)}
           </strong>
         </div>
       </section>
       <dl class="metadata-grid">
-        ${n.map(([d,_])=>a`
+        ${o.map(([y,f])=>a`
             <div>
-              <dt>${d}</dt>
-              <dd title=${N(_)}>${N(_)}</dd>
+              <dt>${y}</dt>
+              <dd title=${T(f)}>${T(f)}</dd>
             </div>
           `)}
       </dl>
+      ${p}
+      <div class="payload-stack">
+        <payload-panel label="Usage" .value=${e.usage_json}></payload-panel>
+      </div>
+    `}renderRaw(e){return a`
+      <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
       <div class="payload-stack">
         <payload-panel label="Request parameters" .value=${e.params_json}></payload-panel>
-        <payload-panel label="Usage" .value=${e.usage_json}></payload-panel>
         <payload-panel label="Request context" .value=${e.ctx_json}></payload-panel>
+        <payload-panel
+          label="Persisted overview record"
+          .value=${e}
+          .redact_record_headers=${!0}
+        ></payload-panel>
       </div>
-    `}renderClient(e,s,t,i){return a`
+    `}renderClient(e,t,s,n){return a`
       <section class="payload-group">
         <div class="payload-group-heading">
           <div><span class="direction-label">Incoming</span><h3>Client request</h3></div>
-          <span>${v(e,"inbound_req_method")??"—"} ${F(v(e,"inbound_req_url"))}</span>
+          <span>${v(e,"inbound_req_method")??"—"} ${W(v(e,"inbound_req_url"))}</span>
         </div>
         <payload-panel
           label="Request headers"
           .value=${e.inbound_req_headers}
-          .load_url=${A(s,t,i,"inbound_req_headers")}
+          .load_url=${q(t,s,n,"inbound_req_headers")}
           .is_headers=${!0}
         ></payload-panel>
         <payload-panel
           label="Request body"
           .value=${e.inbound_req_body}
-          .load_url=${A(s,t,i,"inbound_req_body")}
+          .load_url=${q(t,s,n,"inbound_req_body")}
         ></payload-panel>
       </section>
       <section class="payload-group">
         <div class="payload-group-heading">
           <div><span class="direction-label">Outgoing</span><h3>Client response</h3></div>
-          <span>Status ${N(e.inbound_resp_status??e.status)}</span>
+          <span>Status ${T(e.inbound_resp_status??e.status)}</span>
         </div>
         <payload-panel
           label="Response headers"
           .value=${e.inbound_resp_headers}
-          .load_url=${A(s,t,i,"inbound_resp_headers")}
+          .load_url=${q(t,s,n,"inbound_resp_headers")}
           .is_headers=${!0}
         ></payload-panel>
         <payload-panel
           label="Response body"
           .value=${e.inbound_resp_body}
-          .load_url=${A(s,t,i,"inbound_resp_body")}
+          .load_url=${q(t,s,n,"inbound_resp_body")}
         ></payload-panel>
       </section>
-    `}renderProvider(e,s,t,i){return a`
+    `}renderProvider(e,t,s,n){return a`
       <section class="payload-group">
         <div class="payload-group-heading">
           <div><span class="direction-label">Outgoing</span><h3>Provider request</h3></div>
-          <span>${v(e,"outbound_req_method")??"—"} ${F(v(e,"outbound_req_url"))}</span>
+          <span>${v(e,"outbound_req_method")??"—"} ${W(v(e,"outbound_req_url"))}</span>
         </div>
         <payload-panel
           label="Request headers"
           .value=${e.outbound_req_headers}
-          .load_url=${A(s,t,i,"outbound_req_headers")}
+          .load_url=${q(t,s,n,"outbound_req_headers")}
           .is_headers=${!0}
         ></payload-panel>
         <payload-panel
           label="Request body"
           .value=${e.outbound_req_body}
-          .load_url=${A(s,t,i,"outbound_req_body")}
+          .load_url=${q(t,s,n,"outbound_req_body")}
         ></payload-panel>
       </section>
       <section class="payload-group">
         <div class="payload-group-heading">
           <div><span class="direction-label">Incoming</span><h3>Provider response</h3></div>
-          <span>Status ${N(e.outbound_resp_status)}</span>
+          <span>Status ${T(e.outbound_resp_status)}</span>
         </div>
         <payload-panel
           label="Response headers"
           .value=${e.outbound_resp_headers}
-          .load_url=${A(s,t,i,"outbound_resp_headers")}
+          .load_url=${q(t,s,n,"outbound_resp_headers")}
           .is_headers=${!0}
         ></payload-panel>
         <payload-panel
           label="Response body"
           .value=${e.outbound_resp_body}
-          .load_url=${A(s,t,i,"outbound_resp_body")}
+          .load_url=${q(t,s,n,"outbound_resp_body")}
         ></payload-panel>
       </section>
-    `}renderTab(e,s,t,i){switch(this.active_tab){case"client":return this.renderClient(e,s,t,i);case"provider":return this.renderProvider(e,s,t,i);case"raw":return a`
-          <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
-          <payload-panel
-            label="Persisted overview record"
-            .value=${e}
-            .redact_record_headers=${!0}
-          ></payload-panel>
-        `;default:return this.renderOverview(e)}}render(){if(!this.detail)return this.state==="loading"?a`
+    `}renderTab(e,t,s,n){switch(this.active_tab){case"client":return this.renderClient(e,t,s,n);case"provider":return this.renderProvider(e,t,s,n);case"raw":return this.renderRaw(e);default:return this.renderOverview(e)}}render(){if(!this.detail)return this.state==="loading"?a`
           <section class="detail-state" aria-live="polite">
             <button type="button" class="mobile-back-button" @click=${this.close}>← Requests</button>
             <span class="spinner" aria-hidden="true"></span>
@@ -158,17 +230,17 @@
             <p>${this.error_message}</p>
             <button type="button" class="primary-button" @click=${this.retry}>Retry</button>
           </section>
-        `:a`<section class="detail-state"><p>Select a request to inspect its route, payloads, and responses.</p></section>`;const e=this.detail.request,s=v(e,"request_id")??this.summary?.request_id??"unknown id",t=v(e,"session_id")??this.summary?.session_id??void 0,i=v(e,"inbound_req_method")??this.summary?.inbound_req_method??"REQUEST",n=F(v(e,"inbound_req_url")??this.summary?.inbound_req_url??v(e,"endpoint"));return a`
+        `:a`<section class="detail-state"><p>Select a request to inspect its route, payloads, and responses.</p></section>`;const e=this.detail.request,t=v(e,"request_id")??this.summary?.request_id??"unknown id",s=v(e,"session_id")??this.summary?.session_id??void 0,n=v(e,"inbound_req_method")??this.summary?.inbound_req_method??"REQUEST",o=W(v(e,"inbound_req_url")??this.summary?.inbound_req_url??v(e,"endpoint"));return a`
       <section class="detail-content">
         <header class="detail-header">
           <button type="button" class="mobile-back-button" @click=${this.close}>← Requests</button>
           <div class="detail-title">
-            <p class="eyebrow">request · ${b(s)}</p>
-            <h2><span>${i}</span> ${n}</h2>
-            <p class="muted" title=${s}>${s}</p>
+            <p class="eyebrow">request · ${A(t)}</p>
+            <h2><span>${n}</span> ${o}</h2>
+            <p class="muted" title=${t}>${t}</p>
           </div>
           <div class="detail-actions">
-            ${t?a`<button type="button" class="secondary-button" @click=${()=>this.openSession(t)}>Open session</button>`:u}
+            ${s?a`<button type="button" class="secondary-button" @click=${()=>this.openSession(s)}>Open session</button>`:_}
             <button
               type="button"
               class="icon-button"
@@ -180,16 +252,16 @@
             </button>
           </div>
         </header>
-        ${this.state==="loading"?a`<div class="inline-state" role="status"><span class="spinner" aria-hidden="true"></span>Refreshing detail…</div>`:u}
+        ${this.state==="loading"?a`<div class="inline-state" role="status"><span class="spinner" aria-hidden="true"></span>Refreshing detail…</div>`:_}
         ${this.state==="error"?a`
               <div class="inline-error" role="alert">
                 <span>${this.error_message}</span>
                 <button type="button" @click=${this.retry}>Retry</button>
               </div>
-            `:u}
-        ${e.request_error?a`<div class="request-error" role="alert">${String(e.request_error)}</div>`:u}
+            `:_}
+        ${e.request_error?a`<div class="request-error" role="alert">${String(e.request_error)}</div>`:_}
         <div class="detail-tabs" role="tablist" aria-label="Request detail sections" @keydown=${this.tabKeydown}>
-          ${C.map(r=>a`
+          ${U.map(r=>a`
               <button
                 id="request-tab-${r.id}"
                 type="button"
@@ -210,65 +282,65 @@
           aria-labelledby="request-tab-${this.active_tab}"
           tabindex="0"
         >
-          ${this.renderTab(e,this.detail.day,s,this.detail.row_id)}
+          ${this.renderTab(e,this.detail.day,t,this.detail.row_id)}
         </section>
       </section>
-    `}}customElements.define("request-detail-view",qs);class Ss extends w{static properties={requests:{attribute:!1},selected_key:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectRequest(e){this.dispatchEvent(new CustomEvent("request-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.requests??[];return e.length===0?a`<p class="empty">No persisted requests match these filters.</p>`:a`
+    `}}customElements.define("request-detail-view",Ht);class It extends w{static properties={requests:{attribute:!1},selected_key:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectRequest(e){this.dispatchEvent(new CustomEvent("request-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.requests??[];return e.length===0?a`<p class="empty">No persisted requests match these filters.</p>`:a`
       <ul class="request-list" aria-label="Requests">
-        ${e.map(s=>{const t=fs(s),i=this.selected_key===M(s),n=s.inbound_req_method??"REQUEST",r=ys(s);return a`
+        ${e.map(t=>{const s=wt(t),n=this.selected_key===B(t),o=t.inbound_req_method??"REQUEST",r=mt(t);return a`
             <li>
               <button
                 type="button"
-                class="request-row ${i?"selected":""}"
-                data-request-key=${M(s)}
-                aria-current=${i?"true":"false"}
-                @click=${()=>this.selectRequest(s)}
+                class="request-row ${n?"selected":""}"
+                data-request-key=${B(t)}
+                aria-current=${n?"true":"false"}
+                @click=${()=>this.selectRequest(t)}
               >
-                <span class="request-row-time">${j(s.ts,this.timezone,!0)}</span>
-                <span class="status ${t.tone}" title=${t.title}>${t.label}</span>
+                <span class="request-row-time">${V(t.ts,this.timezone,!0)}</span>
+                <span class="status ${s.tone}" title=${s.title}>${s.label}</span>
                 <span class="request-row-main">
-                  <span class="request-route"><strong>${n}</strong><span>${r}</span></span>
+                  <span class="request-route"><strong>${o}</strong><span>${r}</span></span>
                   <span class="request-context">
-                    <span>${s.model??"unknown model"}</span>
+                    <span>${t.model??"unknown model"}</span>
                     <span aria-hidden="true">·</span>
-                    <span>${s.provider_id??"unknown provider"}</span>
+                    <span>${t.provider_id??"unknown provider"}</span>
                   </span>
                   <span class="request-identifiers">
-                    <span title=${s.request_id}>req ${b(s.request_id)}</span>
-                    ${s.session_id?a`<span title=${s.session_id}>session ${b(s.session_id)}</span>`:a`<span>no session</span>`}
+                    <span title=${t.request_id}>req ${A(t.request_id)}</span>
+                    ${t.session_id?a`<span title=${t.session_id}>session ${A(t.session_id)}</span>`:a`<span>no session</span>`}
                   </span>
                 </span>
               </button>
             </li>
           `})}
       </ul>
-    `}}customElements.define("request-list",Ss);function ks(o,e){const s=new Set,t=new Set;for(const i of o){if(t.has(i.node_id))continue;const n=[],r=new Map;let c=i;for(;c&&!t.has(c.node_id);){const l=r.get(c.node_id);if(l!==void 0){for(const d of n.slice(l))s.add(d);break}r.set(c.node_id,n.length),n.push(c.node_id),c=c.parent_node_id?e.get(c.parent_node_id):void 0}for(const l of n)t.add(l)}return s}function As(o,e,s){const t=Number(s.has(e.node_id))-Number(s.has(o.node_id));return t!==0?t:o.ts!==e.ts?e.ts-o.ts:o.node_id.localeCompare(e.node_id)}function Rs(o,e,s){const t=[...o].filter(r=>r.is_head).sort((r,c)=>c.ts-r.ts||r.node_id.localeCompare(c.node_id))[0],i=new Set;let n=t;for(;n;){if(i.has(n.node_id)){s.add(n.node_id);break}i.add(n.node_id),n=n.parent_node_id?e.get(n.parent_node_id):void 0}return i}function Le(o,e,s,t,i){const n=[{node:o,next_child:0}];for(;n.length>0;){const r=n[n.length-1],c=s.get(r.node.node_id);if(c==="done"){n.pop();continue}c===void 0&&s.set(r.node.node_id,"visiting");const l=e.get(r.node.node_id)??[];if(r.next_child<l.length){const d=l[r.next_child];r.next_child+=1;const _=s.get(d.node_id);_===void 0?n.push({node:d,next_child:0}):_==="visiting"&&(t.add(r.node.node_id),t.add(d.node_id));continue}s.set(r.node.node_id,"done"),i.push(r.node),n.pop()}}function Es(o,e,s,t,i){const n=(d,_)=>As(d,_,t);for(const d of s.values())d.sort(n);const r=o.filter(d=>d.parent_node_id===null||!e.has(d.parent_node_id)||i.has(d.node_id)).sort(n),c=new Map,l=[];for(const d of r)Le(d,s,c,i,l);for(const d of[...o].sort(n))c.has(d.node_id)||(i.add(d.node_id),Le(d,s,c,i,l));return l}function xs(o,e,s,t,i){const n=[],r=[],c=new Set;let l=0;for(const d of o){let _=r.indexOf(d.node_id);const h=_===-1;h&&(_=r.length,r.push(d.node_id));const p=[...r],y=[];let $;const f=d.parent_node_id,q=f&&i.has(d.node_id)&&i.has(f)?null:f;if(q&&!c.has(q)){const g=r.findIndex((Z,je)=>je!==_&&Z===q);g===-1?(r[_]=q,$=_):(r.splice(_,1),$=g-+(_<g))}else q&&c.has(q)&&(i.add(d.node_id),i.add(q)),r.splice(_,1);const Y=[...r];for(let g=0;g<p.length;g+=1){if(g===_)continue;const Z=Y.indexOf(p[g]);Z!==-1&&y.push({from_lane:g,to_lane:Z,kind:"continuation",active:s.has(p[g])})}$!==void 0&&y.push({from_lane:_,to_lane:$,kind:"parent",active:s.has(d.node_id)}),l=Math.max(l,p.length,Y.length),n.push({node:d,top_lanes:p,bottom_lanes:Y,node_lane:_,starts_here:h,connections:y,bottom_lane_is_active:Y.map(g=>s.has(g)),child_count:e.get(d.node_id)?.length??0,parent_is_missing:!!(q&&t.has(q)),is_on_head_path:s.has(d.node_id),has_topology_warning:i.has(d.node_id)}),c.add(d.node_id)}return{rows:n,max_lane_count:l,remaining_lanes:[...r]}}function Ue(o){const e=new Map;for(const d of o)e.has(d.node_id)||e.set(d.node_id,d);const s=[...e.values()],t=new Map(s.map(d=>[d.node_id,[]])),i=new Set,n=ks(s,e);for(const d of s){const _=d.parent_node_id;_&&(e.has(_)&&!(n.has(d.node_id)&&n.has(_))?t.get(_)?.push(d):e.has(_)||i.add(_))}const r=Rs(s,e,n),c=Es(s,e,t,r,n),l=xs(c,t,r,i,n);for(const d of l.rows)d.has_topology_warning=n.has(d.node.node_id);return{...l,missing_parent_ids:[...i].sort(),remaining_lanes:l.remaining_lanes.filter(d=>i.has(d)),cycle_node_ids:[...n].sort()}}const Be=6,se=16,de=25;function Cs(o){return o===null?{label:"—",tone:"neutral",title:"No response status stored"}:o>=400?{label:String(o),tone:"error",title:`Response status: ${o}`}:o>=300?{label:String(o),tone:"warning",title:`Response status: ${o}`}:{label:String(o),tone:"success",title:`Response status: ${o}`}}function Ls(o){switch(o.toLowerCase()){case"assistant":return"assistant";case"system":case"developer":return"system";case"tool":case"function":return"tool";case"compaction":return"compaction";default:return"user"}}function Us(o){try{return JSON.stringify(o,null,2)??String(o)}catch{return String(o)}}function D(o){if(o<1024)return`${o.toLocaleString()} B`;const e=["KiB","MiB","GiB"];let s=o/1024,t=e[0];for(const i of e.slice(1)){if(s<1024)break;s/=1024,t=i}return`${s>=10?s.toFixed(0):s.toFixed(1)} ${t}`}function T(o){return o===null?"—":o.toLocaleString()}function le(o){return o===null?"—":new Intl.NumberFormat(void 0,{notation:"compact",maximumFractionDigits:o>=1e4?1:0}).format(o)}function Ps(o){switch(o){case"message_tree":return{direction:"New",title:"Input delta",empty_message:"No new semantic input was stored for this observation."};case"suffix_append":return{direction:"Appended",title:"Input delta",empty_message:"No new semantic input was stored for this node."};case"root_snapshot":return{direction:"Initial",title:"Input snapshot",empty_message:"No semantic input was stored for this root snapshot."};case"conflict_snapshot":return{direction:"Replaced",title:"Replacement snapshot",empty_message:"No semantic input was stored for this replacement snapshot."};default:return{direction:"Stored",title:"Node input",empty_message:"No semantic input was stored for this node."}}}function S(o){return(o+.5)*se}function Pe(o){return`session-tree-lanes-${Math.min(o,Be)}`}class Ns extends w{static properties={sessions:{attribute:!1},selected_session_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.sessions??[];return a`
+    `}}customElements.define("request-list",It);function jt(i,e){const t=new Set,s=new Set;for(const n of i){if(s.has(n.node_id))continue;const o=[],r=new Map;let c=n;for(;c&&!s.has(c.node_id);){const l=r.get(c.node_id);if(l!==void 0){for(const d of o.slice(l))t.add(d);break}r.set(c.node_id,o.length),o.push(c.node_id),c=c.parent_node_id?e.get(c.parent_node_id):void 0}for(const l of o)s.add(l)}return t}function Ft(i,e,t){const s=Number(t.has(e.node_id))-Number(t.has(i.node_id));return s!==0?s:i.ts!==e.ts?e.ts-i.ts:i.node_id.localeCompare(e.node_id)}function Vt(i,e,t){const s=[...i].filter(r=>r.is_head).sort((r,c)=>c.ts-r.ts||r.node_id.localeCompare(c.node_id))[0],n=new Set;let o=s;for(;o;){if(n.has(o.node_id)){t.add(o.node_id);break}n.add(o.node_id),o=o.parent_node_id?e.get(o.parent_node_id):void 0}return n}function Te(i,e,t,s,n){const o=[{node:i,next_child:0}];for(;o.length>0;){const r=o[o.length-1],c=t.get(r.node.node_id);if(c==="done"){o.pop();continue}c===void 0&&t.set(r.node.node_id,"visiting");const l=e.get(r.node.node_id)??[];if(r.next_child<l.length){const d=l[r.next_child];r.next_child+=1;const u=t.get(d.node_id);u===void 0?o.push({node:d,next_child:0}):u==="visiting"&&(s.add(r.node.node_id),s.add(d.node_id));continue}t.set(r.node.node_id,"done"),n.push(r.node),o.pop()}}function Wt(i,e,t,s,n){const o=(d,u)=>Ft(d,u,s);for(const d of t.values())d.sort(o);const r=i.filter(d=>d.parent_node_id===null||!e.has(d.parent_node_id)||n.has(d.node_id)).sort(o),c=new Map,l=[];for(const d of r)Te(d,t,c,n,l);for(const d of[...i].sort(o))c.has(d.node_id)||(n.add(d.node_id),Te(d,t,c,n,l));return l}function Jt(i,e,t,s,n){const o=[],r=[],c=new Set;let l=0;for(const d of i){let u=r.indexOf(d.node_id);const h=u===-1;h&&(u=r.length,r.push(d.node_id));const p=[...r],y=[];let f;const g=d.parent_node_id,R=g&&n.has(d.node_id)&&n.has(g)?null:g;if(R&&!c.has(R)){const m=r.findIndex((X,Ze)=>Ze!==u&&X===R);m===-1?(r[u]=R,f=u):(r.splice(u,1),f=m-+(u<m))}else R&&c.has(R)&&(n.add(d.node_id),n.add(R)),r.splice(u,1);const Q=[...r];for(let m=0;m<p.length;m+=1){if(m===u)continue;const X=Q.indexOf(p[m]);X!==-1&&y.push({from_lane:m,to_lane:X,kind:"continuation",active:t.has(p[m])})}f!==void 0&&y.push({from_lane:u,to_lane:f,kind:"parent",active:t.has(d.node_id)}),l=Math.max(l,p.length,Q.length),o.push({node:d,top_lanes:p,bottom_lanes:Q,node_lane:u,starts_here:h,connections:y,bottom_lane_is_active:Q.map(m=>t.has(m)),child_count:e.get(d.node_id)?.length??0,parent_is_missing:!!(R&&s.has(R)),is_on_head_path:t.has(d.node_id),has_topology_warning:n.has(d.node_id)}),c.add(d.node_id)}return{rows:o,max_lane_count:l,remaining_lanes:[...r]}}function Oe(i){const e=new Map;for(const d of i)e.has(d.node_id)||e.set(d.node_id,d);const t=[...e.values()],s=new Map(t.map(d=>[d.node_id,[]])),n=new Set,o=jt(t,e);for(const d of t){const u=d.parent_node_id;u&&(e.has(u)&&!(o.has(d.node_id)&&o.has(u))?s.get(u)?.push(d):e.has(u)||n.add(u))}const r=Vt(t,e,o),c=Wt(t,e,s,r,o),l=Jt(c,s,r,n,o);for(const d of l.rows)d.has_topology_warning=o.has(d.node.node_id);return{...l,missing_parent_ids:[...n].sort(),remaining_lanes:l.remaining_lanes.filter(d=>n.has(d)),cycle_node_ids:[...o].sort()}}const Ke=6,ie=16,ue=25;function Kt(i){return i===null?{label:"—",tone:"neutral",title:"No response status stored"}:i>=400?{label:String(i),tone:"error",title:`Response status: ${i}`}:i>=300?{label:String(i),tone:"warning",title:`Response status: ${i}`}:{label:String(i),tone:"success",title:`Response status: ${i}`}}function Zt(i){switch(i.toLowerCase()){case"assistant":return"assistant";case"system":case"developer":return"system";case"tool":case"function":return"tool";case"compaction":return"compaction";default:return"user"}}function Gt(i){try{return JSON.stringify(i,null,2)??String(i)}catch{return String(i)}}function O(i){if(i<1024)return`${i.toLocaleString()} B`;const e=["KiB","MiB","GiB"];let t=i/1024,s=e[0];for(const n of e.slice(1)){if(t<1024)break;t/=1024,s=n}return`${t>=10?t.toFixed(0):t.toFixed(1)} ${s}`}function M(i){return i===null?"—":i.toLocaleString()}function _e(i){return i===null?"—":new Intl.NumberFormat(void 0,{notation:"compact",maximumFractionDigits:i>=1e4?1:0}).format(i)}function Yt(i){switch(i){case"message_tree":return{direction:"New",title:"Input delta",empty_message:"No new semantic input was stored for this observation."};case"suffix_append":return{direction:"Appended",title:"Input delta",empty_message:"No new semantic input was stored for this node."};case"root_snapshot":return{direction:"Initial",title:"Input snapshot",empty_message:"No semantic input was stored for this root snapshot."};case"conflict_snapshot":return{direction:"Replaced",title:"Replacement snapshot",empty_message:"No semantic input was stored for this replacement snapshot."};default:return{direction:"Stored",title:"Node input",empty_message:"No semantic input was stored for this node."}}}function x(i){return(i+.5)*ie}function Me(i){return`session-tree-lanes-${Math.min(i,Ke)}`}class Qt extends w{static properties={sessions:{attribute:!1},selected_session_id:{type:String},timezone:{type:String}};createRenderRoot(){return this}selectSession(e){this.dispatchEvent(new CustomEvent("session-select",{detail:e,bubbles:!0,composed:!0}))}render(){const e=this.sessions??[];return a`
       <ul class="session-list" aria-label="Sessions">
-        ${e.map(s=>{const t=this.selected_session_id===s.session_id,i=$s(s);return a`
+        ${e.map(t=>{const s=this.selected_session_id===t.session_id,n=qt(t);return a`
             <li>
               <button
                 type="button"
-                class="session-row ${t?"selected":""}"
-                data-session-id=${s.session_id}
-                aria-current=${t?"true":"false"}
-                @click=${()=>this.selectSession(s)}
+                class="session-row ${s?"selected":""}"
+                data-session-id=${t.session_id}
+                aria-current=${s?"true":"false"}
+                @click=${()=>this.selectSession(t)}
               >
-                <time datetime=${new Date(s.last_ts).toISOString()}>
-                  ${hs(s.last_ts,this.timezone)}
+                <time datetime=${new Date(t.last_ts).toISOString()}>
+                  ${vt(t.last_ts,this.timezone)}
                 </time>
-                <span class="status ${i.tone}" title=${i.title}>${i.label}</span>
+                <span class="status ${n.tone}" title=${n.title}>${n.label}</span>
                 <span class="session-row-main">
                   <span class="session-row-title">
-                    <strong>${s.model??"Unknown model"}</strong>
-                    <span>${s.endpoint??"unknown endpoint"}</span>
+                    <strong>${t.model??"Unknown model"}</strong>
+                    <span>${t.endpoint??"unknown endpoint"}</span>
                   </span>
                   <span class="session-row-context">
-                    <span>${s.provider_id??"unknown provider"}</span>
+                    <span>${t.provider_id??"unknown provider"}</span>
                     <span aria-hidden="true">·</span>
-                    <span>${s.request_count.toLocaleString()} ${s.request_count===1?"node":"nodes"}</span>
+                    <span>${t.request_count.toLocaleString()} ${t.request_count===1?"node":"nodes"}</span>
                   </span>
-                  <span class="session-row-id" title=${s.session_id}>
-                    session ${b(s.session_id)}
+                  <span class="session-row-id" title=${t.session_id}>
+                    session ${A(t.session_id)}
                   </span>
                 </span>
                 <span class="session-row-chevron" aria-hidden="true">›</span>
@@ -276,47 +348,47 @@
             </li>
           `})}
       </ul>
-    `}}class Ds extends w{static properties={detail:{attribute:!1},node_detail:{attribute:!1},state:{type:String},error_message:{type:String},node_state:{type:String},node_error_message:{type:String},selected_node_id:{type:String},usage:{attribute:!1},usage_state:{type:String},usage_error_message:{type:String},timezone:{type:String}};createRenderRoot(){return this}close(){this.dispatchEvent(new CustomEvent("session-close",{bubbles:!0,composed:!0}))}retryDetail(){this.dispatchEvent(new CustomEvent("session-retry",{bubbles:!0,composed:!0}))}retryNode(){this.dispatchEvent(new CustomEvent("session-node-retry",{bubbles:!0,composed:!0}))}retryUsage(){this.dispatchEvent(new CustomEvent("session-usage-retry",{bubbles:!0,composed:!0}))}selectNode(e){this.dispatchEvent(new CustomEvent("session-node-select",{detail:e,bubbles:!0,composed:!0}))}openRequest(e){this.dispatchEvent(new CustomEvent("open-request",{detail:e,bubbles:!0,composed:!0}))}renderPart(e){switch(e.content.encoding){case"text":{const s=e.content.value||a`<span class="faint">Empty text part</span>`,t=e.content.truncated?a`<p class="session-part-note">Preview truncated · ${D(e.byte_length)} stored</p>`:u;return a`<div class="session-part-text">${s}${t}</div>`}case"json":return a`
+    `}}class Xt extends w{static properties={detail:{attribute:!1},node_detail:{attribute:!1},state:{type:String},error_message:{type:String},node_state:{type:String},node_error_message:{type:String},selected_node_id:{type:String},usage:{attribute:!1},usage_state:{type:String},usage_error_message:{type:String},timezone:{type:String}};createRenderRoot(){return this}close(){this.dispatchEvent(new CustomEvent("session-close",{bubbles:!0,composed:!0}))}retryDetail(){this.dispatchEvent(new CustomEvent("session-retry",{bubbles:!0,composed:!0}))}retryNode(){this.dispatchEvent(new CustomEvent("session-node-retry",{bubbles:!0,composed:!0}))}retryUsage(){this.dispatchEvent(new CustomEvent("session-usage-retry",{bubbles:!0,composed:!0}))}selectNode(e){this.dispatchEvent(new CustomEvent("session-node-select",{detail:e,bubbles:!0,composed:!0}))}openRequest(e){this.dispatchEvent(new CustomEvent("open-request",{detail:e,bubbles:!0,composed:!0}))}renderPart(e){switch(e.content.encoding){case"text":{const t=e.content.value||a`<span class="faint">Empty text part</span>`,s=e.content.truncated?a`<p class="session-part-note">Preview truncated · ${O(e.byte_length)} stored</p>`:_;return a`<div class="session-part-text">${t}${s}</div>`}case"json":return a`
           <details class="session-structured-part">
             <summary>${e.part_type.replaceAll("_"," ")}</summary>
-            <pre>${Us(e.content.value)}</pre>
+            <pre>${Gt(e.content.value)}</pre>
           </details>
         `;case"encrypted":return a`
           <details class="session-structured-part">
             <summary>${e.part_type.replaceAll("_"," ")} · encrypted</summary>
             <p>
-              ${D(e.content.byte_length)} encrypted payload stored. Plaintext is unavailable and the
+              ${O(e.content.byte_length)} encrypted payload stored. Plaintext is unavailable and the
               encrypted content is not returned to the viewer.
             </p>
           </details>
         `;case"binary":return a`
           <details class="session-structured-part">
             <summary>${e.part_type.replaceAll("_"," ")} · binary</summary>
-            <p>${D(e.content.byte_length)} stored. Binary bytes are not returned to the viewer.</p>
+            <p>${O(e.content.byte_length)} stored. Binary bytes are not returned to the viewer.</p>
           </details>
         `;case"omitted":return a`
           <details class="session-structured-part">
             <summary>${e.part_type.replaceAll("_"," ")} · omitted</summary>
             <p>
-              ${D(e.byte_length)} ${e.content.original_encoding} content omitted after reaching the
+              ${O(e.byte_length)} ${e.content.original_encoding} content omitted after reaching the
               ${e.content.reason==="part_limit"?"per-part byte preview":"node content-size"} limit.
             </p>
           </details>
-        `}}renderMessages(e,s){return e.length===0?a`<p class="session-message-empty">${s}</p>`:a`
+        `}}renderMessages(e,t){return e.length===0?a`<p class="session-message-empty">${t}</p>`:a`
       <div class="session-message-stack">
-        ${e.map(t=>a`
-          <article class="session-message ${Ls(t.role)}">
+        ${e.map(s=>a`
+          <article class="session-message ${Zt(s.role)}">
             <header>
-              <span>${t.role}</span>
+              <span>${s.role}</span>
               <span>
-                ${t.parts.length.toLocaleString()}${t.parts.length===t.parts_total?"":` of ${t.parts_total.toLocaleString()}`} parts
-                ${t.status===null?u:a` · status ${t.status}`}
+                ${s.parts.length.toLocaleString()}${s.parts.length===s.parts_total?"":` of ${s.parts_total.toLocaleString()}`} parts
+                ${s.status===null?_:a` · status ${s.status}`}
               </span>
             </header>
             <div class="session-message-parts">
-              ${t.parts.length>0?t.parts.map(i=>this.renderPart(i)):t.parts_total>0?a`
+              ${s.parts.length>0?s.parts.map(n=>this.renderPart(n)):s.parts_total>0?a`
                       <p class="session-message-empty">
-                        ${t.parts_total.toLocaleString()} stored parts were omitted from this bounded preview.
+                        ${s.parts_total.toLocaleString()} stored parts were omitted from this bounded preview.
                       </p>
                     `:a`<p class="session-message-empty">No stored parts in this message.</p>`}
             </div>
@@ -368,103 +440,103 @@
           </span>
         </header>
         <dl class="session-usage-grid">
-          <div><dt>Input</dt><dd>${T(e.input_tokens)}</dd></div>
-          <div><dt>Output</dt><dd>${T(e.output_tokens)}</dd></div>
-          <div><dt>Total</dt><dd>${T(e.total_tokens)}</dd></div>
-          <div><dt>Cache read</dt><dd>${T(e.cache_read_tokens)}</dd></div>
-          <div><dt>Cache write</dt><dd>${T(e.cache_write_tokens)}</dd></div>
-          <div><dt>Reasoning</dt><dd>${T(e.reasoning_tokens)}</dd></div>
+          <div><dt>Input</dt><dd>${M(e.input_tokens)}</dd></div>
+          <div><dt>Output</dt><dd>${M(e.output_tokens)}</dd></div>
+          <div><dt>Total</dt><dd>${M(e.total_tokens)}</dd></div>
+          <div><dt>Cache read</dt><dd>${M(e.cache_read_tokens)}</dd></div>
+          <div><dt>Cache write</dt><dd>${M(e.cache_write_tokens)}</dd></div>
+          <div><dt>Reasoning</dt><dd>${M(e.reasoning_tokens)}</dd></div>
         </dl>
       </section>
-    `}nodeDomId(e,s){return`session-node-${e}-${encodeURIComponent(s)}`}renderNodeGraph(e,s){const t=s*se,i=S(e.node_lane),n=`M ${i} ${de} l 0 0.001`,r=e.connections.map(l=>{const d=S(l.from_lane),_=S(l.to_lane),h=l.kind==="parent"?de:0;return a`
+    `}nodeDomId(e,t){return`session-node-${e}-${encodeURIComponent(t)}`}renderNodeGraph(e,t){const s=t*ie,n=x(e.node_lane),o=`M ${n} ${ue} l 0 0.001`,r=e.connections.map(l=>{const d=x(l.from_lane),u=x(l.to_lane),h=l.kind==="parent"?ue:0;return a`
         <path
           class="session-tree-edge ${l.kind} ${l.active?"active":""}"
-          d=${`M ${d} ${h} L ${_} 100`}
+          d=${`M ${d} ${h} L ${u} 100`}
         ></path>
       `}),c=["session-tree-dot",e.node.is_head?"head":"",e.child_count>1?"branch":"",e.has_topology_warning?"warning":""].filter(Boolean).join(" ");return a`
       <svg
-        viewBox=${`0 0 ${t} 100`}
+        viewBox=${`0 0 ${s} 100`}
         preserveAspectRatio="none"
         focusable="false"
         aria-hidden="true"
       >
-        ${e.starts_here?u:a`
+        ${e.starts_here?_:a`
               <path
                 class="session-tree-edge incoming ${e.is_on_head_path?"active":""}"
-                d=${`M ${i} 0 L ${i} ${de}`}
+                d=${`M ${n} 0 L ${n} ${ue}`}
               ></path>
             `}
         ${r}
-        <path class="${c} outline" d=${n}></path>
-        <path class="${c} fill" d=${n}></path>
+        <path class="${c} outline" d=${o}></path>
+        <path class="${c} fill" d=${o}></path>
       </svg>
-    `}renderNodeGraphContinuation(e,s){const t=s*se;return a`
+    `}renderNodeGraphContinuation(e,t){const s=t*ie;return a`
       <svg
-        viewBox=${`0 0 ${t} 100`}
+        viewBox=${`0 0 ${s} 100`}
         preserveAspectRatio="none"
         focusable="false"
         aria-hidden="true"
       >
-        ${e.bottom_lanes.map((i,n)=>a`
+        ${e.bottom_lanes.map((n,o)=>a`
           <path
-            class="session-tree-edge continuation ${e.bottom_lane_is_active[n]?"active":""}"
-            d=${`M ${S(n)} 0 L ${S(n)} 100`}
+            class="session-tree-edge continuation ${e.bottom_lane_is_active[o]?"active":""}"
+            d=${`M ${x(o)} 0 L ${x(o)} 100`}
           ></path>
         `)}
       </svg>
-    `}renderTreeBoundary(e,s,t,i,n){if(e.missing_parent_ids.length===0)return u;const r=s*se,c=e.remaining_lanes.length>0?e.remaining_lanes.map((p,y)=>y):e.missing_parent_ids.map((p,y)=>y),l=[...new Set(c)],d=n?"Connects to loaded tree":t?"Earlier ancestry omitted":"Parent nodes unavailable",_=n?`Parent ${b(n.node_id)} appears in the session tree below.`:t?`${i.toLocaleString()} ${i===1?"node falls":"nodes fall"} outside this bounded tree snapshot.`:"The stored parent links point outside the returned session tree.",h=n?"Parent link resolved in the loaded snapshot":`${e.missing_parent_ids.length.toLocaleString()} parent ${e.missing_parent_ids.length===1?"link":"links"} outside the snapshot`;return a`
-      <li class="session-tree-boundary ${n?"loaded-parent":""} ${Pe(s)}">
+    `}renderTreeBoundary(e,t,s,n,o){if(e.missing_parent_ids.length===0)return _;const r=t*ie,c=e.remaining_lanes.length>0?e.remaining_lanes.map((p,y)=>y):e.missing_parent_ids.map((p,y)=>y),l=[...new Set(c)],d=o?"Connects to loaded tree":s?"Earlier ancestry omitted":"Parent nodes unavailable",u=o?`Parent ${A(o.node_id)} appears in the session tree below.`:s?`${n.toLocaleString()} ${n===1?"node falls":"nodes fall"} outside this bounded tree snapshot.`:"The stored parent links point outside the returned session tree.",h=o?"Parent link resolved in the loaded snapshot":`${e.missing_parent_ids.length.toLocaleString()} parent ${e.missing_parent_ids.length===1?"link":"links"} outside the snapshot`;return a`
+      <li class="session-tree-boundary ${o?"loaded-parent":""} ${Me(t)}">
         <span class="session-tree-boundary-graph" aria-hidden="true">
           <svg viewBox=${`0 0 ${r} 100`} preserveAspectRatio="none" focusable="false">
             ${l.map(p=>a`
-              <path class="session-tree-edge boundary" d=${`M ${S(p)} 0 L ${S(p)} 48`}></path>
+              <path class="session-tree-edge boundary" d=${`M ${x(p)} 0 L ${x(p)} 48`}></path>
               <path
                 class="session-tree-boundary-dot outline"
-                d=${`M ${S(p)} 52 l 0 0.001`}
+                d=${`M ${x(p)} 52 l 0 0.001`}
               ></path>
               <path
                 class="session-tree-boundary-dot fill"
-                d=${`M ${S(p)} 52 l 0 0.001`}
+                d=${`M ${x(p)} 52 l 0 0.001`}
               ></path>
             `)}
           </svg>
         </span>
         <div class="session-tree-boundary-card" role="note">
           <strong>${d}</strong>
-          <span>${_}</span>
-          <span title=${n?.node_id??e.missing_parent_ids.join(", ")}>${h}</span>
+          <span>${u}</span>
+          <span title=${o?.node_id??e.missing_parent_ids.join(", ")}>${h}</span>
         </div>
       </li>
-    `}renderLoadedNodeContent(e){const s=e.truncation,t=Ps(e.node.reduction_kind),i=s.request_messages.messages_total-s.request_messages.messages_returned,n=s.response_messages.messages_total-s.response_messages.messages_returned,r=i>0||n>0||s.parts_omitted>0||s.content_parts_truncated>0||s.binary_parts_elided>0;return a`
+    `}renderLoadedNodeContent(e){const t=e.truncation,s=Yt(e.node.reduction_kind),n=t.request_messages.messages_total-t.request_messages.messages_returned,o=t.response_messages.messages_total-t.response_messages.messages_returned,r=n>0||o>0||t.parts_omitted>0||t.content_parts_truncated>0||t.binary_parts_elided>0;return a`
       <div class="session-node-content-actions">
-        <span title=${e.node.request_id}>Request ${b(e.node.request_id)}</span>
+        <span title=${e.node.request_id}>Request ${A(e.node.request_id)}</span>
         <button type="button" class="secondary-button" @click=${()=>this.openRequest(e.node)}>Open request</button>
       </div>
       ${r?a`
             <div class="session-content-boundary" role="status">
               <strong>Bounded content preview</strong>
               <span>
-                ${D(s.content_bytes_returned)} of
-                ${D(s.content_bytes_total)} inline content returned
-                ${i+n>0?` · ${(i+n).toLocaleString()} messages omitted`:""}
-                ${s.parts_omitted>0?` · ${s.parts_omitted.toLocaleString()} parts omitted`:""}
-                ${s.content_parts_truncated>0?` · ${s.content_parts_truncated.toLocaleString()} parts truncated`:""}
-                ${s.binary_parts_elided>0?` · ${s.binary_parts_elided.toLocaleString()} binary parts represented as metadata`:""}
+                ${O(t.content_bytes_returned)} of
+                ${O(t.content_bytes_total)} inline content returned
+                ${n+o>0?` · ${(n+o).toLocaleString()} messages omitted`:""}
+                ${t.parts_omitted>0?` · ${t.parts_omitted.toLocaleString()} parts omitted`:""}
+                ${t.content_parts_truncated>0?` · ${t.content_parts_truncated.toLocaleString()} parts truncated`:""}
+                ${t.binary_parts_elided>0?` · ${t.binary_parts_elided.toLocaleString()} binary parts represented as metadata`:""}
               </span>
             </div>
-          `:u}
+          `:_}
       <div class="session-conversation-section">
         <header>
           <div>
-            <span class="direction-label">${t.direction}</span>
-            <h3>${t.title}</h3>
+            <span class="direction-label">${s.direction}</span>
+            <h3>${s.title}</h3>
           </div>
           <span>
-            ${s.request_messages.messages_returned.toLocaleString()}
-            ${s.request_messages.messages_returned===s.request_messages.messages_total?"":`of ${s.request_messages.messages_total.toLocaleString()}`} messages
+            ${t.request_messages.messages_returned.toLocaleString()}
+            ${t.request_messages.messages_returned===t.request_messages.messages_total?"":`of ${t.request_messages.messages_total.toLocaleString()}`} messages
           </span>
         </header>
-        ${this.renderMessages(e.request_messages,t.empty_message)}
+        ${this.renderMessages(e.request_messages,s.empty_message)}
       </div>
       <div class="session-conversation-section">
         <header>
@@ -473,18 +545,18 @@
             <h3>Model output</h3>
           </div>
           <span>
-            ${s.response_messages.messages_returned.toLocaleString()}
-            ${s.response_messages.messages_returned===s.response_messages.messages_total?"":`of ${s.response_messages.messages_total.toLocaleString()}`} messages
+            ${t.response_messages.messages_returned.toLocaleString()}
+            ${t.response_messages.messages_returned===t.response_messages.messages_total?"":`of ${t.response_messages.messages_total.toLocaleString()}`} messages
           </span>
         </header>
         ${this.renderMessages(e.response_messages,"No semantic output was stored for this node.")}
       </div>
-    `}renderNodeContent(e){if(this.selected_node_id!==e.node_id)return u;const s=this.node_detail?.node.node_id===e.node_id?this.node_detail:void 0,t=this.node_state==="loading"?a`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading semantic content…</div>`:this.node_state==="error"?a`
+    `}renderNodeContent(e){if(this.selected_node_id!==e.node_id)return _;const t=this.node_detail?.node.node_id===e.node_id?this.node_detail:void 0,s=this.node_state==="loading"?a`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Loading semantic content…</div>`:this.node_state==="error"?a`
             <div class="inline-error" role="alert">
               <span>${this.node_error_message}</span>
               <button type="button" @click=${this.retryNode}>Retry</button>
             </div>
-          `:s?this.renderLoadedNodeContent(s):u;return a`
+          `:t?this.renderLoadedNodeContent(t):_;return a`
       <section
         id=${this.nodeDomId("content",e.node_id)}
         class="session-node-content"
@@ -492,59 +564,59 @@
         aria-live="polite"
         aria-busy=${String(this.node_state==="loading")}
       >
-        ${t}
+        ${s}
       </section>
-    `}renderNodeUsage(e){if(this.usage_state==="loading")return a`<span class="session-node-token-usage muted">Token usage loading…</span>`;if(this.usage_state==="error")return a`<span class="session-node-token-usage muted">Token usage unavailable</span>`;if(!e)return a`<span class="session-node-token-usage muted">No token usage</span>`;const s=e.context_tokens===null?"Context tokens unavailable":`${e.context_tokens.toLocaleString()} context tokens`,t=e.input_delta_tokens===null?"Input delta tokens unavailable":`${e.input_delta_tokens.toLocaleString()} uncached input tokens`,i=e.output_tokens===null?"Output tokens unavailable":`${e.output_tokens.toLocaleString()} output tokens`;return a`
+    `}renderNodeUsage(e){if(this.usage_state==="loading")return a`<span class="session-node-token-usage muted">Token usage loading…</span>`;if(this.usage_state==="error")return a`<span class="session-node-token-usage muted">Token usage unavailable</span>`;if(!e)return a`<span class="session-node-token-usage muted">No token usage</span>`;const t=e.context_tokens===null?"Context tokens unavailable":`${e.context_tokens.toLocaleString()} context tokens`,s=e.input_delta_tokens===null?"Input delta tokens unavailable":`${e.input_delta_tokens.toLocaleString()} uncached input tokens`,n=e.output_tokens===null?"Output tokens unavailable":`${e.output_tokens.toLocaleString()} output tokens`;return a`
       <span class="session-node-token-usage">
         <span class="session-node-token-label">tokens</span>
         <span class="session-node-token-separator" aria-hidden="true">·</span>
-        <span title=${s}>${le(e.context_tokens)} context</span>
+        <span title=${t}>${_e(e.context_tokens)} context</span>
         <span class="session-node-token-separator" aria-hidden="true">·</span>
-        <span title=${t}>
-          ${e.input_delta_tokens===null?"—":`+${le(e.input_delta_tokens)}`} input delta
+        <span title=${s}>
+          ${e.input_delta_tokens===null?"—":`+${_e(e.input_delta_tokens)}`} input delta
         </span>
         <span class="session-node-token-separator" aria-hidden="true">·</span>
-        <span title=${i}>${le(e.output_tokens)} output</span>
+        <span title=${n}>${_e(e.output_tokens)} output</span>
       </span>
-    `}renderNode(e,s,t,i){const n=e.node,r=n.node_id===this.selected_node_id,c=Cs(n.status),l=!!(i&&n.parent_node_id===i.node_id),d=e.parent_is_missing&&!l,_=["session-node",Pe(s),r?"selected":"",e.is_on_head_path?"head-path":"",d?"boundary-child":"",e.has_topology_warning?"topology-warning":""].filter(Boolean).join(" "),h=n.reduction_kind==="message_tree"?n.input_message_count:n.request_message_count,p=n.reduction_kind==="message_tree"?"input":"input delta",y=n.reduction_kind==="message_tree"?a` (+${n.request_message_count.toLocaleString()} new)`:u,$=n.reduction_kind==="message_tree"?n.output_message_count:n.response_message_count,f=n.reduction_kind==="message_tree"?n.parent_node_id?`Prefix-derived child of ${n.parent_node_id}.`:"Prefix-derived root node.":n.parent_node_id?`Recorded child of ${n.parent_node_id}.`:"Recorded root node.";return a`
-      <li class=${_}>
+    `}renderNode(e,t,s,n){const o=e.node,r=o.node_id===this.selected_node_id,c=Kt(o.status),l=!!(n&&o.parent_node_id===n.node_id),d=e.parent_is_missing&&!l,u=["session-node",Me(t),r?"selected":"",e.is_on_head_path?"head-path":"",d?"boundary-child":"",e.has_topology_warning?"topology-warning":""].filter(Boolean).join(" "),h=o.reduction_kind==="message_tree"?o.input_message_count:o.request_message_count,p=o.reduction_kind==="message_tree"?"input":"input delta",y=o.reduction_kind==="message_tree"?a` (+${o.request_message_count.toLocaleString()} new)`:_,f=o.reduction_kind==="message_tree"?o.output_message_count:o.response_message_count,g=o.reduction_kind==="message_tree"?o.parent_node_id?`Prefix-derived child of ${o.parent_node_id}.`:"Prefix-derived root node.":o.parent_node_id?`Recorded child of ${o.parent_node_id}.`:"Recorded root node.";return a`
+      <li class=${u}>
         <span class="session-node-graph" aria-hidden="true">
-          ${this.renderNodeGraph(e,s)}
+          ${this.renderNodeGraph(e,t)}
         </span>
         <button
-          id=${this.nodeDomId("trigger",n.node_id)}
+          id=${this.nodeDomId("trigger",o.node_id)}
           type="button"
           class="session-node-trigger"
-          data-node-id=${n.node_id}
+          data-node-id=${o.node_id}
           aria-expanded=${String(r)}
-          aria-controls=${r?this.nodeDomId("content",n.node_id):u}
-          aria-current=${n.is_head?"true":u}
-          @click=${()=>this.selectNode(n)}
+          aria-controls=${r?this.nodeDomId("content",o.node_id):_}
+          aria-current=${o.is_head?"true":_}
+          @click=${()=>this.selectNode(o)}
         >
           <span class="session-node-primary">
-            <time datetime=${new Date(n.ts).toISOString()}>${j(n.ts,this.timezone)}</time>
+            <time datetime=${new Date(o.ts).toISOString()}>${V(o.ts,this.timezone)}</time>
             <span class="status ${c.tone}" title=${c.title}>${c.label}</span>
-            ${e.child_count>1?a`<span class="branch-badge">${e.child_count.toLocaleString()} branches</span>`:u}
-            ${n.is_head?a`<span class="head-badge">Current head</span>`:u}
+            ${e.child_count>1?a`<span class="branch-badge">${e.child_count.toLocaleString()} branches</span>`:_}
+            ${o.is_head?a`<span class="head-badge">Current head</span>`:_}
           </span>
           <span class="session-node-title">
-            <strong>${n.model??"Unknown model"}</strong>
-            <span>${n.endpoint}</span>
+            <strong>${o.model??"Unknown model"}</strong>
+            <span>${o.endpoint}</span>
           </span>
           <span class="session-node-context">
-            <span>${n.provider_id??"unknown provider"}</span>
+            <span>${o.provider_id??"unknown provider"}</span>
             <span aria-hidden="true">·</span>
             <span>${h.toLocaleString()} ${p}${y}</span>
             <span aria-hidden="true">·</span>
-            <span>${$.toLocaleString()} output</span>
+            <span>${f.toLocaleString()} output</span>
           </span>
-          ${this.renderNodeUsage(t.get(n.request_id))}
-          <span class="session-node-id" title=${n.request_id}>
-            request ${b(n.request_id)} · ${n.parent_node_id?`parent ${b(n.parent_node_id)}`:"root"}
+          ${this.renderNodeUsage(s.get(o.request_id))}
+          <span class="session-node-id" title=${o.request_id}>
+            request ${A(o.request_id)} · ${o.parent_node_id?`parent ${A(o.parent_node_id)}`:"root"}
             ${d?" · outside snapshot":""}
           </span>
           <span class="visually-hidden">
-            ${f}
+            ${g}
             ${d?" Parent is outside this bounded snapshot.":""}
             ${l?" Parent appears in the loaded session tree.":""}
             ${e.has_topology_warning?" Parent links contain a topology warning.":""}
@@ -552,10 +624,10 @@
         </button>
         ${r?a`
               <span class="session-node-content-graph" aria-hidden="true">
-                ${this.renderNodeGraphContinuation(e,s)}
+                ${this.renderNodeGraphContinuation(e,t)}
               </span>
-            `:u}
-        ${this.renderNodeContent(n)}
+            `:_}
+        ${this.renderNodeContent(o)}
       </li>
     `}render(){if(!this.detail)return this.state==="loading"?a`
           <section class="detail-state" aria-live="polite">
@@ -576,13 +648,13 @@
           <strong>Choose a session</strong>
           <p>Inspect its semantic nodes and the conversation captured in <code>sessions.db</code>.</p>
         </section>
-      `;const{session:e,nodes:s}=this.detail,t=new Map((this.usage?.requests??[]).map(f=>[f.request_id,f])),i=Ue(s),n=Math.max(1,i.max_lane_count),r=Math.max(0,e.request_count-s.length),c=i.missing_parent_ids.length>0,l=!!(this.selected_node_id&&s.some(f=>f.node_id===this.selected_node_id)),d=this.node_detail,_=!l&&d&&d.node.node_id===this.selected_node_id?d.node:void 0,h=_?Ue([_]):void 0,p=h?Math.max(1,h.max_lane_count):1,y=_?.parent_node_id?s.find(f=>f.node_id===_.parent_node_id):void 0,$=e.model??"Unknown model";return a`
+      `;const{session:e,nodes:t}=this.detail,s=new Map((this.usage?.requests??[]).map(g=>[g.request_id,g])),n=Oe(t),o=Math.max(1,n.max_lane_count),r=Math.max(0,e.request_count-t.length),c=n.missing_parent_ids.length>0,l=!!(this.selected_node_id&&t.some(g=>g.node_id===this.selected_node_id)),d=this.node_detail,u=!l&&d&&d.node.node_id===this.selected_node_id?d.node:void 0,h=u?Oe([u]):void 0,p=h?Math.max(1,h.max_lane_count):1,y=u?.parent_node_id?t.find(g=>g.node_id===u.parent_node_id):void 0,f=e.model??"Unknown model";return a`
       <section class="detail-content session-detail-content">
         <header class="detail-header session-detail-header">
           <button type="button" class="mobile-back-button" @click=${this.close}>← Sessions</button>
           <div class="detail-title">
-            <p class="eyebrow">session · ${b(e.session_id)}</p>
-            <h2>${$}<span> on ${e.provider_id??"unknown provider"}</span></h2>
+            <p class="eyebrow">session · ${A(e.session_id)}</p>
+            <h2>${f}<span> on ${e.provider_id??"unknown provider"}</span></h2>
             <p class="muted" title=${e.session_id}>${e.session_id||"Missing session identifier"}</p>
           </div>
           <button
@@ -595,18 +667,18 @@
             ↻
           </button>
         </header>
-        ${this.state==="loading"?a`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Refreshing session…</div>`:u}
+        ${this.state==="loading"?a`<div class="inline-state"><span class="spinner" aria-hidden="true"></span>Refreshing session…</div>`:_}
         ${this.state==="error"?a`
               <div class="inline-error" role="alert">
                 <span>${this.error_message}</span>
                 <button type="button" @click=${this.retryDetail}>Retry</button>
               </div>
-            `:u}
+            `:_}
         <dl class="session-metadata-grid">
           <div><dt>Semantic nodes</dt><dd>${e.request_count.toLocaleString()}</dd></div>
-          <div><dt>Duration</dt><dd>${ps(e.first_ts,e.last_ts)}</dd></div>
-          <div><dt>First seen</dt><dd>${j(e.first_ts,this.timezone)}</dd></div>
-          <div><dt>Last active</dt><dd>${j(e.last_ts,this.timezone)}</dd></div>
+          <div><dt>Duration</dt><dd>${bt(e.first_ts,e.last_ts)}</dd></div>
+          <div><dt>First seen</dt><dd>${V(e.first_ts,this.timezone)}</dd></div>
+          <div><dt>Last active</dt><dd>${V(e.last_ts,this.timezone)}</dd></div>
           <div><dt>Endpoint</dt><dd title=${e.endpoint??""}>${e.endpoint??"—"}</dd></div>
           <div><dt>Account</dt><dd title=${e.account_id??""}>${e.account_id??"—"}</dd></div>
         </dl>
@@ -618,8 +690,8 @@
               <h3>Session tree</h3>
             </div>
             <span>
-              ${s.length.toLocaleString()} loaded · head branch first${this.detail.nodes_truncated?" · bounded":""}
-              ${i.max_lane_count>Be?" · compressed lanes":""}
+              ${t.length.toLocaleString()} loaded · head branch first${this.detail.nodes_truncated?" · bounded":""}
+              ${n.max_lane_count>Ke?" · compressed lanes":""}
             </span>
           </header>
           ${this.detail.nodes_truncated?a`
@@ -627,21 +699,21 @@
                   ${r.toLocaleString()} older nodes are omitted.
                   ${c?" Amber graph endpoints continue into the omitted ancestry.":" The graph shows every parent link available in this snapshot."}
                 </p>
-              `:u}
-          ${i.cycle_node_ids.length>0?a`
+              `:_}
+          ${n.cycle_node_ids.length>0?a`
                 <p class="session-topology-warning" role="alert">
-                  ${i.cycle_node_ids.length.toLocaleString()} nodes contain cyclic parent links; their graph
+                  ${n.cycle_node_ids.length.toLocaleString()} nodes contain cyclic parent links; their graph
                   edges were detached defensively.
                 </p>
-              `:u}
-          ${s.length>0?a`
+              `:_}
+          ${t.length>0?a`
                 <p class="session-tree-direction">
                   <span>Leaves and current-head branch</span>
                   <span aria-hidden="true">↓</span>
                   <span>recorded parents</span>
                 </p>
-              `:u}
-          ${this.selected_node_id?u:a`<p class="session-content-hint">Open a node to load its conversation content from <code>sessions.db</code>.</p>`}
+              `:_}
+          ${this.selected_node_id?_:a`<p class="session-content-hint">Open a node to load its conversation content from <code>sessions.db</code>.</p>`}
           ${this.selected_node_id&&!l?a`
                 <section class="session-linked-node" aria-label="Directly linked session node">
                   <header>
@@ -649,11 +721,11 @@
                       <p class="eyebrow">Direct link</p>
                       <h4>Node outside this activity snapshot</h4>
                     </div>
-                    <span>${b(this.selected_node_id)}</span>
+                    <span>${A(this.selected_node_id)}</span>
                   </header>
                   ${h?a`
                         <ol class="session-node-list linked-node-list">
-                          ${h.rows.map(f=>this.renderNode(f,p,t,y))}
+                          ${h.rows.map(g=>this.renderNode(g,p,s,y))}
                           ${this.renderTreeBoundary(h,p,!1,0,y)}
                         </ol>
                       `:this.node_state==="loading"?a`
@@ -665,18 +737,18 @@
                               <span>${this.node_error_message}</span>
                               <button type="button" @click=${this.retryNode}>Retry</button>
                             </div>
-                          `:u}
+                          `:_}
                 </section>
-              `:u}
-          ${s.length>0?a`
+              `:_}
+          ${t.length>0?a`
                 <ol class="session-node-list">
-                  ${i.rows.map(f=>this.renderNode(f,n,t))}
-                  ${this.renderTreeBoundary(i,n,this.detail.nodes_truncated,r)}
+                  ${n.rows.map(g=>this.renderNode(g,o,s))}
+                  ${this.renderTreeBoundary(n,o,this.detail.nodes_truncated,r)}
                 </ol>
               `:a`<p class="empty">This migrated session has no semantic nodes.</p>`}
         </section>
       </section>
-    `}}customElements.define("session-list",Ns);customElements.define("session-detail-view",Ds);const Ne=100;function k(o,e){return o instanceof Error?o.message:e}function Ts(o){return o==="overview"||o==="client"||o==="provider"||o==="raw"}function X(){return{query:"",provider_id:"",status:"",errors_only:!1}}function Os(o){return new Date(o).toISOString().slice(0,10)}class Ms extends w{static properties={active_view:{type:String},info:{attribute:!1},requests:{attribute:!1},request_days:{attribute:!1},selected_day:{type:String},selected_request:{attribute:!1},selected_request_id:{type:String},selected_request_row_id:{type:String},selected_request_detail:{attribute:!1},request_list_state:{type:String},request_list_error:{type:String},request_detail_state:{type:String},request_detail_error:{type:String},next_cursor:{type:String},loading_more:{type:Boolean},load_more_error:{type:String},search_query:{type:String},provider_id:{type:String},status_filter:{type:String},errors_only:{type:Boolean},applied_filters:{attribute:!1},active_detail_tab:{type:String},timezone:{type:String},request_days_loading:{type:Boolean},request_days_error:{type:String},sessions:{attribute:!1},selected_session:{attribute:!1},selected_session_detail:{attribute:!1},selected_session_usage:{attribute:!1},sessions_loading:{type:Boolean},sessions_error:{type:String},session_search_query:{type:String},session_detail_state:{type:String},session_detail_error:{type:String},session_usage_state:{type:String},session_usage_error:{type:String},selected_session_node_id:{type:String},selected_session_node_detail:{attribute:!1},session_node_state:{type:String},session_node_error:{type:String}};request_load_id=0;request_detail_load_id=0;session_detail_load_id=0;session_usage_load_id=0;session_node_load_id=0;session_list_load_id=0;request_days_load_id=0;sessions_loaded=!1;requested_request_id;requested_request_row_id;requested_session_id;requested_session_node_id;request_rows_context;request_controller;request_detail_controller;session_list_controller;session_list_load;session_detail_controller;session_usage_controller;session_node_controller;navigation_workflow_id=0;popstate_handler=()=>{this.restoreFromHistory()};constructor(){super(),this.active_view="requests",this.requests=[],this.request_days=[],this.sessions=[],this.request_list_state="idle",this.request_detail_state="idle",this.search_query="",this.provider_id="",this.status_filter="",this.errors_only=!1,this.applied_filters=X(),this.active_detail_tab="overview",this.timezone="local",this.loading_more=!1,this.request_days_loading=!1,this.sessions_loading=!1,this.session_search_query="",this.session_detail_state="idle",this.session_usage_state="idle",this.session_node_state="idle"}createRenderRoot(){return this}connectedCallback(){super.connectedCallback(),this.restoreUrlState(),window.addEventListener("popstate",this.popstate_handler),this.loadInitialData()}disconnectedCallback(){window.removeEventListener("popstate",this.popstate_handler),this.request_controller?.abort(),this.request_detail_controller?.abort(),this.session_list_controller?.abort(),this.session_detail_controller?.abort(),this.session_usage_controller?.abort(),this.session_node_controller?.abort(),super.disconnectedCallback()}restoreUrlState(){const e=new URLSearchParams(window.location.search);this.active_view=e.get("view")==="sessions"?"sessions":"requests";const s=e.get("day");this.selected_day=s&&/^\d{4}-\d{2}-\d{2}$/.test(s)?s:void 0,this.search_query=e.get("query")??"",this.provider_id=e.get("provider_id")??"";const t=e.get("status")??"";this.status_filter=/^\d{3}$/.test(t)?t:"",this.errors_only=e.get("errors_only")==="true"||e.get("errors_only")==="1",this.applied_filters={query:this.search_query,provider_id:this.provider_id,status:this.status_filter,errors_only:this.errors_only},this.requested_request_id=e.get("request_id")??void 0;const i=e.get("row_id");this.requested_request_row_id=i&&/^-?\d+$/.test(i)?i:void 0;const n=e.get("tab");this.active_detail_tab=Ts(n)?n:"overview",this.requested_session_id=e.has("session_id")?e.get("session_id")??"":void 0,this.requested_session_node_id=e.get("node_id")??void 0,this.timezone=e.get("timezone")==="utc"?"utc":"local"}selectedRequestDay(){return this.selected_request_detail?.day??this.selected_request?.day??this.selected_day}syncUrl(e="replace"){const s=new URLSearchParams;if(this.active_view==="sessions"){s.set("view","sessions");const n=this.selected_session?.session_id??this.requested_session_id;n!==void 0&&s.set("session_id",n),this.selected_session_node_id&&s.set("node_id",this.selected_session_node_id)}else{const n=this.selected_request_id?this.selectedRequestDay():this.selected_day;n&&s.set("day",n),this.applied_filters.query&&s.set("query",this.applied_filters.query),this.applied_filters.provider_id&&s.set("provider_id",this.applied_filters.provider_id),this.applied_filters.status&&s.set("status",this.applied_filters.status),this.applied_filters.errors_only&&s.set("errors_only","true"),this.selected_request_id&&(s.set("request_id",this.selected_request_id),this.selected_request_row_id&&s.set("row_id",this.selected_request_row_id),s.set("tab",this.active_detail_tab))}s.set("timezone",this.timezone);const t=s.toString(),i=`${window.location.pathname}${t?`?${t}`:""}`;`${window.location.pathname}${window.location.search}`!==i&&(e==="push"?window.history.pushState(null,"",i):window.history.replaceState(null,"",i))}async loadInitialData(){const e=++this.navigation_workflow_id;this.loadInfo(),await this.loadUrlState(e)}async restoreFromHistory(){const e=++this.navigation_workflow_id;this.request_controller?.abort(),this.request_detail_controller?.abort(),this.session_detail_controller?.abort(),this.session_node_controller?.abort(),this.resetRequestSelection(),this.resetSessionSelection(),this.restoreUrlState(),this.active_view==="requests"&&(this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0),await this.loadUrlState(e)}async loadUrlState(e){const s=this.requested_request_id,t=this.requested_request_row_id;if(this.active_view==="sessions"){const n=this.requested_session_id,r=this.requested_session_node_id;if(!await this.ensureSessionsLoaded()||e!==this.navigation_workflow_id||n===void 0)return;await this.loadSession(n,this.sessions.find(l=>l.session_id===n),!1,null,r);return}this.loadRequestDays();let i;if(this.selected_day?i=await this.loadRequests():(i=await this.loadLatestRequests(),i&&this.selected_day&&this.hasAppliedFilters()&&(i=await this.loadRequests())),!(!i||e!==this.navigation_workflow_id)&&s&&this.selected_day){const n=this.requests.find(r=>r.request_id===s&&(!t||r.row_id===t));await this.loadRequestDetail(this.selected_day,s,t??n?.row_id,n,!1,null)}}async loadInfo(){try{this.info=await m("/api/info")}catch{this.info=void 0}}async loadLatestRequests(){this.request_controller?.abort();const e=new AbortController;this.request_controller=e;const s=++this.request_load_id;this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0,this.request_list_state="loading",this.request_list_error=void 0;try{const t=await m(`/api/requests/latest?limit=${Ne}`,e.signal);return s!==this.request_load_id||this.request_controller!==e?!1:(this.selected_day=t.day??void 0,this.requests=t.requests,this.next_cursor=t.next_cursor??void 0,this.request_rows_context=this.requestContext(this.selected_day,X()),this.request_list_state="ready",this.syncUrl(),!0)}catch(t){return s===this.request_load_id&&!R(t)&&(this.request_list_state="error",this.request_list_error=k(t,"Unable to load recent requests")),!1}finally{this.request_controller===e&&(this.request_controller=void 0)}}requestContext(e=this.selected_day,s=this.applied_filters){return e?JSON.stringify([e,s.query,s.provider_id,s.status,s.errors_only]):void 0}requestParams(e,s,t){const i=new URLSearchParams({day:e,limit:String(Ne)});return s.query&&i.set("query",s.query),s.provider_id&&i.set("provider_id",s.provider_id),s.status&&i.set("status",s.status),s.errors_only&&i.set("errors_only","true"),t&&i.set("cursor",t),i}async loadRequests(e=!1){const s=this.selected_day;if(!s)return this.request_list_state="idle",this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0,!1;const t={...this.applied_filters},i=this.requestContext(s,t),n=e?this.next_cursor:void 0;if(e&&(!n||this.request_rows_context!==i))return!1;this.request_controller?.abort();const r=new AbortController;this.request_controller=r;const c=++this.request_load_id;e?(this.loading_more=!0,this.load_more_error=void 0):(this.loading_more=!1,this.request_rows_context!==i&&(this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0),this.request_list_state="loading",this.request_list_error=void 0,this.load_more_error=void 0);try{const l=await m(`/api/requests?${this.requestParams(s,t,n).toString()}`,r.signal);if(c!==this.request_load_id||this.request_controller!==r||this.requestContext()!==i)return!1;if(e){const d=new Set(this.requests.map(_=>M(_)));this.requests=[...this.requests,...l.requests.filter(_=>!d.has(M(_)))]}else this.requests=l.requests;return this.next_cursor=l.next_cursor??void 0,this.request_rows_context=i,this.request_list_state="ready",!0}catch(l){return c!==this.request_load_id||R(l)||(l instanceof Ie&&l.status===503&&this.markRequestDayUnavailable(s),e?this.load_more_error=k(l,"Unable to load more requests"):(this.request_list_state="error",this.request_list_error=k(l,"Unable to load requests"))),!1}finally{c===this.request_load_id&&(this.loading_more=!1),this.request_controller===r&&(this.request_controller=void 0)}}async loadRequestDays(){const e=++this.request_days_load_id;this.request_days_loading=!0,this.request_days_error=void 0;try{const s=await m("/api/request-days");e===this.request_days_load_id&&(this.request_days=s)}catch(s){e===this.request_days_load_id&&(this.request_days_error=k(s,"Unable to load request day states"))}finally{e===this.request_days_load_id&&(this.request_days_loading=!1)}}markRequestDayUnavailable(e){this.request_days.some(s=>s.day===e)?this.request_days=this.request_days.map(s=>s.day===e?{...s,state:"unavailable"}:s):this.request_days=[{day:e,state:"unavailable"},...this.request_days]}resetRequestSelection(){this.request_detail_controller?.abort(),this.request_detail_controller=void 0,this.request_detail_load_id+=1,this.selected_request=void 0,this.selected_request_id=void 0,this.selected_request_row_id=void 0,this.selected_request_detail=void 0,this.request_detail_state="idle",this.request_detail_error=void 0,this.active_detail_tab="overview"}resetSessionSelection(){this.session_detail_controller?.abort(),this.session_usage_controller?.abort(),this.session_node_controller?.abort(),this.session_detail_controller=void 0,this.session_usage_controller=void 0,this.session_node_controller=void 0,this.session_detail_load_id+=1,this.session_usage_load_id+=1,this.session_node_load_id+=1,this.requested_session_id=void 0,this.requested_session_node_id=void 0,this.selected_session=void 0,this.selected_session_detail=void 0,this.selected_session_usage=void 0,this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_detail_state="idle",this.session_detail_error=void 0,this.session_usage_state="idle",this.session_usage_error=void 0,this.session_node_state="idle",this.session_node_error=void 0}async closeRequestDetail(){const e=this.selected_request_row_id&&this.selectedRequestDay()?M({day:this.selectedRequestDay(),row_id:this.selected_request_row_id}):void 0;if(++this.navigation_workflow_id,this.resetRequestSelection(),this.syncUrl("push"),!e||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete,[...this.querySelectorAll("request-list [data-request-key]")].find(t=>t.dataset.requestKey===e)?.focus()}async closeSessionDetail(){const e=this.selected_session?.session_id??this.requested_session_id;if(++this.navigation_workflow_id,this.resetSessionSelection(),this.syncUrl("push"),e===void 0||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete,[...this.querySelectorAll("session-list [data-session-id]")].find(t=>t.dataset.sessionId===e)?.focus()}async loadRequestDetail(e,s,t,i,n,r="replace"){this.request_detail_controller?.abort();const c=new AbortController;this.request_detail_controller=c;const l=++this.request_detail_load_id;this.selected_day=e,this.selected_request=i,this.selected_request_id=s,this.selected_request_row_id=t,n||(this.selected_request_detail=void 0),this.request_detail_state="loading",this.request_detail_error=void 0,r&&this.syncUrl(r);try{const d=new URLSearchParams({day:e,request_id:s});t&&d.set("row_id",t);const _=await m(`/api/request?${d.toString()}`,c.signal);if(l===this.request_detail_load_id&&this.request_detail_controller===c){const h=this.selected_request_row_id!==_.row_id;return this.selected_request_detail=_,this.selected_request_row_id=_.row_id,this.request_detail_state="ready",(r||h)&&this.syncUrl("replace"),!0}return!1}catch(d){return l===this.request_detail_load_id&&!R(d)&&(this.request_detail_state="error",this.request_detail_error=k(d,"Unable to load request detail")),!1}finally{this.request_detail_controller===c&&(this.request_detail_controller=void 0)}}async selectRequest(e){++this.navigation_workflow_id;const s=this.selected_request_id===e.request_id&&this.selected_request_detail?.day===e.day&&this.selected_request_detail.row_id===e.row_id,t=this.loadRequestDetail(e.day,e.request_id,e.row_id,e,s,"push");window.matchMedia("(max-width: 680px)").matches&&(await this.updateComplete,this.querySelector("request-detail-view .mobile-back-button")?.focus()),await t&&window.matchMedia("(max-width: 680px)").matches&&(await this.updateComplete,this.querySelector("request-detail-view .mobile-back-button")?.focus())}retryRequestDetail(){const e=this.selected_request_detail?.day??this.selected_request?.day??this.selected_day;e&&this.selected_request_id&&this.loadRequestDetail(e,this.selected_request_id,this.selected_request_row_id,this.selected_request,!!this.selected_request_detail,null)}selectDay(e){e!==this.selected_day&&(++this.navigation_workflow_id,this.selected_day=e,this.resetRequestSelection(),this.syncUrl("push"),this.loadRequests())}pickerDays(){return!this.selected_day||this.request_days.some(e=>e.day===this.selected_day)?this.request_days:[{day:this.selected_day,state:"available"},...this.request_days]}adjacentAvailableDay(e){const s=this.pickerDays().filter(i=>i.state==="available").map(i=>i.day).sort();if(!this.selected_day)return;const t=s.indexOf(this.selected_day);return t<0?void 0:s[t+e]}submitFilters(e){e.preventDefault(),++this.navigation_workflow_id,this.applied_filters={query:this.search_query.trim(),provider_id:this.provider_id.trim(),status:this.status_filter.trim(),errors_only:this.errors_only},this.resetRequestSelection(),this.syncUrl("push"),this.loadRequests()}clearFilters(){this.search_query="",this.provider_id="",this.status_filter="",this.errors_only=!1,this.applied_filters=X(),++this.navigation_workflow_id,this.resetRequestSelection(),this.syncUrl("push"),this.loadRequests()}hasAppliedFilters(){return!!(this.applied_filters.query||this.applied_filters.provider_id||this.applied_filters.status||this.applied_filters.errors_only)}filtersChanged(){return this.search_query.trim()!==this.applied_filters.query||this.provider_id.trim()!==this.applied_filters.provider_id||this.status_filter.trim()!==this.applied_filters.status||this.errors_only!==this.applied_filters.errors_only}providerOptions(){const e=new Set(this.requests.flatMap(s=>s.provider_id?[s.provider_id]:[]));return this.applied_filters.provider_id&&e.add(this.applied_filters.provider_id),[...e].sort()}ensureSessionsLoaded(e=!1){if(this.sessions_loaded&&!e)return Promise.resolve(!0);if(this.session_list_load&&!e)return this.session_list_load;this.session_list_controller?.abort();const s=new AbortController;this.session_list_controller=s;const t=++this.session_list_load_id;this.sessions_loading=!0,this.sessions_error=void 0;const i=this.loadSessions(s,t);return this.session_list_load=i,i}async loadSessions(e,s){try{const t=await m("/api/sessions?limit=100",e.signal);return s!==this.session_list_load_id||this.session_list_controller!==e?!1:(this.sessions=t,this.sessions_loaded=!0,this.selected_session&&(this.selected_session=t.find(i=>i.session_id===this.selected_session?.session_id)??this.selected_session),!0)}catch(t){return s===this.session_list_load_id&&!R(t)&&(this.sessions_error=k(t,"Unable to load sessions")),!1}finally{s===this.session_list_load_id&&this.session_list_controller===e&&(this.session_list_controller=void 0,this.session_list_load=void 0,this.sessions_loading=!1)}}retrySessions(){const e=++this.navigation_workflow_id;this.sessions_loaded=!1,this.retrySessionsAndRestore(e)}async retrySessionsAndRestore(e){if(!await this.ensureSessionsLoaded(!0)||e!==this.navigation_workflow_id||this.active_view!=="sessions")return;const t=this.selected_session?.session_id??this.requested_session_id;if(t===void 0)return;const i=this.selected_session_node_id??this.requested_session_node_id;await this.loadSession(t,this.sessions.find(n=>n.session_id===t),this.selected_session_detail?.session.session_id===t,null,i)}async refreshSessions(){const e=this.navigation_workflow_id,s=this.selected_session?.session_id??this.requested_session_id,t=this.selected_session_node_id,i=await this.ensureSessionsLoaded(!0),n=this.selected_session?.session_id??this.requested_session_id;i&&e===this.navigation_workflow_id&&s!==void 0&&n===s&&this.selected_session_node_id===t&&await this.loadSession(s,this.sessions.find(r=>r.session_id===s),!0,null,t)}filteredSessions(){const e=this.session_search_query.trim().toLocaleLowerCase();return e?this.sessions.filter(s=>[s.session_id,s.model,s.provider_id,s.account_id,s.endpoint,s.status===null?null:String(s.status)].some(t=>t?.toLocaleLowerCase().includes(e))):this.sessions}async loadSessionUsage(e,s){this.session_usage_controller?.abort();const t=new AbortController;this.session_usage_controller=t;const i=++this.session_usage_load_id;s||(this.selected_session_usage=void 0),this.session_usage_state="loading",this.session_usage_error=void 0;try{const n=new URLSearchParams({session_id:e}),r=await m(`/api/session-usage?${n.toString()}`,t.signal);return i===this.session_usage_load_id&&this.session_usage_controller===t?(this.selected_session_usage=r??void 0,this.session_usage_state="ready",!0):!1}catch(n){return i===this.session_usage_load_id&&!R(n)&&(this.session_usage_state="error",this.session_usage_error=k(n,"Unable to load session usage")),!1}finally{this.session_usage_controller===t&&(this.session_usage_controller=void 0)}}async loadSession(e,s,t,i="push",n){this.session_detail_controller?.abort(),this.session_node_controller?.abort();const r=new AbortController;this.session_detail_controller=r;const c=++this.session_detail_load_id,l=++this.session_node_load_id;this.requested_session_id=e,this.requested_session_node_id=n,this.selected_session=s,t||(this.selected_session_detail=void 0,this.selected_session_node_detail=void 0,this.selected_session_node_id=void 0,this.session_node_state="idle",this.session_node_error=void 0),this.loadSessionUsage(e,t),this.session_detail_state="loading",this.session_detail_error=void 0,i&&this.syncUrl(i);try{const d=new URLSearchParams({session_id:e,limit:"500"}),_=await m(`/api/session?${d.toString()}`,r.signal);if(c===this.session_detail_load_id&&this.session_detail_controller===r){if(this.selected_session=_.session,this.selected_session_detail=_,this.sessions=this.sessions.map(h=>h.session_id===_.session.session_id?_.session:h),this.session_detail_state="ready",l!==this.session_node_load_id)return!0;if(n){const h=_.nodes.find(p=>p.node_id===n);this.loadSessionNode(h??n,!1,"replace")}else this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_node_state="idle",this.syncUrl("replace");return!0}return!1}catch(d){return c===this.session_detail_load_id&&!R(d)&&(this.session_detail_state="error",this.session_detail_error=k(d,"Unable to load semantic session")),!1}finally{this.session_detail_controller===r&&(this.session_detail_controller=void 0)}}async loadSessionNode(e,s,t="push"){const i=this.selected_session?.session_id??this.requested_session_id;if(i===void 0)return!1;this.session_node_controller?.abort();const n=new AbortController;this.session_node_controller=n;const r=++this.session_node_load_id,c=typeof e=="string"?e:e.node_id;this.requested_session_node_id=c,this.selected_session_node_id=c,s||(this.selected_session_node_detail=void 0),this.session_node_state="loading",this.session_node_error=void 0,t&&this.syncUrl(t);try{const l=new URLSearchParams({session_id:i,node_id:c}),d=await m(`/api/session-node?${l.toString()}`,n.signal);return r===this.session_node_load_id&&this.session_node_controller===n?(this.selected_session_node_detail=d,this.session_node_state="ready",this.syncUrl("replace"),!0):!1}catch(l){return r===this.session_node_load_id&&!R(l)&&(this.session_node_state="error",this.session_node_error=k(l,"Unable to load semantic node content")),!1}finally{this.session_node_controller===n&&(this.session_node_controller=void 0)}}async selectSession(e){const s=++this.navigation_workflow_id;if(!await this.loadSession(e.session_id,e,!1,"push")||s!==this.navigation_workflow_id||this.active_view!=="sessions"||this.selected_session_detail?.session.session_id!==e.session_id||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete;const i=this.querySelector("session-detail-view");await i?.updateComplete,s===this.navigation_workflow_id&&this.active_view==="sessions"&&this.selected_session_detail?.session.session_id===e.session_id&&i?.querySelector(".mobile-back-button")?.focus()}collapseSessionNode(e="push"){this.session_node_controller?.abort(),this.session_node_controller=void 0,++this.session_node_load_id,this.requested_session_node_id=void 0,this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_node_state="idle",this.session_node_error=void 0,e&&this.syncUrl(e)}selectSessionNode(e){if(e.node_id===this.selected_session_node_id){this.collapseSessionNode();return}this.loadSessionNode(e,!1,"push")}retrySessionDetail(){const e=this.selected_session?.session_id??this.requested_session_id;e!==void 0&&this.loadSession(e,this.selected_session,!!this.selected_session_detail,null,this.selected_session_node_id??this.requested_session_node_id)}retrySessionUsage(){const e=this.selected_session?.session_id??this.requested_session_id;e!==void 0&&this.loadSessionUsage(e,!!this.selected_session_usage)}retrySessionNode(){const e=this.selected_session_detail?.nodes.find(s=>s.node_id===this.selected_session_node_id);(e??this.selected_session_node_id)&&this.loadSessionNode(e??this.selected_session_node_id,!!this.selected_session_node_detail,null)}async openSession(e){++this.navigation_workflow_id,this.setActiveView("sessions",!1,null),await this.ensureSessionsLoaded();const s=this.sessions.find(t=>t.session_id===e);await this.loadSession(e,s,!1,"push")}async openRequestFromSession(e){++this.navigation_workflow_id,this.setActiveView("requests",!1,null),this.search_query="",this.provider_id="",this.status_filter="",this.errors_only=!1,this.applied_filters=X(),this.selected_day=Os(e.ts),this.resetRequestSelection(),this.loadRequestDays(),this.loadRequests(),!await this.loadRequestDetail(this.selected_day,e.request_id,void 0,void 0,!1,"push")&&this.request_detail_state==="error"&&this.request_detail_error==="request not found"&&(this.request_detail_error="Request history is unavailable; semantic session data is still retained.")}async loadRequestsView(){this.loadRequestDays(),this.selected_day?await this.loadRequests():await this.loadLatestRequests()}setActiveView(e,s=!0,t="push"){t==="push"&&++this.navigation_workflow_id,this.active_view=e,t&&this.syncUrl(t),s&&(e==="sessions"?this.ensureSessionsLoaded():this.request_list_state==="idle"&&this.loadRequestsView())}setTimezone(e){this.timezone=e,this.syncUrl("push")}setDetailTab(e){this.active_detail_tab=e,this.syncUrl("push")}renderDayPicker(){const e=this.pickerDays(),s=this.adjacentAvailableDay(-1),t=this.adjacentAvailableDay(1);return a`
+    `}}customElements.define("session-list",Qt);customElements.define("session-detail-view",Xt);const ze=100;function S(i,e){return i instanceof Error?i.message:e}function es(i){return i==="overview"||i==="client"||i==="provider"||i==="raw"}function te(){return{query:"",provider_id:"",url_path:"",status:"",errors_only:!1}}function ts(i){return new Date(i).toISOString().slice(0,10)}class ss extends w{static properties={active_view:{type:String},info:{attribute:!1},requests:{attribute:!1},request_days:{attribute:!1},selected_day:{type:String},selected_request:{attribute:!1},selected_request_id:{type:String},selected_request_row_id:{type:String},selected_request_detail:{attribute:!1},request_list_state:{type:String},request_list_error:{type:String},request_detail_state:{type:String},request_detail_error:{type:String},next_cursor:{type:String},loading_more:{type:Boolean},load_more_error:{type:String},search_query:{type:String},provider_id:{type:String},url_path:{type:String},request_url_paths:{attribute:!1},request_url_paths_loading:{type:Boolean},request_url_paths_error:{type:String},status_filter:{type:String},errors_only:{type:Boolean},applied_filters:{attribute:!1},active_detail_tab:{type:String},timezone:{type:String},request_days_loading:{type:Boolean},request_days_error:{type:String},sessions:{attribute:!1},selected_session:{attribute:!1},selected_session_detail:{attribute:!1},selected_session_usage:{attribute:!1},sessions_loading:{type:Boolean},sessions_error:{type:String},session_search_query:{type:String},session_detail_state:{type:String},session_detail_error:{type:String},session_usage_state:{type:String},session_usage_error:{type:String},selected_session_node_id:{type:String},selected_session_node_detail:{attribute:!1},session_node_state:{type:String},session_node_error:{type:String}};request_load_id=0;request_detail_load_id=0;session_detail_load_id=0;session_usage_load_id=0;session_node_load_id=0;session_list_load_id=0;request_days_load_id=0;request_url_paths_load_id=0;sessions_loaded=!1;requested_request_id;requested_request_row_id;requested_session_id;requested_session_node_id;request_rows_context;request_controller;request_url_paths_controller;request_detail_controller;session_list_controller;session_list_load;session_detail_controller;session_usage_controller;session_node_controller;navigation_workflow_id=0;popstate_handler=()=>{this.restoreFromHistory()};constructor(){super(),this.active_view="requests",this.requests=[],this.request_days=[],this.sessions=[],this.request_list_state="idle",this.request_detail_state="idle",this.search_query="",this.provider_id="",this.url_path="",this.request_url_paths=[],this.request_url_paths_loading=!1,this.status_filter="",this.errors_only=!1,this.applied_filters=te(),this.active_detail_tab="overview",this.timezone="local",this.loading_more=!1,this.request_days_loading=!1,this.sessions_loading=!1,this.session_search_query="",this.session_detail_state="idle",this.session_usage_state="idle",this.session_node_state="idle"}createRenderRoot(){return this}connectedCallback(){super.connectedCallback(),this.restoreUrlState(),window.addEventListener("popstate",this.popstate_handler),this.loadInitialData()}disconnectedCallback(){window.removeEventListener("popstate",this.popstate_handler),this.request_controller?.abort(),this.request_url_paths_controller?.abort(),this.request_detail_controller?.abort(),this.session_list_controller?.abort(),this.session_detail_controller?.abort(),this.session_usage_controller?.abort(),this.session_node_controller?.abort(),super.disconnectedCallback()}restoreUrlState(){const e=new URLSearchParams(window.location.search);this.active_view=e.get("view")==="sessions"?"sessions":"requests";const t=e.get("day");this.selected_day=t&&/^\d{4}-\d{2}-\d{2}$/.test(t)?t:void 0,this.search_query=e.get("query")??"",this.provider_id=e.get("provider_id")??"",this.url_path=e.get("url_path")??"";const s=e.get("status")??"";this.status_filter=/^\d{3}$/.test(s)?s:"",this.errors_only=e.get("errors_only")==="true"||e.get("errors_only")==="1",this.applied_filters={query:this.search_query,provider_id:this.provider_id,url_path:this.url_path,status:this.status_filter,errors_only:this.errors_only},this.requested_request_id=e.get("request_id")??void 0;const n=e.get("row_id");this.requested_request_row_id=n&&/^-?\d+$/.test(n)?n:void 0;const o=e.get("tab");this.active_detail_tab=es(o)?o:"overview",this.requested_session_id=e.has("session_id")?e.get("session_id")??"":void 0,this.requested_session_node_id=e.get("node_id")??void 0,this.timezone=e.get("timezone")==="utc"?"utc":"local"}selectedRequestDay(){return this.selected_request_detail?.day??this.selected_request?.day??this.selected_day}syncUrl(e="replace"){const t=new URLSearchParams;if(this.active_view==="sessions"){t.set("view","sessions");const o=this.selected_session?.session_id??this.requested_session_id;o!==void 0&&t.set("session_id",o),this.selected_session_node_id&&t.set("node_id",this.selected_session_node_id)}else{const o=this.selected_request_id?this.selectedRequestDay():this.selected_day;o&&t.set("day",o),this.applied_filters.query&&t.set("query",this.applied_filters.query),this.applied_filters.provider_id&&t.set("provider_id",this.applied_filters.provider_id),this.applied_filters.url_path&&t.set("url_path",this.applied_filters.url_path),this.applied_filters.status&&t.set("status",this.applied_filters.status),this.applied_filters.errors_only&&t.set("errors_only","true"),this.selected_request_id&&(t.set("request_id",this.selected_request_id),this.selected_request_row_id&&t.set("row_id",this.selected_request_row_id),t.set("tab",this.active_detail_tab))}t.set("timezone",this.timezone);const s=t.toString(),n=`${window.location.pathname}${s?`?${s}`:""}`;`${window.location.pathname}${window.location.search}`!==n&&(e==="push"?window.history.pushState(null,"",n):window.history.replaceState(null,"",n))}async loadInitialData(){const e=++this.navigation_workflow_id;this.loadInfo(),await this.loadUrlState(e)}async restoreFromHistory(){const e=++this.navigation_workflow_id;this.request_controller?.abort(),this.request_detail_controller?.abort(),this.session_detail_controller?.abort(),this.session_node_controller?.abort(),this.resetRequestSelection(),this.resetSessionSelection(),this.restoreUrlState(),this.active_view==="requests"&&(this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0),await this.loadUrlState(e)}async loadUrlState(e){const t=this.requested_request_id,s=this.requested_request_row_id;if(this.active_view==="sessions"){const o=this.requested_session_id,r=this.requested_session_node_id;if(!await this.ensureSessionsLoaded()||e!==this.navigation_workflow_id||o===void 0)return;await this.loadSession(o,this.sessions.find(l=>l.session_id===o),!1,null,r);return}this.loadRequestDays();let n;if(this.selected_day?(this.loadRequestUrlPaths(this.selected_day),n=await this.loadRequests()):(n=await this.loadLatestRequests(),n&&this.selected_day&&this.loadRequestUrlPaths(this.selected_day),n&&this.selected_day&&this.hasAppliedFilters()&&(n=await this.loadRequests())),!(!n||e!==this.navigation_workflow_id)&&t&&this.selected_day){const o=this.requests.find(r=>r.request_id===t&&(!s||r.row_id===s));await this.loadRequestDetail(this.selected_day,t,s??o?.row_id,o,!1,null)}}async loadInfo(){try{this.info=await b("/api/info")}catch{this.info=void 0}}async loadLatestRequests(){this.request_controller?.abort();const e=new AbortController;this.request_controller=e;const t=++this.request_load_id;this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0,this.request_list_state="loading",this.request_list_error=void 0;try{const s=await b(`/api/requests/latest?limit=${ze}`,e.signal);return t!==this.request_load_id||this.request_controller!==e?!1:(this.selected_day=s.day??void 0,this.requests=s.requests,this.next_cursor=s.next_cursor??void 0,this.request_rows_context=this.requestContext(this.selected_day,te()),this.request_list_state="ready",this.syncUrl(),!0)}catch(s){return t===this.request_load_id&&!k(s)&&(this.request_list_state="error",this.request_list_error=S(s,"Unable to load recent requests")),!1}finally{this.request_controller===e&&(this.request_controller=void 0)}}requestContext(e=this.selected_day,t=this.applied_filters){return e?JSON.stringify([e,t.query,t.provider_id,t.url_path,t.status,t.errors_only]):void 0}requestParams(e,t,s){const n=new URLSearchParams({day:e,limit:String(ze)});return t.query&&n.set("query",t.query),t.provider_id&&n.set("provider_id",t.provider_id),t.url_path&&n.set("url_path",t.url_path),t.status&&n.set("status",t.status),t.errors_only&&n.set("errors_only","true"),s&&n.set("cursor",s),n}async loadRequests(e=!1){const t=this.selected_day;if(!t)return this.request_list_state="idle",this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0,!1;const s={...this.applied_filters},n=this.requestContext(t,s),o=e?this.next_cursor:void 0;if(e&&(!o||this.request_rows_context!==n))return!1;this.request_controller?.abort();const r=new AbortController;this.request_controller=r;const c=++this.request_load_id;e?(this.loading_more=!0,this.load_more_error=void 0):(this.loading_more=!1,this.request_rows_context!==n&&(this.requests=[],this.next_cursor=void 0,this.request_rows_context=void 0),this.request_list_state="loading",this.request_list_error=void 0,this.load_more_error=void 0);try{const l=await b(`/api/requests?${this.requestParams(t,s,o).toString()}`,r.signal);if(c!==this.request_load_id||this.request_controller!==r||this.requestContext()!==n)return!1;if(e){const d=new Set(this.requests.map(u=>B(u)));this.requests=[...this.requests,...l.requests.filter(u=>!d.has(B(u)))]}else this.requests=l.requests;return this.next_cursor=l.next_cursor??void 0,this.request_rows_context=n,this.request_list_state="ready",!0}catch(l){return c!==this.request_load_id||k(l)||(l instanceof We&&l.status===503&&this.markRequestDayUnavailable(t),e?this.load_more_error=S(l,"Unable to load more requests"):(this.request_list_state="error",this.request_list_error=S(l,"Unable to load requests"))),!1}finally{c===this.request_load_id&&(this.loading_more=!1),this.request_controller===r&&(this.request_controller=void 0)}}async loadRequestDays(){const e=++this.request_days_load_id;this.request_days_loading=!0,this.request_days_error=void 0;try{const t=await b("/api/request-days");e===this.request_days_load_id&&(this.request_days=t)}catch(t){e===this.request_days_load_id&&(this.request_days_error=S(t,"Unable to load request day states"))}finally{e===this.request_days_load_id&&(this.request_days_loading=!1)}}async loadRequestUrlPaths(e){this.request_url_paths_controller?.abort();const t=new AbortController;this.request_url_paths_controller=t;const s=++this.request_url_paths_load_id;this.request_url_paths_loading=!0,this.request_url_paths_error=void 0;try{const n=new URLSearchParams({day:e}),o=await b(`/api/request-url-paths?${n.toString()}`,t.signal);s===this.request_url_paths_load_id&&this.selected_day===e&&(this.request_url_paths=o)}catch(n){s===this.request_url_paths_load_id&&!k(n)&&(this.request_url_paths=[],this.request_url_paths_error=S(n,"Unable to load URL paths"))}finally{s===this.request_url_paths_load_id&&(this.request_url_paths_loading=!1),this.request_url_paths_controller===t&&(this.request_url_paths_controller=void 0)}}markRequestDayUnavailable(e){this.request_days.some(t=>t.day===e)?this.request_days=this.request_days.map(t=>t.day===e?{...t,state:"unavailable"}:t):this.request_days=[{day:e,state:"unavailable"},...this.request_days]}resetRequestSelection(){this.request_detail_controller?.abort(),this.request_detail_controller=void 0,this.request_detail_load_id+=1,this.selected_request=void 0,this.selected_request_id=void 0,this.selected_request_row_id=void 0,this.selected_request_detail=void 0,this.request_detail_state="idle",this.request_detail_error=void 0,this.active_detail_tab="overview"}resetSessionSelection(){this.session_detail_controller?.abort(),this.session_usage_controller?.abort(),this.session_node_controller?.abort(),this.session_detail_controller=void 0,this.session_usage_controller=void 0,this.session_node_controller=void 0,this.session_detail_load_id+=1,this.session_usage_load_id+=1,this.session_node_load_id+=1,this.requested_session_id=void 0,this.requested_session_node_id=void 0,this.selected_session=void 0,this.selected_session_detail=void 0,this.selected_session_usage=void 0,this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_detail_state="idle",this.session_detail_error=void 0,this.session_usage_state="idle",this.session_usage_error=void 0,this.session_node_state="idle",this.session_node_error=void 0}async closeRequestDetail(){const e=this.selected_request_row_id&&this.selectedRequestDay()?B({day:this.selectedRequestDay(),row_id:this.selected_request_row_id}):void 0;if(++this.navigation_workflow_id,this.resetRequestSelection(),this.syncUrl("push"),!e||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete,[...this.querySelectorAll("request-list [data-request-key]")].find(s=>s.dataset.requestKey===e)?.focus()}async closeSessionDetail(){const e=this.selected_session?.session_id??this.requested_session_id;if(++this.navigation_workflow_id,this.resetSessionSelection(),this.syncUrl("push"),e===void 0||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete,[...this.querySelectorAll("session-list [data-session-id]")].find(s=>s.dataset.sessionId===e)?.focus()}async loadRequestDetail(e,t,s,n,o,r="replace"){this.request_detail_controller?.abort();const c=new AbortController;this.request_detail_controller=c;const l=++this.request_detail_load_id;this.selected_day=e,this.selected_request=n,this.selected_request_id=t,this.selected_request_row_id=s,o||(this.selected_request_detail=void 0),this.request_detail_state="loading",this.request_detail_error=void 0,r&&this.syncUrl(r);try{const d=new URLSearchParams({day:e,request_id:t});s&&d.set("row_id",s);const u=await b(`/api/request?${d.toString()}`,c.signal);if(l===this.request_detail_load_id&&this.request_detail_controller===c){const h=this.selected_request_row_id!==u.row_id;return this.selected_request_detail=u,this.selected_request_row_id=u.row_id,this.request_detail_state="ready",(r||h)&&this.syncUrl("replace"),!0}return!1}catch(d){return l===this.request_detail_load_id&&!k(d)&&(this.request_detail_state="error",this.request_detail_error=S(d,"Unable to load request detail")),!1}finally{this.request_detail_controller===c&&(this.request_detail_controller=void 0)}}async selectRequest(e){++this.navigation_workflow_id;const t=this.selected_request_id===e.request_id&&this.selected_request_detail?.day===e.day&&this.selected_request_detail.row_id===e.row_id,s=this.loadRequestDetail(e.day,e.request_id,e.row_id,e,t,"push");window.matchMedia("(max-width: 680px)").matches&&(await this.updateComplete,this.querySelector("request-detail-view .mobile-back-button")?.focus()),await s&&window.matchMedia("(max-width: 680px)").matches&&(await this.updateComplete,this.querySelector("request-detail-view .mobile-back-button")?.focus())}retryRequestDetail(){const e=this.selected_request_detail?.day??this.selected_request?.day??this.selected_day;e&&this.selected_request_id&&this.loadRequestDetail(e,this.selected_request_id,this.selected_request_row_id,this.selected_request,!!this.selected_request_detail,null)}selectDay(e){e!==this.selected_day&&(++this.navigation_workflow_id,this.selected_day=e,this.request_url_paths=[],this.resetRequestSelection(),this.syncUrl("push"),this.loadRequestUrlPaths(e),this.loadRequests())}pickerDays(){return!this.selected_day||this.request_days.some(e=>e.day===this.selected_day)?this.request_days:[{day:this.selected_day,state:"available"},...this.request_days]}adjacentAvailableDay(e){const t=this.pickerDays().filter(n=>n.state==="available").map(n=>n.day).sort();if(!this.selected_day)return;const s=t.indexOf(this.selected_day);return s<0?void 0:t[s+e]}submitFilters(e){e.preventDefault(),++this.navigation_workflow_id,this.applied_filters={query:this.search_query.trim(),provider_id:this.provider_id.trim(),url_path:this.url_path,status:this.status_filter.trim(),errors_only:this.errors_only},this.resetRequestSelection(),this.syncUrl("push"),this.loadRequests()}clearFilters(){this.search_query="",this.provider_id="",this.url_path="",this.status_filter="",this.errors_only=!1,this.applied_filters=te(),++this.navigation_workflow_id,this.resetRequestSelection(),this.syncUrl("push"),this.loadRequests()}hasAppliedFilters(){return!!(this.applied_filters.query||this.applied_filters.provider_id||this.applied_filters.url_path||this.applied_filters.status||this.applied_filters.errors_only)}filtersChanged(){return this.search_query.trim()!==this.applied_filters.query||this.provider_id.trim()!==this.applied_filters.provider_id||this.url_path!==this.applied_filters.url_path||this.status_filter.trim()!==this.applied_filters.status||this.errors_only!==this.applied_filters.errors_only}providerOptions(){const e=new Set(this.requests.flatMap(t=>t.provider_id?[t.provider_id]:[]));return this.applied_filters.provider_id&&e.add(this.applied_filters.provider_id),[...e].sort()}urlPathOptions(){return!this.url_path||this.request_url_paths.some(e=>e.url_path===this.url_path)?this.request_url_paths:[{url_path:this.url_path,request_count:0},...this.request_url_paths]}ensureSessionsLoaded(e=!1){if(this.sessions_loaded&&!e)return Promise.resolve(!0);if(this.session_list_load&&!e)return this.session_list_load;this.session_list_controller?.abort();const t=new AbortController;this.session_list_controller=t;const s=++this.session_list_load_id;this.sessions_loading=!0,this.sessions_error=void 0;const n=this.loadSessions(t,s);return this.session_list_load=n,n}async loadSessions(e,t){try{const s=await b("/api/sessions?limit=100",e.signal);return t!==this.session_list_load_id||this.session_list_controller!==e?!1:(this.sessions=s,this.sessions_loaded=!0,this.selected_session&&(this.selected_session=s.find(n=>n.session_id===this.selected_session?.session_id)??this.selected_session),!0)}catch(s){return t===this.session_list_load_id&&!k(s)&&(this.sessions_error=S(s,"Unable to load sessions")),!1}finally{t===this.session_list_load_id&&this.session_list_controller===e&&(this.session_list_controller=void 0,this.session_list_load=void 0,this.sessions_loading=!1)}}retrySessions(){const e=++this.navigation_workflow_id;this.sessions_loaded=!1,this.retrySessionsAndRestore(e)}async retrySessionsAndRestore(e){if(!await this.ensureSessionsLoaded(!0)||e!==this.navigation_workflow_id||this.active_view!=="sessions")return;const s=this.selected_session?.session_id??this.requested_session_id;if(s===void 0)return;const n=this.selected_session_node_id??this.requested_session_node_id;await this.loadSession(s,this.sessions.find(o=>o.session_id===s),this.selected_session_detail?.session.session_id===s,null,n)}async refreshSessions(){const e=this.navigation_workflow_id,t=this.selected_session?.session_id??this.requested_session_id,s=this.selected_session_node_id,n=await this.ensureSessionsLoaded(!0),o=this.selected_session?.session_id??this.requested_session_id;n&&e===this.navigation_workflow_id&&t!==void 0&&o===t&&this.selected_session_node_id===s&&await this.loadSession(t,this.sessions.find(r=>r.session_id===t),!0,null,s)}filteredSessions(){const e=this.session_search_query.trim().toLocaleLowerCase();return e?this.sessions.filter(t=>[t.session_id,t.model,t.provider_id,t.account_id,t.endpoint,t.status===null?null:String(t.status)].some(s=>s?.toLocaleLowerCase().includes(e))):this.sessions}async loadSessionUsage(e,t){this.session_usage_controller?.abort();const s=new AbortController;this.session_usage_controller=s;const n=++this.session_usage_load_id;t||(this.selected_session_usage=void 0),this.session_usage_state="loading",this.session_usage_error=void 0;try{const o=new URLSearchParams({session_id:e}),r=await b(`/api/session-usage?${o.toString()}`,s.signal);return n===this.session_usage_load_id&&this.session_usage_controller===s?(this.selected_session_usage=r??void 0,this.session_usage_state="ready",!0):!1}catch(o){return n===this.session_usage_load_id&&!k(o)&&(this.session_usage_state="error",this.session_usage_error=S(o,"Unable to load session usage")),!1}finally{this.session_usage_controller===s&&(this.session_usage_controller=void 0)}}async loadSession(e,t,s,n="push",o){this.session_detail_controller?.abort(),this.session_node_controller?.abort();const r=new AbortController;this.session_detail_controller=r;const c=++this.session_detail_load_id,l=++this.session_node_load_id;this.requested_session_id=e,this.requested_session_node_id=o,this.selected_session=t,s||(this.selected_session_detail=void 0,this.selected_session_node_detail=void 0,this.selected_session_node_id=void 0,this.session_node_state="idle",this.session_node_error=void 0),this.loadSessionUsage(e,s),this.session_detail_state="loading",this.session_detail_error=void 0,n&&this.syncUrl(n);try{const d=new URLSearchParams({session_id:e,limit:"500"}),u=await b(`/api/session?${d.toString()}`,r.signal);if(c===this.session_detail_load_id&&this.session_detail_controller===r){if(this.selected_session=u.session,this.selected_session_detail=u,this.sessions=this.sessions.map(h=>h.session_id===u.session.session_id?u.session:h),this.session_detail_state="ready",l!==this.session_node_load_id)return!0;if(o){const h=u.nodes.find(p=>p.node_id===o);this.loadSessionNode(h??o,!1,"replace")}else this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_node_state="idle",this.syncUrl("replace");return!0}return!1}catch(d){return c===this.session_detail_load_id&&!k(d)&&(this.session_detail_state="error",this.session_detail_error=S(d,"Unable to load semantic session")),!1}finally{this.session_detail_controller===r&&(this.session_detail_controller=void 0)}}async loadSessionNode(e,t,s="push"){const n=this.selected_session?.session_id??this.requested_session_id;if(n===void 0)return!1;this.session_node_controller?.abort();const o=new AbortController;this.session_node_controller=o;const r=++this.session_node_load_id,c=typeof e=="string"?e:e.node_id;this.requested_session_node_id=c,this.selected_session_node_id=c,t||(this.selected_session_node_detail=void 0),this.session_node_state="loading",this.session_node_error=void 0,s&&this.syncUrl(s);try{const l=new URLSearchParams({session_id:n,node_id:c}),d=await b(`/api/session-node?${l.toString()}`,o.signal);return r===this.session_node_load_id&&this.session_node_controller===o?(this.selected_session_node_detail=d,this.session_node_state="ready",this.syncUrl("replace"),!0):!1}catch(l){return r===this.session_node_load_id&&!k(l)&&(this.session_node_state="error",this.session_node_error=S(l,"Unable to load semantic node content")),!1}finally{this.session_node_controller===o&&(this.session_node_controller=void 0)}}async selectSession(e){const t=++this.navigation_workflow_id;if(!await this.loadSession(e.session_id,e,!1,"push")||t!==this.navigation_workflow_id||this.active_view!=="sessions"||this.selected_session_detail?.session.session_id!==e.session_id||!window.matchMedia("(max-width: 680px)").matches)return;await this.updateComplete;const n=this.querySelector("session-detail-view");await n?.updateComplete,t===this.navigation_workflow_id&&this.active_view==="sessions"&&this.selected_session_detail?.session.session_id===e.session_id&&n?.querySelector(".mobile-back-button")?.focus()}collapseSessionNode(e="push"){this.session_node_controller?.abort(),this.session_node_controller=void 0,++this.session_node_load_id,this.requested_session_node_id=void 0,this.selected_session_node_id=void 0,this.selected_session_node_detail=void 0,this.session_node_state="idle",this.session_node_error=void 0,e&&this.syncUrl(e)}selectSessionNode(e){if(e.node_id===this.selected_session_node_id){this.collapseSessionNode();return}this.loadSessionNode(e,!1,"push")}retrySessionDetail(){const e=this.selected_session?.session_id??this.requested_session_id;e!==void 0&&this.loadSession(e,this.selected_session,!!this.selected_session_detail,null,this.selected_session_node_id??this.requested_session_node_id)}retrySessionUsage(){const e=this.selected_session?.session_id??this.requested_session_id;e!==void 0&&this.loadSessionUsage(e,!!this.selected_session_usage)}retrySessionNode(){const e=this.selected_session_detail?.nodes.find(t=>t.node_id===this.selected_session_node_id);(e??this.selected_session_node_id)&&this.loadSessionNode(e??this.selected_session_node_id,!!this.selected_session_node_detail,null)}async openSession(e){++this.navigation_workflow_id,this.setActiveView("sessions",!1,null),await this.ensureSessionsLoaded();const t=this.sessions.find(s=>s.session_id===e);await this.loadSession(e,t,!1,"push")}async openRequestFromSession(e){++this.navigation_workflow_id,this.setActiveView("requests",!1,null),this.search_query="",this.provider_id="",this.url_path="",this.status_filter="",this.errors_only=!1,this.applied_filters=te(),this.selected_day=ts(e.ts),this.resetRequestSelection(),this.loadRequestDays(),this.loadRequestUrlPaths(this.selected_day),this.loadRequests(),!await this.loadRequestDetail(this.selected_day,e.request_id,void 0,void 0,!1,"push")&&this.request_detail_state==="error"&&this.request_detail_error==="request not found"&&(this.request_detail_error="Request history is unavailable; semantic session data is still retained.")}async loadRequestsView(){this.loadRequestDays(),this.selected_day?(this.loadRequestUrlPaths(this.selected_day),await this.loadRequests()):await this.loadLatestRequests()}setActiveView(e,t=!0,s="push"){s==="push"&&++this.navigation_workflow_id,this.active_view=e,s&&this.syncUrl(s),t&&(e==="sessions"?this.ensureSessionsLoaded():this.request_list_state==="idle"&&this.loadRequestsView())}setTimezone(e){this.timezone=e,this.syncUrl("push")}setDetailTab(e){this.active_detail_tab=e,this.syncUrl("push")}renderDayPicker(){const e=this.pickerDays(),t=this.adjacentAvailableDay(-1),s=this.adjacentAvailableDay(1);return a`
       <div class="day-control">
         <span class="control-label">UTC storage day</span>
         <div class="day-navigation">
@@ -685,8 +757,8 @@
             class="icon-button"
             title="Previous available day"
             aria-label="Previous available day"
-            ?disabled=${!s}
-            @click=${()=>s&&this.selectDay(s)}
+            ?disabled=${!t}
+            @click=${()=>t&&this.selectDay(t)}
           >
             ←
           </button>
@@ -694,12 +766,12 @@
             aria-label="Request storage day"
             .value=${this.selected_day??""}
             ?disabled=${e.length===0}
-            @change=${i=>this.selectDay(i.target.value)}
+            @change=${n=>this.selectDay(n.target.value)}
           >
-            ${this.selected_day?u:a`<option value="">No request day</option>`}
-            ${e.map(i=>a`
-                <option value=${i.day} ?disabled=${i.state!=="available"}>
-                  ${i.day}${i.state==="empty"?" · empty":i.state==="unavailable"?" · unavailable":""}
+            ${this.selected_day?_:a`<option value="">No request day</option>`}
+            ${e.map(n=>a`
+                <option value=${n.day} ?disabled=${n.state!=="available"}>
+                  ${n.day}${n.state==="empty"?" · empty":n.state==="unavailable"?" · unavailable":""}
                 </option>
               `)}
           </select>
@@ -708,8 +780,8 @@
             class="icon-button"
             title="Next available day"
             aria-label="Next available day"
-            ?disabled=${!t}
-            @click=${()=>t&&this.selectDay(t)}
+            ?disabled=${!s}
+            @click=${()=>s&&this.selectDay(s)}
           >
             →
           </button>
@@ -723,7 +795,7 @@
             type="button"
             class="refresh-button"
             ?disabled=${!e||this.request_list_state==="loading"}
-            @click=${()=>{this.loadRequests(),this.loadRequestDays()}}
+            @click=${()=>{this.loadRequests(),this.loadRequestDays(),this.selected_day&&this.loadRequestUrlPaths(this.selected_day)}}
           >
             <span aria-hidden="true">↻</span> Refresh requests
           </button>
@@ -753,7 +825,7 @@
               .value=${this.search_query}
               ?disabled=${!e}
               placeholder="Search request, session, model…"
-              @input=${s=>this.search_query=s.target.value}
+              @input=${t=>this.search_query=t.target.value}
             />
           </label>
           <label>
@@ -763,11 +835,27 @@
               .value=${this.provider_id}
               ?disabled=${!e}
               placeholder="Any provider"
-              @input=${s=>this.provider_id=s.target.value}
+              @input=${t=>this.provider_id=t.target.value}
             />
             <datalist id="provider-options">
-              ${this.providerOptions().map(s=>a`<option value=${s}></option>`)}
+              ${this.providerOptions().map(t=>a`<option value=${t}></option>`)}
             </datalist>
+          </label>
+          <label>
+            <span class="visually-hidden">URL path</span>
+            <select
+              class="url-path-filter"
+              .value=${this.url_path}
+              ?disabled=${!e||this.request_url_paths_loading}
+              @change=${t=>this.url_path=t.target.value}
+            >
+              <option value="">${this.request_url_paths_loading?"Loading URL paths…":"Any URL path"}</option>
+              ${this.urlPathOptions().map(t=>a`
+                  <option value=${t.url_path}>
+                    ${t.url_path}${t.request_count?` · ${t.request_count.toLocaleString()}`:""}
+                  </option>
+                `)}
+            </select>
           </label>
           <label>
             <span class="visually-hidden">Exact response status</span>
@@ -780,7 +868,7 @@
               .value=${this.status_filter}
               ?disabled=${!e}
               placeholder="Any status"
-              @input=${s=>this.status_filter=s.target.value}
+              @input=${t=>this.status_filter=t.target.value}
             />
           </label>
           <label class="errors-filter">
@@ -788,14 +876,15 @@
               type="checkbox"
               .checked=${this.errors_only}
               ?disabled=${!e}
-              @change=${s=>this.errors_only=s.target.checked}
+              @change=${t=>this.errors_only=t.target.checked}
             />
             <span>Errors only</span>
           </label>
           <button type="submit" class="primary-button" ?disabled=${!e||!this.filtersChanged()}>Apply</button>
-          ${this.hasAppliedFilters()?a`<button type="button" class="text-button" @click=${this.clearFilters}>Clear</button>`:u}
+          ${this.hasAppliedFilters()?a`<button type="button" class="text-button" @click=${this.clearFilters}>Clear</button>`:_}
         </form>
-        ${this.request_days_error?a`<p class="toolbar-warning" role="status">Day scan: ${this.request_days_error}</p>`:u}
+        ${this.request_days_error?a`<p class="toolbar-warning" role="status">Day scan: ${this.request_days_error}</p>`:_}
+        ${this.request_url_paths_error?a`<p class="toolbar-warning" role="status">URL paths: ${this.request_url_paths_error}</p>`:_}
       </section>
     `}renderRequestSidebar(){const e=this.requests.length>0;return a`
       <div class="list-pane" aria-busy=${String(this.request_list_state==="loading")}>
@@ -804,42 +893,42 @@
             <strong>Requests</strong>
             <span>${this.requests.length.toLocaleString()} loaded${this.next_cursor?" · more available":""}</span>
           </div>
-          ${this.hasAppliedFilters()?a`<span class="filter-indicator">Filtered</span>`:u}
+          ${this.hasAppliedFilters()?a`<span class="filter-indicator">Filtered</span>`:_}
         </header>
         ${this.request_list_state==="loading"?a`
               <div class="inline-state" role="status">
                 <span class="spinner" aria-hidden="true"></span>${e?"Refreshing requests…":"Loading requests…"}
               </div>
-            `:u}
+            `:_}
         ${this.request_list_state==="error"?a`
               <div class="inline-error" role="alert">
                 <span>${this.request_list_error}</span>
                 <button type="button" @click=${()=>{this.loadRequests()}}>Retry</button>
               </div>
-            `:u}
+            `:_}
         ${e?a`
               <request-list
                 .requests=${this.requests}
-                .selected_key=${this.selectedRequestDay()&&this.selected_request_row_id?M({day:this.selectedRequestDay(),row_id:this.selected_request_row_id}):void 0}
+                .selected_key=${this.selectedRequestDay()&&this.selected_request_row_id?B({day:this.selectedRequestDay(),row_id:this.selected_request_row_id}):void 0}
                 .timezone=${this.timezone}
-                @request-select=${s=>{this.selectRequest(P(s))}}
+                @request-select=${t=>{this.selectRequest(D(t))}}
               ></request-list>
-            `:this.request_list_state==="ready"?a`<p class="empty">No persisted requests match these filters.</p>`:this.request_list_state==="idle"?a`<p class="empty">Choose an available request day.</p>`:u}
+            `:this.request_list_state==="ready"?a`<p class="empty">No persisted requests match these filters.</p>`:this.request_list_state==="idle"?a`<p class="empty">Choose an available request day.</p>`:_}
         ${this.load_more_error?a`
               <div class="inline-error load-more-error" role="alert">
                 <span>${this.load_more_error}</span>
                 <button type="button" @click=${()=>{this.loadRequests(!0)}}>Retry</button>
               </div>
-            `:u}
+            `:_}
         ${this.next_cursor&&e?a`
               <div class="list-footer">
                 <button type="button" class="secondary-button" ?disabled=${this.loading_more} @click=${()=>{this.loadRequests(!0)}}>
                   ${this.loading_more?"Loading…":"Load more"}
                 </button>
               </div>
-            `:e&&this.request_list_state==="ready"?a`<p class="end-of-list">End of loaded day</p>`:u}
+            `:e&&this.request_list_state==="ready"?a`<p class="end-of-list">End of loaded day</p>`:_}
       </div>
-    `}renderSessionsSidebar(){const e=this.filteredSessions(),s=this.sessions.length>0;return a`
+    `}renderSessionsSidebar(){const e=this.filteredSessions(),t=this.sessions.length>0;return a`
       <div class="list-pane" aria-busy=${String(this.sessions_loading)}>
         <header class="list-pane-header">
           <div>
@@ -848,33 +937,33 @@
               ${this.session_search_query?`${e.length.toLocaleString()} of ${this.sessions.length.toLocaleString()} loaded`:`${this.sessions.length.toLocaleString()} loaded · newest first`}
             </span>
           </div>
-          ${this.session_search_query?a`<span class="filter-indicator">Filtered</span>`:u}
+          ${this.session_search_query?a`<span class="filter-indicator">Filtered</span>`:_}
         </header>
         ${this.sessions_loading?a`
               <div class="inline-state" role="status">
-                <span class="spinner" aria-hidden="true"></span>${s?"Refreshing sessions…":"Loading sessions…"}
+                <span class="spinner" aria-hidden="true"></span>${t?"Refreshing sessions…":"Loading sessions…"}
               </div>
-            `:u}
+            `:_}
         ${this.sessions_error?a`
               <div class="inline-error" role="alert">
                 <span>${this.sessions_error}</span>
                 <button type="button" @click=${this.retrySessions}>Retry</button>
               </div>
-            `:u}
+            `:_}
         ${e.length>0?a`
               <session-list
                 .sessions=${e}
                 .selected_session_id=${this.selected_session?.session_id??this.requested_session_id}
                 .timezone=${this.timezone}
-                @session-select=${t=>{this.selectSession(P(t))}}
+                @session-select=${s=>{this.selectSession(D(s))}}
               ></session-list>
             `:this.sessions_loaded&&this.session_search_query?a`<p class="empty">No recent sessions match this filter.</p>`:this.sessions_loaded?a`
                   <div class="empty empty-session-list">
                     <strong>No semantic sessions available</strong>
                     <span>The gateway records successful sessions here when session persistence is enabled.</span>
                   </div>
-                `:u}
-        ${s&&!this.session_search_query?a`<p class="end-of-list">${this.sessions.length===100?"Latest 100 sessions":"End of recent sessions"}</p>`:u}
+                `:_}
+        ${t&&!this.session_search_query?a`<p class="end-of-list">${this.sessions.length===100?"Latest 100 sessions":"End of recent sessions"}</p>`:_}
       </div>
     `}renderSessionDetail(){return a`
       <session-detail-view
@@ -893,8 +982,8 @@
         @session-retry=${this.retrySessionDetail}
         @session-usage-retry=${this.retrySessionUsage}
         @session-node-retry=${this.retrySessionNode}
-        @session-node-select=${e=>this.selectSessionNode(P(e))}
-        @open-request=${e=>{this.openRequestFromSession(P(e))}}
+        @session-node-select=${e=>this.selectSessionNode(D(e))}
+        @open-request=${e=>{this.openRequestFromSession(D(e))}}
       ></session-detail-view>
     `}renderSessionToolbar(){return a`
       <section class="session-toolbar">
@@ -924,7 +1013,7 @@
           </div>
         </div>
       </section>
-    `}render(){const e=this.active_view==="sessions"?this.info?.sessions_db:this.info?.requests_dir,s=this.active_view==="requests"?!!this.selected_request_id:this.requested_session_id!==void 0;return a`
+    `}render(){const e=this.active_view==="sessions"?this.info?.sessions_db:this.info?.requests_dir,t=this.active_view==="requests"?!!this.selected_request_id:this.requested_session_id!==void 0;return a`
       <header class="app-header">
         <div class="brand">
           <span class="brand-mark" aria-hidden="true">t</span>
@@ -953,7 +1042,7 @@
           <span class="data-path" title=${e??""}>${e??"Loading data source…"}</span>
         </div>
         ${this.active_view==="requests"?this.renderRequestToolbar():this.renderSessionToolbar()}
-        <section class="viewer-grid ${this.active_view==="requests"?"request-view":"session-view"} ${s?"has-selection":""}">
+        <section class="viewer-grid ${this.active_view==="requests"?"request-view":"session-view"} ${t?"has-selection":""}">
           <aside class="sidebar" aria-label=${this.active_view==="requests"?"Request list":"Session list"}>
             ${this.active_view==="requests"?this.renderRequestSidebar():this.renderSessionsSidebar()}
           </aside>
@@ -968,11 +1057,11 @@
                     .timezone=${this.timezone}
                     @detail-retry=${this.retryRequestDetail}
                     @detail-close=${()=>{this.closeRequestDetail()}}
-                    @detail-tab-change=${t=>this.setDetailTab(P(t))}
-                    @open-session=${t=>{this.openSession(P(t))}}
+                    @detail-tab-change=${s=>this.setDetailTab(D(s))}
+                    @open-session=${s=>{this.openSession(D(s))}}
                   ></request-detail-view>
                 `:this.renderSessionDetail()}
           </article>
         </section>
       </main>
-    `}}customElements.define("inspect-app",Ms);
+    `}}customElements.define("inspect-app",ss);

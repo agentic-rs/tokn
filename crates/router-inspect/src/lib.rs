@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use tokn_persistence::viewer::{get_request_payload, RequestCursor, RequestPayloadField};
 use tokn_persistence::{
   get_request, get_session_from_db, get_session_node_from_db, get_session_usage, is_valid_request_day,
-  list_latest_requests, list_request_days, list_requests, list_sessions_from_db, RequestListOptions,
+  list_latest_requests, list_request_days, list_request_url_paths, list_requests, list_sessions_from_db,
+  RequestListOptions,
 };
 
 const INDEX_HTML: &str = include_str!("../web/dist/index.html");
@@ -41,6 +42,7 @@ struct RequestsQuery {
   cursor: Option<String>,
   session_id: Option<String>,
   provider_id: Option<String>,
+  url_path: Option<String>,
   status: Option<u16>,
   #[serde(default)]
   errors_only: bool,
@@ -55,6 +57,7 @@ impl From<RequestsQuery> for RequestListOptions {
       cursor: None,
       session_id: query.session_id,
       provider_id: query.provider_id,
+      url_path: query.url_path,
       status: query.status,
       errors_only: query.errors_only,
       query: query.query,
@@ -71,6 +74,11 @@ struct LimitQuery {
 struct RequestPageQuery {
   limit: Option<usize>,
   cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RequestDayQuery {
+  day: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,6 +195,7 @@ fn router(state: InspectState) -> Router {
     .route("/assets/viewer.css", get(viewer_css))
     .route("/api/info", get(info))
     .route("/api/request-days", get(request_days))
+    .route("/api/request-url-paths", get(request_url_paths))
     .route("/api/requests", get(requests))
     .route("/api/requests/latest", get(latest_requests))
     .route("/api/request", get(request_detail))
@@ -228,6 +237,20 @@ async fn request_days(State(state): State<InspectState>) -> Result<Response, Api
     .map_err(ApiError::internal)?
     .map_err(ApiError::internal)?;
   Ok(json_response(StatusCode::OK, days))
+}
+
+async fn request_url_paths(
+  State(state): State<InspectState>,
+  Query(query): Query<RequestDayQuery>,
+) -> Result<Response, ApiError> {
+  validate_request_day(&query.day)?;
+  let requests_dir = state.requests_dir;
+  let day = query.day;
+  let paths = tokio::task::spawn_blocking(move || list_request_url_paths(&requests_dir, &day))
+    .await
+    .map_err(ApiError::internal)?
+    .map_err(|_| ApiError::unavailable("request day"))?;
+  Ok(json_response(StatusCode::OK, paths))
 }
 
 async fn requests(State(state): State<InspectState>, Query(query): Query<RequestsQuery>) -> Result<Response, ApiError> {
@@ -821,6 +844,44 @@ mod tests {
     let body = response_body(response).await;
     assert!(body.contains("failed"));
     assert!(!body.contains("healthy"));
+  }
+
+  #[tokio::test]
+  async fn request_url_paths_endpoint_drives_exact_path_filtering() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let sessions_db = tempdir.path().join("sessions.db");
+    write_request(tempdir.path(), "2026-07-14", "search", "session/one");
+    write_request(tempdir.path(), "2026-07-14", "responses", "session/one");
+    let conn = open_day_db(&tempdir.path().join("2026-07-14.db")).unwrap();
+    conn
+      .execute(
+        "UPDATE request_downstream SET inbound_req_url = ?2 WHERE request_id = ?1",
+        ["search", "/backend-api/codex/alpha/search?client_version=1"],
+      )
+      .unwrap();
+    conn
+      .execute(
+        "UPDATE request_downstream SET inbound_req_url = ?2 WHERE request_id = ?1",
+        ["responses", "/backend-api/codex/responses"],
+      )
+      .unwrap();
+
+    let choices = get_response(tempdir.path(), &sessions_db, "/api/request-url-paths?day=2026-07-14").await;
+    assert_eq!(choices.status(), StatusCode::OK);
+    let choices = response_body(choices).await;
+    assert!(choices.contains(r#"{"url_path":"/backend-api/codex/alpha/search","request_count":1}"#));
+    assert!(choices.contains(r#"{"url_path":"/backend-api/codex/responses","request_count":1}"#));
+
+    let filtered = get_response(
+      tempdir.path(),
+      &sessions_db,
+      "/api/requests?day=2026-07-14&url_path=%2Fbackend-api%2Fcodex%2Falpha%2Fsearch",
+    )
+    .await;
+    assert_eq!(filtered.status(), StatusCode::OK);
+    let filtered = response_body(filtered).await;
+    assert!(filtered.contains(r#""request_id":"search""#));
+    assert!(!filtered.contains(r#""request_id":"responses""#));
   }
 
   #[tokio::test]
