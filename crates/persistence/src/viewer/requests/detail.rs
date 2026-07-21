@@ -114,7 +114,7 @@ fn request_overview_columns(conn: &Connection) -> Result<Vec<String>> {
   )
 }
 
-fn request_lookup_condition(schema: RequestSchema, include_row_id: bool) -> String {
+pub(super) fn request_lookup_condition(schema: RequestSchema, include_row_id: bool) -> String {
   let request_id = if schema.is_split() {
     "request_id".to_string()
   } else {
@@ -127,7 +127,7 @@ fn request_lookup_condition(schema: RequestSchema, include_row_id: bool) -> Stri
   }
 }
 
-fn quote_identifier(identifier: &str) -> String {
+pub(super) fn quote_identifier(identifier: &str) -> String {
   format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 

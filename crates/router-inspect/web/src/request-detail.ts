@@ -128,6 +128,8 @@ export class RequestDetailView extends LitElement {
         <llm-request-overview
           .request=${request}
           .day=${this.detail.day}
+          .request_id=${stringField(request, "request_id") ?? this.summary?.request_id ?? ""}
+          .row_id=${this.detail.row_id}
           .timezone=${this.timezone}
         ></llm-request-overview>
       `;
