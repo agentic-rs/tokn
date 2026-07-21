@@ -13,6 +13,7 @@ import type {
   RequestFilters,
   RequestPage,
   RequestSummary,
+  RequestUrlPath,
   SessionDetail,
   SessionNodeDetail,
   SessionNodeSummary,
@@ -34,7 +35,7 @@ function isDetailTab(value: string | null): value is DetailTab {
 }
 
 function emptyFilters(): RequestFilters {
-  return { query: "", provider_id: "", status: "", errors_only: false };
+  return { query: "", provider_id: "", url_path: "", status: "", errors_only: false };
 }
 
 function requestDay(ts: number): string {
@@ -63,6 +64,10 @@ class InspectApp extends LitElement {
     load_more_error: { type: String },
     search_query: { type: String },
     provider_id: { type: String },
+    url_path: { type: String },
+    request_url_paths: { attribute: false },
+    request_url_paths_loading: { type: Boolean },
+    request_url_paths_error: { type: String },
     status_filter: { type: String },
     errors_only: { type: Boolean },
     applied_filters: { attribute: false },
@@ -105,6 +110,10 @@ class InspectApp extends LitElement {
   declare load_more_error: string | undefined;
   declare search_query: string;
   declare provider_id: string;
+  declare url_path: string;
+  declare request_url_paths: RequestUrlPath[];
+  declare request_url_paths_loading: boolean;
+  declare request_url_paths_error: string | undefined;
   declare status_filter: string;
   declare errors_only: boolean;
   declare applied_filters: RequestFilters;
@@ -135,6 +144,7 @@ class InspectApp extends LitElement {
   private session_node_load_id = 0;
   private session_list_load_id = 0;
   private request_days_load_id = 0;
+  private request_url_paths_load_id = 0;
   private sessions_loaded = false;
   private requested_request_id: string | undefined;
   private requested_request_row_id: string | undefined;
@@ -142,6 +152,7 @@ class InspectApp extends LitElement {
   private requested_session_node_id: string | undefined;
   private request_rows_context: string | undefined;
   private request_controller: AbortController | undefined;
+  private request_url_paths_controller: AbortController | undefined;
   private request_detail_controller: AbortController | undefined;
   private session_list_controller: AbortController | undefined;
   private session_list_load: Promise<boolean> | undefined;
@@ -161,6 +172,9 @@ class InspectApp extends LitElement {
     this.request_detail_state = "idle";
     this.search_query = "";
     this.provider_id = "";
+    this.url_path = "";
+    this.request_url_paths = [];
+    this.request_url_paths_loading = false;
     this.status_filter = "";
     this.errors_only = false;
     this.applied_filters = emptyFilters();
@@ -189,6 +203,7 @@ class InspectApp extends LitElement {
   disconnectedCallback() {
     window.removeEventListener("popstate", this.popstate_handler);
     this.request_controller?.abort();
+    this.request_url_paths_controller?.abort();
     this.request_detail_controller?.abort();
     this.session_list_controller?.abort();
     this.session_detail_controller?.abort();
@@ -204,12 +219,14 @@ class InspectApp extends LitElement {
     this.selected_day = day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : undefined;
     this.search_query = params.get("query") ?? "";
     this.provider_id = params.get("provider_id") ?? "";
+    this.url_path = params.get("url_path") ?? "";
     const status = params.get("status") ?? "";
     this.status_filter = /^\d{3}$/.test(status) ? status : "";
     this.errors_only = params.get("errors_only") === "true" || params.get("errors_only") === "1";
     this.applied_filters = {
       query: this.search_query,
       provider_id: this.provider_id,
+      url_path: this.url_path,
       status: this.status_filter,
       errors_only: this.errors_only
     };
@@ -248,6 +265,9 @@ class InspectApp extends LitElement {
       }
       if (this.applied_filters.provider_id) {
         params.set("provider_id", this.applied_filters.provider_id);
+      }
+      if (this.applied_filters.url_path) {
+        params.set("url_path", this.applied_filters.url_path);
       }
       if (this.applied_filters.status) {
         params.set("status", this.applied_filters.status);
@@ -321,9 +341,13 @@ class InspectApp extends LitElement {
     void this.loadRequestDays();
     let loaded: boolean;
     if (this.selected_day) {
+      void this.loadRequestUrlPaths(this.selected_day);
       loaded = await this.loadRequests();
     } else {
       loaded = await this.loadLatestRequests();
+      if (loaded && this.selected_day) {
+        void this.loadRequestUrlPaths(this.selected_day);
+      }
       if (loaded && this.selected_day && this.hasAppliedFilters()) {
         loaded = await this.loadRequests();
       }
@@ -392,7 +416,7 @@ class InspectApp extends LitElement {
 
   private requestContext(day = this.selected_day, filters = this.applied_filters): string | undefined {
     return day
-      ? JSON.stringify([day, filters.query, filters.provider_id, filters.status, filters.errors_only])
+      ? JSON.stringify([day, filters.query, filters.provider_id, filters.url_path, filters.status, filters.errors_only])
       : undefined;
   }
 
@@ -403,6 +427,9 @@ class InspectApp extends LitElement {
     }
     if (filters.provider_id) {
       params.set("provider_id", filters.provider_id);
+    }
+    if (filters.url_path) {
+      params.set("url_path", filters.url_path);
     }
     if (filters.status) {
       params.set("status", filters.status);
@@ -507,6 +534,34 @@ class InspectApp extends LitElement {
     } finally {
       if (load_id === this.request_days_load_id) {
         this.request_days_loading = false;
+      }
+    }
+  }
+
+  private async loadRequestUrlPaths(day: string) {
+    this.request_url_paths_controller?.abort();
+    const controller = new AbortController();
+    this.request_url_paths_controller = controller;
+    const load_id = ++this.request_url_paths_load_id;
+    this.request_url_paths_loading = true;
+    this.request_url_paths_error = undefined;
+    try {
+      const params = new URLSearchParams({ day });
+      const paths = await fetchJson<RequestUrlPath[]>(`/api/request-url-paths?${params.toString()}`, controller.signal);
+      if (load_id === this.request_url_paths_load_id && this.selected_day === day) {
+        this.request_url_paths = paths;
+      }
+    } catch (error) {
+      if (load_id === this.request_url_paths_load_id && !isAbortError(error)) {
+        this.request_url_paths = [];
+        this.request_url_paths_error = errorMessage(error, "Unable to load URL paths");
+      }
+    } finally {
+      if (load_id === this.request_url_paths_load_id) {
+        this.request_url_paths_loading = false;
+      }
+      if (this.request_url_paths_controller === controller) {
+        this.request_url_paths_controller = undefined;
       }
     }
   }
@@ -678,8 +733,10 @@ class InspectApp extends LitElement {
     }
     ++this.navigation_workflow_id;
     this.selected_day = day;
+    this.request_url_paths = [];
     this.resetRequestSelection();
     this.syncUrl("push");
+    void this.loadRequestUrlPaths(day);
     void this.loadRequests();
   }
 
@@ -708,6 +765,7 @@ class InspectApp extends LitElement {
     this.applied_filters = {
       query: this.search_query.trim(),
       provider_id: this.provider_id.trim(),
+      url_path: this.url_path,
       status: this.status_filter.trim(),
       errors_only: this.errors_only
     };
@@ -719,6 +777,7 @@ class InspectApp extends LitElement {
   private clearFilters() {
     this.search_query = "";
     this.provider_id = "";
+    this.url_path = "";
     this.status_filter = "";
     this.errors_only = false;
     this.applied_filters = emptyFilters();
@@ -732,6 +791,7 @@ class InspectApp extends LitElement {
     return Boolean(
       this.applied_filters.query
       || this.applied_filters.provider_id
+      || this.applied_filters.url_path
       || this.applied_filters.status
       || this.applied_filters.errors_only
     );
@@ -740,6 +800,7 @@ class InspectApp extends LitElement {
   private filtersChanged(): boolean {
     return this.search_query.trim() !== this.applied_filters.query
       || this.provider_id.trim() !== this.applied_filters.provider_id
+      || this.url_path !== this.applied_filters.url_path
       || this.status_filter.trim() !== this.applied_filters.status
       || this.errors_only !== this.applied_filters.errors_only;
   }
@@ -750,6 +811,13 @@ class InspectApp extends LitElement {
       providers.add(this.applied_filters.provider_id);
     }
     return [...providers].sort();
+  }
+
+  private urlPathOptions(): RequestUrlPath[] {
+    if (!this.url_path || this.request_url_paths.some((option) => option.url_path === this.url_path)) {
+      return this.request_url_paths;
+    }
+    return [{ url_path: this.url_path, request_count: 0 }, ...this.request_url_paths];
   }
 
   private ensureSessionsLoaded(force = false): Promise<boolean> {
@@ -1093,12 +1161,14 @@ class InspectApp extends LitElement {
     this.setActiveView("requests", false, null);
     this.search_query = "";
     this.provider_id = "";
+    this.url_path = "";
     this.status_filter = "";
     this.errors_only = false;
     this.applied_filters = emptyFilters();
     this.selected_day = requestDay(node.ts);
     this.resetRequestSelection();
     void this.loadRequestDays();
+    void this.loadRequestUrlPaths(this.selected_day);
     void this.loadRequests();
     const loaded = await this.loadRequestDetail(
       this.selected_day,
@@ -1116,6 +1186,7 @@ class InspectApp extends LitElement {
   private async loadRequestsView() {
     void this.loadRequestDays();
     if (this.selected_day) {
+      void this.loadRequestUrlPaths(this.selected_day);
       await this.loadRequests();
     } else {
       await this.loadLatestRequests();
@@ -1211,6 +1282,9 @@ class InspectApp extends LitElement {
             @click=${() => {
               void this.loadRequests();
               void this.loadRequestDays();
+              if (this.selected_day) {
+                void this.loadRequestUrlPaths(this.selected_day);
+              }
             }}
           >
             <span aria-hidden="true">↻</span> Refresh requests
@@ -1258,6 +1332,24 @@ class InspectApp extends LitElement {
             </datalist>
           </label>
           <label>
+            <span class="visually-hidden">URL path</span>
+            <select
+              class="url-path-filter"
+              .value=${this.url_path}
+              ?disabled=${!has_day || this.request_url_paths_loading}
+              @change=${(event: Event) => (this.url_path = (event.target as HTMLSelectElement).value)}
+            >
+              <option value="">${this.request_url_paths_loading ? "Loading URL paths…" : "Any URL path"}</option>
+              ${this.urlPathOptions().map(
+                (option) => html`
+                  <option value=${option.url_path}>
+                    ${option.url_path}${option.request_count ? ` · ${option.request_count.toLocaleString()}` : ""}
+                  </option>
+                `
+              )}
+            </select>
+          </label>
+          <label>
             <span class="visually-hidden">Exact response status</span>
             <input
               class="status-filter"
@@ -1286,6 +1378,7 @@ class InspectApp extends LitElement {
             : nothing}
         </form>
         ${this.request_days_error ? html`<p class="toolbar-warning" role="status">Day scan: ${this.request_days_error}</p>` : nothing}
+        ${this.request_url_paths_error ? html`<p class="toolbar-warning" role="status">URL paths: ${this.request_url_paths_error}</p>` : nothing}
       </section>
     `;
   }

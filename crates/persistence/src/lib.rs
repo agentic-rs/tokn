@@ -9,11 +9,11 @@ pub use requests::{read_request_row, RequestEventHandler};
 pub use sessions::SessionEventHandler;
 pub use viewer::{
   get_request, get_session, get_session_from_db, get_session_node_from_db, get_session_usage, is_valid_request_day,
-  list_latest_requests, list_request_days, list_requests, list_sessions, list_sessions_from_db, LatestRequests,
-  RequestDay, RequestDayState, RequestListOptions, SessionDetail, SessionMessage, SessionMessageTruncation,
-  SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary, SessionPart, SessionPartContent,
-  SessionPartEncoding, SessionPartOmissionReason, SessionRequestUsage, SessionSummary, SessionUsage,
-  StoredSessionDetail,
+  list_latest_requests, list_request_days, list_request_url_paths, list_requests, list_sessions, list_sessions_from_db,
+  LatestRequests, RequestDay, RequestDayState, RequestListOptions, RequestUrlPath, SessionDetail, SessionMessage,
+  SessionMessageTruncation, SessionNodeDetail, SessionNodeDetailTruncation, SessionNodeSummary, SessionPart,
+  SessionPartContent, SessionPartEncoding, SessionPartOmissionReason, SessionRequestUsage, SessionSummary,
+  SessionUsage, StoredSessionDetail,
 };
 
 use bytes::Bytes;

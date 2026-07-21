@@ -2,6 +2,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{params_from_iter, Connection};
 use std::path::Path;
 
+use super::url_paths::register_url_path_function;
 use super::{LatestRequests, RequestCursor, RequestListOptions, RequestPage, RequestSummary};
 use crate::viewer::database::open_readonly;
 use crate::viewer::days::{request_day_files, DayFile};
@@ -129,6 +130,7 @@ fn list_day_requests(
   limit: Option<usize>,
 ) -> Result<Vec<RequestSummary>> {
   let schema = RequestSchema::read(conn)?;
+  register_url_path_function(conn)?;
   if schema.is_split() {
     list_split_day_requests(conn, day, options, limit, schema)
   } else {
@@ -163,6 +165,7 @@ fn list_split_day_requests(
     sql.push_str(" AND m.provider_id = ?");
     values.push(SqlValue::Text(provider_id.to_string()));
   }
+  append_url_path_filter(&mut sql, &mut values, "d.inbound_req_url", options.url_path.as_deref())?;
   if let Some(status) = options.status {
     sql.push_str(" AND COALESCE(d.inbound_resp_status, u.outbound_resp_status, c.status) = ?");
     values.push(SqlValue::Integer(i64::from(status)));
@@ -235,6 +238,7 @@ fn list_legacy_day_requests(
     sql.push_str(" AND provider_id = ?");
     values.push(SqlValue::Text(provider_id.to_string()));
   }
+  append_url_path_filter(&mut sql, &mut values, "inbound_req_url", options.url_path.as_deref())?;
   if let Some(status) = options.status {
     sql.push_str(" AND COALESCE(inbound_resp_status, outbound_resp_status, status) = ?");
     values.push(SqlValue::Integer(i64::from(status)));
@@ -270,6 +274,20 @@ fn list_legacy_day_requests(
     })?
     .collect::<rusqlite::Result<Vec<_>>>()?;
   Ok(rows)
+}
+
+fn append_url_path_filter(
+  sql: &mut String,
+  values: &mut Vec<SqlValue>,
+  column: &str,
+  url_path: Option<&str>,
+) -> Result<()> {
+  let Some(url_path) = url_path.filter(|value| !value.is_empty()) else {
+    return Ok(());
+  };
+  sql.push_str(&format!(" AND tokn_url_path({column}) = ?"));
+  values.push(SqlValue::Text(url_path.to_string()));
+  Ok(())
 }
 
 fn append_cursor_condition(

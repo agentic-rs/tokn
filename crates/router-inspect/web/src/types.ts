@@ -162,6 +162,11 @@ export interface RequestDay {
   state: RequestDayState;
 }
 
+export interface RequestUrlPath {
+  url_path: string;
+  request_count: number;
+}
+
 export type ViewName = "requests" | "sessions";
 export type LoadState = "idle" | "loading" | "ready" | "error";
 export type DetailTab = "overview" | "client" | "provider" | "raw";
@@ -170,6 +175,7 @@ export type TimezoneMode = "local" | "utc";
 export interface RequestFilters {
   query: string;
   provider_id: string;
+  url_path: string;
   status: string;
   errors_only: boolean;
 }
