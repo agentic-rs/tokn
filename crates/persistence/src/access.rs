@@ -53,6 +53,7 @@ impl AccessDb {
     let path = path.as_ref().to_path_buf();
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent)?;
+      secure_dir(parent)?;
     }
     let conn = Connection::open(&path)?;
     Self::initialize(path, conn, true)
@@ -145,6 +146,20 @@ impl AccessDb {
 }
 
 #[cfg(unix)]
+fn secure_dir(path: &Path) -> Result<()> {
+  use std::os::unix::fs::PermissionsExt;
+  let mut permissions = std::fs::metadata(path)?.permissions();
+  permissions.set_mode(0o700);
+  std::fs::set_permissions(path, permissions)?;
+  Ok(())
+}
+
+#[cfg(not(unix))]
+fn secure_dir(_path: &Path) -> Result<()> {
+  Ok(())
+}
+
+#[cfg(unix)]
 fn secure_file(path: &Path) -> Result<()> {
   use std::os::unix::fs::PermissionsExt;
   let mut permissions = std::fs::metadata(path)?.permissions();
@@ -185,5 +200,23 @@ mod tests {
     assert_eq!(db.list_keys().unwrap().len(), 1);
     assert!(db.revoke_key("key-id", 456).unwrap());
     assert_eq!(db.find_key("key-id").unwrap().unwrap().revoked_at, Some(456));
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn secures_the_database_directory_and_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = std::env::temp_dir().join(format!("tokn-access-permissions-{}", uuid::Uuid::new_v4()));
+    let path = directory.join("access.db");
+    let db = AccessDb::open(&path).unwrap();
+
+    assert_eq!(
+      std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+      0o700
+    );
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    drop(db);
+    std::fs::remove_dir_all(directory).unwrap();
   }
 }

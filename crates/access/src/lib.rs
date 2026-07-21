@@ -26,7 +26,7 @@ impl ProviderAccess {
     if provider_ids.is_empty() {
       return Ok(Self::All);
     }
-    if provider_ids.iter().any(|provider| provider == "*") {
+    if provider_ids.iter().any(|provider| provider.trim() == "*") {
       if provider_ids.len() != 1 {
         bail!("provider `*` cannot be combined with specific provider ids");
       }
@@ -93,13 +93,26 @@ impl AccessContext {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreatedApiKey {
   pub id: String,
   pub name: String,
   pub token: String,
   pub providers: ProviderAccess,
   pub created_at: i64,
+}
+
+impl std::fmt::Debug for CreatedApiKey {
+  fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    formatter
+      .debug_struct("CreatedApiKey")
+      .field("id", &self.id)
+      .field("name", &self.name)
+      .field("token", &"<redacted>")
+      .field("providers", &self.providers)
+      .field("created_at", &self.created_at)
+      .finish()
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,6 +291,25 @@ mod tests {
       ProviderAccess::from_provider_ids(Vec::new()).unwrap(),
       ProviderAccess::All
     );
+  }
+
+  #[test]
+  fn trims_provider_ids_before_wildcard_detection() {
+    assert_eq!(
+      ProviderAccess::from_provider_ids(vec!["  *  ".into()]).unwrap(),
+      ProviderAccess::All
+    );
+    assert!(ProviderAccess::from_provider_ids(vec![" * ".into(), "openai".into()]).is_err());
+  }
+
+  #[test]
+  fn created_key_debug_output_redacts_the_token() {
+    let (_temp, store) = store();
+    let created = store.create_key("client", Vec::new()).unwrap();
+    let output = format!("{created:?}");
+
+    assert!(output.contains("<redacted>"));
+    assert!(!output.contains(&created.token));
   }
 
   #[test]

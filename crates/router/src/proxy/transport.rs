@@ -270,8 +270,8 @@ async fn route_intercepted_request(
   };
 
   if should_authenticate_proxy_request(&state, resolved_mode) {
-    if let Err(error) = crate::api::access::authenticate_managed_request(&state, &mut req) {
-      let mut response = crate::api::access::unauthorized(error);
+    if let Err(error) = crate::api::access::authenticate_managed_request(&state, &mut req).await {
+      let mut response = crate::api::access::authentication_error_response(error);
       close_intercepted_connection_on_error(&mut response);
       return Ok(response);
     }
