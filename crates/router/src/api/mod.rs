@@ -108,6 +108,8 @@ impl LiveAppState {
 pub struct AppState {
   /// Inbound client credentials and per-key provider authorization.
   pub access: Arc<tokn_access::AccessStore>,
+  /// Explicit switch for client API-key enforcement. Passthrough modes ignore it.
+  pub api_key_enabled: bool,
   pub inventory: Arc<AccountInventory>,
   pub pool: Arc<AccountPool>,
   pub provider_registry: Arc<ProviderRegistry>,
@@ -436,6 +438,7 @@ fn build_state_inner(
   let proxy_switch_pipeline = build_proxy_switch_pipeline(pool.clone(), http.clone(), events.clone());
   Ok(AppState {
     access: Arc::new(tokn_access::AccessStore::disabled()),
+    api_key_enabled: cfg.api_key.enabled,
     inventory,
     pool,
     provider_registry,
@@ -1009,12 +1012,9 @@ mod tests {
     let temp = tempfile::tempdir().unwrap();
     let access = tokn_access::AccessStore::open(temp.path().join("access.db")).unwrap();
     let created = access.create_key("test-client", providers).unwrap();
-    let mut state = build_state(
-      &Config::default(),
-      &[core_account(zai_account())],
-      Arc::new(EventBus::noop()),
-    )
-    .unwrap();
+    let mut cfg = Config::default();
+    cfg.api_key.enabled = true;
+    let mut state = build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap();
     state.access = Arc::new(access);
     (state, created.token)
   }
@@ -1031,6 +1031,41 @@ mod tests {
       response.headers().get(axum::http::header::WWW_AUTHENTICATE).unwrap(),
       "Bearer"
     );
+  }
+
+  #[tokio::test]
+  async fn enabled_api_key_authentication_without_keys_fails_closed() {
+    let mut cfg = Config::default();
+    cfg.api_key.enabled = true;
+    let state = build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap();
+
+    let response = router(state)
+      .oneshot(Request::get("/v1/providers").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+  }
+
+  #[tokio::test]
+  async fn configured_keys_are_not_enforced_when_api_key_authentication_is_disabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let access = tokn_access::AccessStore::open(temp.path().join("access.db")).unwrap();
+    access.create_key("test-client", Vec::new()).unwrap();
+    let mut state = build_state(
+      &Config::default(),
+      &[core_account(zai_account())],
+      Arc::new(EventBus::noop()),
+    )
+    .unwrap();
+    state.access = Arc::new(access);
+
+    let response = router(state)
+      .oneshot(Request::get("/v1/providers").body(Body::empty()).unwrap())
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
   }
 
   #[tokio::test]

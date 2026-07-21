@@ -84,7 +84,7 @@ impl AccountSelector for PoolAccountSelector {
   }
 }
 
-fn allowed_provider_ids(ctx: &PipelineCtx) -> Result<Option<BTreeSet<String>>, PipelineError> {
+pub(crate) fn allowed_provider_ids(ctx: &PipelineCtx) -> Result<Option<BTreeSet<String>>, PipelineError> {
   let Some(value) = ctx.config.get(ACCESS_ALLOWED_PROVIDERS_KEY) else {
     return Ok(None);
   };

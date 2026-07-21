@@ -100,6 +100,16 @@ impl ResolveStage for ProxyProviderResolve {
         },
       )
     })?;
+    let allowed_providers = super::pool::allowed_provider_ids(ctx)?;
+    if allowed_providers
+      .as_ref()
+      .is_some_and(|providers| !providers.contains(provider_id))
+    {
+      return Err(PipelineError::permanent(
+        Stage::Resolve,
+        RequestsError::ProviderAccessDenied,
+      ));
+    }
 
     let Some(request_endpoint) = ctx.request_endpoint.resolved() else {
       let provider_request_kind = ctx

@@ -160,12 +160,6 @@ impl AccessStore {
     &self.path
   }
 
-  /// Authentication switches on permanently when the first key is created.
-  /// Revoking the final key therefore fails closed instead of disabling auth.
-  pub fn is_enabled(&self) -> Result<bool> {
-    Ok(self.database.lock().has_keys()?)
-  }
-
   pub fn create_key(&self, name: impl Into<String>, provider_ids: Vec<String>) -> Result<CreatedApiKey> {
     let name = name.into();
     if name.trim().is_empty() {
@@ -289,11 +283,9 @@ mod tests {
   #[test]
   fn key_round_trip_and_revocation() {
     let (_temp, store) = store();
-    assert!(!store.is_enabled().unwrap());
     let created = store
       .create_key("client", vec!["openai".into(), "github-copilot".into()])
       .unwrap();
-    assert!(store.is_enabled().unwrap());
 
     let context = store.authenticate(Some(&created.token)).unwrap();
     assert_eq!(context.key_id.as_deref(), Some(created.id.as_str()));
@@ -305,7 +297,6 @@ mod tests {
       store.authenticate(Some(&created.token)),
       Err(AuthenticationError::Revoked)
     );
-    assert!(store.is_enabled().unwrap());
   }
 
   #[test]

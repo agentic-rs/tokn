@@ -21,6 +21,7 @@ use axum::http::{Method, Request, StatusCode};
 use bytes::Bytes;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokn_access::{AccessContext, ProviderAccess};
 use tokn_config::RouteMode;
 use tokn_core::account::{AccountTier, AuthType};
 use tokn_core::event::EventBus;
@@ -890,6 +891,30 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
   let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
   let body = String::from_utf8_lossy(&body);
   assert!(body.contains("recognized provider URL"), "unexpected body: {body}");
+}
+
+#[tokio::test]
+async fn proxy_switch_rejects_a_provider_outside_the_api_key_allowlist() {
+  let mut cfg = Config::default();
+  cfg.server.route_mode = RouteMode::Switch;
+  let state = build_proxy_state(&cfg, &[openai_account()], Arc::new(EventBus::noop())).unwrap();
+
+  let mut req = Request::builder()
+    .method(Method::GET)
+    .uri("/v1/models")
+    .body(())
+    .unwrap();
+  req.extensions_mut().insert(AccessContext {
+    key_id: Some("key-test".into()),
+    key_name: Some("restricted-client".into()),
+    providers: ProviderAccess::from_provider_ids(vec!["deepseek".into()]).unwrap(),
+  });
+  let (parts, ()) = req.into_parts();
+
+  let resp =
+    proxy_switch_via_pipeline_inner(&state, "api.openai.com", 443, "https", None, None, parts, Bytes::new()).await;
+
+  assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

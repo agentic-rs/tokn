@@ -84,8 +84,15 @@ export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
 
 ## Client API Keys
 
-Client authentication is disabled until the first API key is created. Create a
-key with access to every current and future provider (the default):
+Client authentication is controlled explicitly in `config.toml` and is disabled
+by default:
+
+```toml
+[api_key]
+enabled = true
+```
+
+Create a key with access to every current and future provider (the default):
 
 ```sh
 tokn-gateway api-key create my-client
@@ -107,11 +114,13 @@ curl http://127.0.0.1:4141/v1/models \
   -H "authorization: Bearer $TOKN_API_KEY"
 ```
 
-Once any key has been created, `/v1/*` and profile-prefixed `/{profile}/v1/*`
-routes require a valid key. `GET /v1/models` and `GET /v1/providers` expose
-only permitted providers, and inference routing, retries, and session affinity
-remain inside the key's provider allowlist. Provider permissions default to
-`*`; an explicit `*` cannot be combined with specific provider ids.
+When `[api_key].enabled` is true, gateway-managed `/v1/*` and
+profile-prefixed `/{profile}/v1/*` routes require a valid key. Intercepted proxy
+requests also require a key whenever their effective route mode is `route`,
+`exact`, `fuzzy`, or `switch`. `GET /v1/models` and `GET /v1/providers` expose
+only permitted providers, and routing, retries, session affinity, and proxy
+switching remain inside the key's provider allowlist. Provider permissions
+default to `*`; an explicit `*` cannot be combined with specific provider ids.
 
 List or revoke keys with:
 
@@ -120,11 +129,12 @@ tokn-gateway api-key list
 tokn-gateway api-key revoke KEY_ID
 ```
 
-Revoking the last key leaves authentication enabled and fails closed. Client
-API keys apply to the HTTP API, not the optional CONNECT proxy. When client
-authentication is enabled, gateway credentials are removed before upstream
-dispatch; API passthrough mode therefore cannot reuse that header as an
-upstream provider credential.
+Enabling authentication with no active keys fails closed. Gateway credentials
+are removed before managed upstream dispatch. Effective `passthrough` mode is
+the exception: it bypasses API-key authentication and the authentication layer
+does not remove `Authorization` or `x-api-key`. Raw CONNECT tunnels and hosts in
+`proxy_mode.passthrough_hosts` cannot be inspected, so they are also left
+untouched and unauthenticated.
 
 ## Config And Data
 
@@ -150,6 +160,9 @@ tokn-gateway config path
 Minimal config:
 
 ```toml
+[api_key]
+enabled = false
+
 [server]
 host = "127.0.0.1"
 port = 4141
@@ -419,7 +432,10 @@ route_mode = "route"
 
 `tokn-gateway serve --with-proxy` runs both the API listener and proxy in one
 process. API routes use `[defaults]` or a named profile; proxy interception uses
-`[proxy_mode].route_mode` unless overridden with `--proxy-route-mode`.
+`[proxy_mode].route_mode` unless overridden with `--proxy-route-mode`. With
+`[api_key].enabled = true`, intercepted requests in any managed mode require a
+client key. Passthrough requests and non-intercepted CONNECT tunnels preserve
+the client's credentials and bypass the check.
 
 ## LAN Bootstrap
 

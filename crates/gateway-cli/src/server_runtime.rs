@@ -79,8 +79,12 @@ pub fn load_accounts(config_path: Option<&Path>) -> Result<Vec<AccountConfig>> {
   Ok(store.accounts)
 }
 
-pub fn load_access_store() -> Result<Arc<tokn_access::AccessStore>> {
-  Ok(Arc::new(tokn_access::AccessStore::open_default()?))
+pub fn load_access_store(enabled: bool) -> Result<Arc<tokn_access::AccessStore>> {
+  if enabled {
+    Ok(Arc::new(tokn_access::AccessStore::open_default()?))
+  } else {
+    Ok(Arc::new(tokn_access::AccessStore::disabled()))
+  }
 }
 
 pub fn build_state(
@@ -141,7 +145,7 @@ pub fn is_loopback(host: &str) -> bool {
 pub fn ensure_bind_host(host: &str, insecure_allow_remote: bool) -> Result<()> {
   if !insecure_allow_remote && !is_loopback(host) {
     anyhow::bail!(
-      "refusing to bind to non-loopback host '{host}' without --insecure-allow-remote; API-key auth covers /v1 routes, not every listener or route"
+      "refusing to bind to non-loopback host '{host}' without --insecure-allow-remote; API-key auth does not cover tunnels, passthrough traffic, or helper routes"
     );
   }
   Ok(())

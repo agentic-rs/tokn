@@ -82,13 +82,6 @@ impl AccessDb {
     &self.path
   }
 
-  pub fn has_keys(&self) -> Result<bool> {
-    let count: i64 = self
-      .conn
-      .query_row("SELECT COUNT(*) FROM api_keys", [], |row| row.get(0))?;
-    Ok(count > 0)
-  }
-
   pub fn insert_key(&self, record: &NewApiKeyRecord<'_>) -> Result<bool> {
     let changed = self.conn.execute(
       "INSERT OR IGNORE INTO api_keys (id, name, secret_hash, allowed_providers, created_at)
@@ -183,10 +176,8 @@ mod tests {
   fn creates_v0_2_1_schema_and_round_trips_records() {
     let db = AccessDb::open_in_memory().unwrap();
     assert_eq!(latest_version(), 1);
-    assert!(!db.has_keys().unwrap());
     assert!(db.insert_key(&record(&[1; 32])).unwrap());
     assert!(!db.insert_key(&record(&[1; 32])).unwrap());
-    assert!(db.has_keys().unwrap());
 
     let found = db.find_key("key-id").unwrap().unwrap();
     assert_eq!(found.name, "client");

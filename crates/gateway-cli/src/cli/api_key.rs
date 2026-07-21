@@ -39,13 +39,14 @@ fn create(store: &AccessStore, args: CreateArgs) -> Result<()> {
   println!("providers: {}", created.providers.display());
   println!("key: {}", created.token);
   println!("Store this key now; it will not be shown again.");
+  println!("Enable enforcement with `[api_key].enabled = true` in config.toml.");
   Ok(())
 }
 
 fn list(store: &AccessStore) -> Result<()> {
   let keys = store.list_keys()?;
   if keys.is_empty() {
-    println!("(no API keys; client authentication is disabled)");
+    println!("(no API keys)");
     return Ok(());
   }
   println!("ID\tNAME\tPROVIDERS\tSTATUS");

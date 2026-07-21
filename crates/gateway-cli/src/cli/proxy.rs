@@ -56,7 +56,7 @@ pub struct StartArgs {
   pub passthrough: bool,
   #[arg(long)]
   pub ca_dir: Option<PathBuf>,
-  /// Allow non-loopback binding (insecure: the CONNECT proxy has no client authentication).
+  /// Allow non-loopback binding (insecure: tunnels and passthrough traffic are unauthenticated).
   #[arg(long)]
   pub insecure_allow_remote: bool,
   /// Skip outbound proxy for this run.
@@ -181,7 +181,8 @@ async fn start(cfg_path: Option<PathBuf>, args: StartArgs) -> Result<()> {
 
   let (events, receiver, handlers, archive_runtime) = crate::server_runtime::build_event_bus(&cfg)?;
   let _event_thread = tokn_core::event::spawn_event_loop(receiver, handlers);
-  let state = crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
+  let mut state = crate::server_runtime::build_proxy_state_for_route_mode(&cfg, &accounts, events.clone(), route_mode)?;
+  state.access = crate::server_runtime::load_access_store(cfg.api_key.enabled)?;
   let n = state.pool.len();
   let addr: SocketAddr = crate::server_runtime::resolve_bind_addr(&host, port, args.insecure_allow_remote)
     .with_context(|| format!("parse bind addr {host}:{port}"))?;
