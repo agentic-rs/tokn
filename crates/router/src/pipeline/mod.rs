@@ -43,6 +43,19 @@ mod tests {
   }
 
   #[test]
+  fn parser_uses_codex_turn_metadata_as_session_fallback() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+      "x-codex-turn-metadata",
+      HeaderValue::from_static(r#"{"session_id":"session-meta","thread_id":"thread-meta","turn_id":"turn-meta"}"#),
+    );
+
+    let parsed = ResponsesParser.parse(headers, json!({"model": "gpt-5", "input": "hi"}));
+
+    assert_eq!(parsed.meta.session_id.as_deref(), Some("session-meta"));
+  }
+
+  #[test]
   fn infers_stream_from_accept_header_when_body_omits_it() {
     let mut headers = HeaderMap::new();
     headers.insert(

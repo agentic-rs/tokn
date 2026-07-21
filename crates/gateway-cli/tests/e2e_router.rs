@@ -232,6 +232,10 @@ async fn router_stream_returns_sse_and_persists_drained_stream_row() {
         .header("accept", "text/event-stream")
         .header("content-type", "application/json")
         .header("x-request-id", request_id)
+        .header(
+          "x-codex-turn-metadata",
+          r#"{"session_id":"sess-stream-meta","thread_id":"thread-stream-meta","turn_id":"turn-stream-meta"}"#,
+        )
         .body(Body::from(raw_body.clone()))
         .unwrap(),
     )
@@ -270,6 +274,11 @@ async fn router_stream_returns_sse_and_persists_drained_stream_row() {
   let usage = json_obj(&row, "usage_json");
   assert_eq!(text(&row, "endpoint").as_deref(), Some("chat_completions"));
   assert_eq!(text(&row, "model").as_deref(), Some("glm-4.7"));
+  assert_eq!(text(&row, "session_id").as_deref(), Some("sess-stream-meta"));
+  assert_eq!(
+    harness.usage_session_id(request_id).as_deref(),
+    Some("sess-stream-meta")
+  );
   assert_eq!(params.get("stream").and_then(Value::as_bool), Some(true));
   assert_eq!(int(&row, "status"), Some(200));
   assert_eq!(int(&row, "outbound_resp_status"), Some(200));

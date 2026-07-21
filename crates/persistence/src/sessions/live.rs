@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokn_core::event::{Event, EventHandler};
 use tokn_core::request_event::{ExtractedSummary, RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
-use tokn_headers::inbound::{first_present, PARENT_THREAD_ID_HEADERS, THREAD_ID_HEADERS};
+use tokn_headers::inbound::inbound_correlation;
 use tokn_headers::keys::X_PARENT_SESSION_ID;
 
 const PENDING_RETENTION_MS: i64 = 24 * 60 * 60 * 1_000;
@@ -115,13 +115,18 @@ impl SessionEventHandler {
         self.pending.insert(request_id, pending);
       }
       RequestEventPayload::Stage(StageEvent::Extract(summary)) => {
+        let correlation = inbound_correlation(&summary.headers);
         let pending = self
           .pending
           .entry(request_id)
           .or_insert_with(|| PendingSession::new(event.ts));
-        pending.session_id = summary.session_id.as_ref().map(ToString::to_string);
-        pending.thread_id = first_present(&summary.headers, THREAD_ID_HEADERS).map(str::to_string);
-        pending.parent_thread_id = first_present(&summary.headers, PARENT_THREAD_ID_HEADERS).map(str::to_string);
+        pending.session_id = summary
+          .session_id
+          .clone()
+          .or(correlation.session_id)
+          .map(|value| value.to_string());
+        pending.thread_id = correlation.thread_id.map(|value| value.to_string());
+        pending.parent_thread_id = correlation.parent_thread_id.map(|value| value.to_string());
         pending.parent_session_id = summary
           .headers
           .get(&X_PARENT_SESSION_ID)
@@ -257,8 +262,10 @@ mod tests {
     let mut handler = SessionEventHandler::new(path).unwrap();
     let mut headers = HeaderMap::new();
     headers.insert(&X_PARENT_SESSION_ID, "parent-session");
-    headers.insert("thread-id", "thread-live");
-    headers.insert("x-codex-parent-thread-id", "thread-parent");
+    headers.insert(
+      "x-codex-turn-metadata",
+      r#"{"session_id":"session-live","thread_id":"thread-live","parent_thread_id":"thread-parent","turn_id":"turn-live"}"#,
+    );
 
     emit(
       &mut handler,

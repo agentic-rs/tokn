@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use rusqlite::OptionalExtension;
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -8,11 +9,12 @@ use tokio::time::{sleep, Duration};
 use tokn_config::{Config, ModelFamily, RouteMode};
 use tokn_core::account::{AccountConfig, AccountTier, AuthType, Secret};
 use tokn_core::event::{spawn_event_loop, EventBus};
-use tokn_persistence::{read_request_row, RequestEventHandler};
+use tokn_persistence::{read_request_row, RequestEventHandler, UsageEventHandler};
 
 pub struct RequestsHarness {
   _tmp: TempDir,
   pub requests_dir: PathBuf,
+  pub usage_db: PathBuf,
   pub events: Arc<EventBus>,
   event_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -21,13 +23,16 @@ impl RequestsHarness {
   pub fn new() -> Self {
     let tmp = tempfile::tempdir().expect("create temp db dir");
     let requests_dir = tmp.path().join("requests");
+    let usage_db = tmp.path().join("usage.db");
     let events = Arc::new(EventBus::new(1024));
     let receiver = events.subscribe();
-    let handler = RequestEventHandler::new(requests_dir.clone()).expect("create requests event handler");
-    let event_thread = spawn_event_loop(receiver, vec![Box::new(handler)]);
+    let request_handler = RequestEventHandler::new(requests_dir.clone()).expect("create requests event handler");
+    let usage_handler = UsageEventHandler::new(usage_db.clone()).expect("create usage event handler");
+    let event_thread = spawn_event_loop(receiver, vec![Box::new(request_handler), Box::new(usage_handler)]);
     Self {
       _tmp: tmp,
       requests_dir,
+      usage_db,
       events,
       event_thread: Some(event_thread),
     }
@@ -50,6 +55,19 @@ impl RequestsHarness {
     if let Some(thread) = self.event_thread.take() {
       thread.join().expect("join event loop");
     }
+  }
+
+  pub fn usage_session_id(&self, request_id: &str) -> Option<String> {
+    rusqlite::Connection::open(&self.usage_db)
+      .expect("open usage database")
+      .query_row(
+        "SELECT session_id FROM requests WHERE request_id = ?1",
+        [request_id],
+        |row| row.get(0),
+      )
+      .optional()
+      .expect("read usage session id")
+      .flatten()
   }
 }
 

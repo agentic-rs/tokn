@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
-use tokn_headers::inbound::{first_present_smol, PROJECT_ID_HEADERS, SESSION_ID_HEADERS};
+use tokn_headers::inbound::{first_present_smol, inbound_correlation, PROJECT_ID_HEADERS};
 use tokn_headers::HeaderMap;
 
 /// Minimal field set peeled off the inbound JSON body. Everything else
@@ -74,7 +74,7 @@ impl ExtractStage for PassthroughExtract {
     // initiator stays unknown for persistence purposes.
     let initiator = header_initiator.clone();
 
-    let session_id = first_present_smol(&headers, SESSION_ID_HEADERS);
+    let session_id = inbound_correlation(&headers).session_id;
     let project_id = first_present_smol(&headers, PROJECT_ID_HEADERS);
 
     let route_mode_hint = header_str(&headers, "x-route-mode")
@@ -214,5 +214,21 @@ mod tests {
     assert!(ex.agent_id.is_none());
     assert_eq!(ex.initiator.as_deref(), Some("agent"));
     assert_eq!(ex.header_initiator.as_deref(), Some("agent"));
+  }
+
+  #[tokio::test]
+  async fn session_id_falls_back_to_codex_turn_metadata() {
+    let body = Bytes::from(r#"{"model":"m"}"#);
+    let headers = header_map(&[(
+      "x-codex-turn-metadata",
+      r#"{"session_id":"session-meta","thread_id":"thread-meta","turn_id":"turn-meta"}"#,
+    )]);
+
+    let ex = PassthroughExtract
+      .extract(&ctx(), raw_with_body(body, headers))
+      .await
+      .unwrap();
+
+    assert_eq!(ex.session_id.as_deref(), Some("session-meta"));
   }
 }
