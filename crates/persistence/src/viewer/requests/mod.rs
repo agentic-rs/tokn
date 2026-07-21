@@ -9,7 +9,8 @@ pub use cursor::{InvalidRequestCursor, RequestCursor};
 pub use detail::{get_request, get_request_payload};
 pub use list::{list_latest_requests, list_requests};
 pub use llm_summary::{
-  get_request_llm_summary, LlmMessagePreview, LlmRequestContentSummary, LlmToolCallSummary, LlmToolDefinitionSummary,
+  get_request_llm_message, get_request_llm_summary, get_request_llm_tool_definition, LlmItemDetail, LlmMessageSummary,
+  LlmRequestContentSummary, LlmToolDefinitionSummary,
 };
 pub use types::{
   InvalidRequestPayloadField, LatestRequests, RequestDetail, RequestListOptions, RequestPage, RequestPayload,

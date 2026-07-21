@@ -2,7 +2,7 @@ use flate2::read::GzDecoder;
 use rusqlite::types::ValueRef;
 use rusqlite::{params_from_iter, OptionalExtension};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::Read;
 use std::path::Path;
 
@@ -13,90 +13,141 @@ use crate::viewer::schema::RequestSchema;
 use crate::Result;
 
 const MAX_DECODED_BODY_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_MESSAGE_PREVIEWS: usize = 6;
-const MAX_TOOL_DEFINITIONS: usize = 12;
-const MAX_TOOL_CALLS: usize = 8;
 const MAX_PREVIEW_CHARS: usize = 280;
+const MAX_DESCRIPTION_CHARS: usize = 240;
 const MAX_LABEL_CHARS: usize = 120;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct LlmMessagePreview {
+pub struct LlmMessageSummary {
+  pub index: usize,
   pub role: String,
   pub phase: String,
-  pub text: Option<String>,
+  pub kind: String,
+  pub preview: Option<String>,
   pub truncated: bool,
+  pub content_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct LlmToolDefinitionSummary {
+  pub index: usize,
   pub name: String,
   pub kind: String,
+  pub description: Option<String>,
+  pub truncated: bool,
+  pub schema_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct LlmToolCallSummary {
-  pub name: String,
-  pub kind: String,
-  pub phase: String,
-  pub status: Option<String>,
-  pub argument_bytes: usize,
-}
-
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct LlmRequestContentSummary {
-  pub messages_total: usize,
-  pub messages: Vec<LlmMessagePreview>,
-  pub tool_definitions_total: usize,
+  pub messages: Vec<LlmMessageSummary>,
   pub tool_definitions: Vec<LlmToolDefinitionSummary>,
-  pub tool_calls_total: usize,
-  pub tool_calls: Vec<LlmToolCallSummary>,
-  pub tool_results_total: usize,
   pub warning: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct LlmItemDetail {
+  pub index: usize,
+  pub value: Value,
+}
+
+struct CollectedMessage {
+  summary: LlmMessageSummary,
+  value: Value,
+}
+
+struct CollectedToolDefinition {
+  summary: LlmToolDefinitionSummary,
+  value: Value,
+}
+
 #[derive(Default)]
-struct SummaryBuilder {
-  messages: Vec<LlmMessagePreview>,
-  tool_definitions: Vec<LlmToolDefinitionSummary>,
-  tool_calls: Vec<LlmToolCallSummary>,
-  tool_results_total: usize,
+struct CollectedContent {
+  messages: Vec<CollectedMessage>,
+  tool_definitions: Vec<CollectedToolDefinition>,
   warnings: Vec<String>,
 }
 
-impl SummaryBuilder {
-  fn finish(mut self) -> LlmRequestContentSummary {
-    let messages_total = self.messages.len();
-    let tool_definitions_total = self.tool_definitions.len();
-    let tool_calls_total = self.tool_calls.len();
-    retain_last(&mut self.messages, MAX_MESSAGE_PREVIEWS);
-    self.tool_definitions.truncate(MAX_TOOL_DEFINITIONS);
-    retain_last(&mut self.tool_calls, MAX_TOOL_CALLS);
-    LlmRequestContentSummary {
-      messages_total,
-      messages: self.messages,
-      tool_definitions_total,
-      tool_definitions: self.tool_definitions,
-      tool_calls_total,
-      tool_calls: self.tool_calls,
-      tool_results_total: self.tool_results_total,
-      warning: (!self.warnings.is_empty()).then(|| self.warnings.join("; ")),
-    }
-  }
-
+impl CollectedContent {
   fn warning(&mut self, context: &str, error: impl std::fmt::Display) {
     self.warnings.push(format!("{context}: {error}"));
   }
+
+  fn into_summary(self) -> LlmRequestContentSummary {
+    LlmRequestContentSummary {
+      messages: self.messages.into_iter().map(|message| message.summary).collect(),
+      tool_definitions: self
+        .tool_definitions
+        .into_iter()
+        .map(|definition| definition.summary)
+        .collect(),
+      warning: (!self.warnings.is_empty()).then(|| self.warnings.join("; ")),
+    }
+  }
 }
 
-/// Return a bounded semantic summary of the persisted LLM request and response
-/// payloads. Large bodies stay inside the persistence layer and are never
-/// returned wholesale by this query.
+/// Return the complete semantic index for an LLM request. The response is
+/// limited to short previews and metadata; complete message and definition
+/// values are available through the item detail queries.
 pub fn get_request_llm_summary(
   requests_dir: &Path,
   day: &str,
   request_id: &str,
   row_id: Option<i64>,
 ) -> Result<Option<LlmRequestContentSummary>> {
+  Ok(load_request_content(requests_dir, day, request_id, row_id)?.map(CollectedContent::into_summary))
+}
+
+pub fn get_request_llm_message(
+  requests_dir: &Path,
+  day: &str,
+  request_id: &str,
+  row_id: Option<i64>,
+  message_index: usize,
+) -> Result<Option<LlmItemDetail>> {
+  let Some(content) = load_request_content(requests_dir, day, request_id, row_id)? else {
+    return Ok(None);
+  };
+  Ok(
+    content
+      .messages
+      .into_iter()
+      .nth(message_index)
+      .map(|message| LlmItemDetail {
+        index: message_index,
+        value: message.value,
+      }),
+  )
+}
+
+pub fn get_request_llm_tool_definition(
+  requests_dir: &Path,
+  day: &str,
+  request_id: &str,
+  row_id: Option<i64>,
+  tool_index: usize,
+) -> Result<Option<LlmItemDetail>> {
+  let Some(content) = load_request_content(requests_dir, day, request_id, row_id)? else {
+    return Ok(None);
+  };
+  Ok(
+    content
+      .tool_definitions
+      .into_iter()
+      .nth(tool_index)
+      .map(|definition| LlmItemDetail {
+        index: tool_index,
+        value: definition.value,
+      }),
+  )
+}
+
+fn load_request_content(
+  requests_dir: &Path,
+  day: &str,
+  request_id: &str,
+  row_id: Option<i64>,
+) -> Result<Option<CollectedContent>> {
   let Some(day_file) = request_day_files(requests_dir)?
     .into_iter()
     .find(|file| file.day == day)
@@ -154,17 +205,17 @@ pub fn get_request_llm_summary(
     &outbound_response
   };
 
-  let mut summary = SummaryBuilder::default();
+  let mut content = CollectedContent::default();
   if !request_body.is_empty() {
     match decode_json_request(request_headers, request_body) {
-      Ok(request) => summarize_request(&request, &mut summary),
-      Err(error) => summary.warning("request summary unavailable", error),
+      Ok(request) => collect_request(&request, &mut content),
+      Err(error) => content.warning("request summary unavailable", error),
     }
   }
   if !response_body.is_empty() {
-    summarize_response(response_body, &mut summary);
+    collect_response(response_body, &mut content);
   }
-  Ok(Some(summary.finish()))
+  Ok(Some(content))
 }
 
 fn sql_bytes(value: ValueRef<'_>) -> Vec<u8> {
@@ -209,31 +260,38 @@ fn header_str<'a>(headers: &'a Value, name: &str) -> Option<&'a str> {
     .and_then(|(_, value)| value.as_str())
 }
 
-fn summarize_request(request: &Value, summary: &mut SummaryBuilder) {
-  summarize_tool_definitions(request.get("tools"), summary);
+fn collect_request(request: &Value, content: &mut CollectedContent) {
+  collect_tool_definitions(request.get("tools"), content);
   if let Some(input) = request.get("input").and_then(Value::as_array) {
-    summarize_items(input, "input", summary);
+    collect_items(input, "input", content);
   }
   if let Some(messages) = request.get("messages").and_then(Value::as_array) {
-    summarize_items(messages, "input", summary);
+    collect_items(messages, "input", content);
   }
   if let Some(system) = request.get("system") {
-    push_message("system", "input", system, summary);
+    push_message(
+      "system",
+      "input",
+      "message",
+      system,
+      &json!({"role": "system", "content": system}),
+      content,
+    );
   }
 }
 
-fn summarize_response(body: &[u8], summary: &mut SummaryBuilder) {
+fn collect_response(body: &[u8], content: &mut CollectedContent) {
   if body.len() as u64 > MAX_DECODED_BODY_BYTES {
-    summary.warning("response summary unavailable", "body exceeds summary limit");
+    content.warning("response summary unavailable", "body exceeds summary limit");
     return;
   }
   if let Ok(response) = serde_json::from_slice::<Value>(body) {
-    summarize_response_value(&response, summary);
+    collect_response_value(&response, content);
     return;
   }
 
   let Ok(text) = std::str::from_utf8(body) else {
-    summary.warning("response summary unavailable", "body is not UTF-8 JSON or SSE");
+    content.warning("response summary unavailable", "body is not UTF-8 JSON or SSE");
     return;
   };
   let mut found_event = false;
@@ -245,58 +303,60 @@ fn summarize_response(body: &[u8], summary: &mut SummaryBuilder) {
       continue;
     };
     found_event = true;
-    summarize_response_event(&event, summary);
+    collect_response_event(&event, content);
   }
   if !found_event {
-    summary.warning("response summary unavailable", "body is not JSON or recognized SSE");
+    content.warning("response summary unavailable", "body is not JSON or recognized SSE");
   }
 }
 
-fn summarize_response_value(response: &Value, summary: &mut SummaryBuilder) {
+fn collect_response_value(response: &Value, content: &mut CollectedContent) {
   if let Some(output) = response.get("output").and_then(Value::as_array) {
-    summarize_items(output, "output", summary);
+    collect_items(output, "output", content);
   }
-  if let Some(content) = response.get("content").and_then(Value::as_array) {
-    push_message("assistant", "output", &Value::Array(content.clone()), summary);
-    summarize_items(content, "output", summary);
+  if let Some(parts) = response.get("content").and_then(Value::as_array) {
+    let value = json!({"role": "assistant", "content": parts});
+    push_message(
+      "assistant",
+      "output",
+      "message",
+      &Value::Array(parts.clone()),
+      &value,
+      content,
+    );
   }
   if let Some(choices) = response.get("choices").and_then(Value::as_array) {
     for message in choices.iter().filter_map(|choice| choice.get("message")) {
-      summarize_item(message, "output", summary);
+      collect_item(message, "output", content);
     }
   }
 }
 
-fn summarize_response_event(event: &Value, summary: &mut SummaryBuilder) {
+fn collect_response_event(event: &Value, content: &mut CollectedContent) {
   match event.get("type").and_then(Value::as_str) {
     Some("response.output_item.done") => {
       if let Some(item) = event.get("item") {
-        summarize_item(item, "output", summary);
+        collect_item(item, "output", content);
       }
     }
     Some("message_stop") => {
       if let Some(message) = event.get("message") {
-        summarize_item(message, "output", summary);
+        collect_item(message, "output", content);
       }
     }
     _ => {}
   }
 }
 
-fn summarize_items(items: &[Value], phase: &str, summary: &mut SummaryBuilder) {
+fn collect_items(items: &[Value], phase: &str, content: &mut CollectedContent) {
   for item in items {
-    summarize_item(item, phase, summary);
+    collect_item(item, phase, content);
   }
 }
 
-fn summarize_item(item: &Value, phase: &str, summary: &mut SummaryBuilder) {
+fn collect_item(item: &Value, phase: &str, content: &mut CollectedContent) {
   let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
-  if is_tool_call_type(item_type) {
-    push_tool_call(item, item_type, phase, summary);
-    return;
-  }
-  if is_tool_result_type(item_type) {
-    summary.tool_results_total += 1;
+  if is_tool_item_type(item_type) {
     return;
   }
 
@@ -306,34 +366,40 @@ fn summarize_item(item: &Value, phase: &str, summary: &mut SummaryBuilder) {
     _ => None,
   });
   if let Some(role) = role {
-    push_message(role, phase, item.get("content").unwrap_or(item), summary);
-  }
-
-  if let Some(tool_calls) = item.get("tool_calls").and_then(Value::as_array) {
-    for tool_call in tool_calls {
-      push_tool_call(tool_call, "function_call", phase, summary);
-    }
-  }
-  if role == Some("tool") {
-    summary.tool_results_total += 1;
+    let kind = if item_type.is_empty() { "message" } else { item_type };
+    push_message(role, phase, kind, item.get("content").unwrap_or(item), item, content);
   }
 }
 
-fn push_message(role: &str, phase: &str, content: &Value, summary: &mut SummaryBuilder) {
-  let text = extract_text(content);
-  let (text, truncated) = text
+fn push_message(
+  role: &str,
+  phase: &str,
+  kind: &str,
+  preview_value: &Value,
+  value: &Value,
+  content: &mut CollectedContent,
+) {
+  let preview = extract_text(preview_value);
+  let (preview, truncated) = preview
     .as_deref()
-    .map(truncate_preview)
-    .map_or((None, false), |(text, truncated)| (Some(text), truncated));
-  summary.messages.push(LlmMessagePreview {
-    role: truncate_label(role),
-    phase: phase.to_string(),
-    text,
-    truncated,
+    .map(|preview| truncate_text(preview, MAX_PREVIEW_CHARS))
+    .map_or((None, false), |(preview, truncated)| (Some(preview), truncated));
+  let index = content.messages.len();
+  content.messages.push(CollectedMessage {
+    summary: LlmMessageSummary {
+      index,
+      role: truncate_label(role),
+      phase: phase.to_string(),
+      kind: truncate_label(kind),
+      preview,
+      truncated,
+      content_bytes: serialized_len(value),
+    },
+    value: value.clone(),
   });
 }
 
-fn summarize_tool_definitions(tools: Option<&Value>, summary: &mut SummaryBuilder) {
+fn collect_tool_definitions(tools: Option<&Value>, content: &mut CollectedContent) {
   let Some(tools) = tools.and_then(Value::as_array) else {
     return;
   };
@@ -344,45 +410,45 @@ fn summarize_tool_definitions(tools: Option<&Value>, summary: &mut SummaryBuilde
       .or_else(|| tool.pointer("/function/name"))
       .and_then(Value::as_str)
       .unwrap_or(kind);
-    summary.tool_definitions.push(LlmToolDefinitionSummary {
-      name: truncate_label(name),
-      kind: truncate_label(kind),
+    let description = tool
+      .get("description")
+      .or_else(|| tool.pointer("/function/description"))
+      .and_then(Value::as_str);
+    let (description, truncated) = description
+      .map(|description| truncate_text(description, MAX_DESCRIPTION_CHARS))
+      .map_or((None, false), |(description, truncated)| (Some(description), truncated));
+    let schema = tool
+      .get("parameters")
+      .or_else(|| tool.get("input_schema"))
+      .or_else(|| tool.pointer("/function/parameters"));
+    let index = content.tool_definitions.len();
+    content.tool_definitions.push(CollectedToolDefinition {
+      summary: LlmToolDefinitionSummary {
+        index,
+        name: truncate_label(name),
+        kind: truncate_label(kind),
+        description,
+        truncated,
+        schema_bytes: schema.map(serialized_len).unwrap_or(0),
+      },
+      value: tool.clone(),
     });
   }
-}
-
-fn push_tool_call(item: &Value, item_type: &str, phase: &str, summary: &mut SummaryBuilder) {
-  let name = item
-    .get("name")
-    .or_else(|| item.pointer("/function/name"))
-    .and_then(Value::as_str)
-    .unwrap_or(item_type);
-  let arguments = item
-    .get("input")
-    .or_else(|| item.get("arguments"))
-    .or_else(|| item.pointer("/function/arguments"));
-  let argument_bytes = arguments.map(serialized_len).unwrap_or(0);
-  summary.tool_calls.push(LlmToolCallSummary {
-    name: truncate_label(name),
-    kind: truncate_label(item_type),
-    phase: phase.to_string(),
-    status: item.get("status").and_then(Value::as_str).map(truncate_label),
-    argument_bytes,
-  });
 }
 
 fn serialized_len(value: &Value) -> usize {
   value.as_str().map(str::len).unwrap_or_else(|| value.to_string().len())
 }
 
-fn is_tool_call_type(item_type: &str) -> bool {
-  matches!(item_type, "custom_tool_call" | "function_call" | "tool_call")
-}
-
-fn is_tool_result_type(item_type: &str) -> bool {
+fn is_tool_item_type(item_type: &str) -> bool {
   matches!(
     item_type,
-    "custom_tool_call_output" | "function_call_output" | "tool_result"
+    "custom_tool_call"
+      | "function_call"
+      | "tool_call"
+      | "custom_tool_call_output"
+      | "function_call_output"
+      | "tool_result"
   )
 }
 
@@ -400,28 +466,16 @@ fn extract_text(value: &Value) -> Option<String> {
   }
 }
 
-fn truncate_preview(value: &str) -> (String, bool) {
+fn truncate_text(value: &str, limit: usize) -> (String, bool) {
   let value = value.trim();
-  if value.chars().count() <= MAX_PREVIEW_CHARS {
+  if value.chars().count() <= limit {
     return (value.to_string(), false);
   }
-  let mut output = value.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
+  let mut output = value.chars().take(limit).collect::<String>();
   output.push('…');
   (output, true)
 }
 
 fn truncate_label(value: &str) -> String {
-  let value = value.trim();
-  if value.chars().count() <= MAX_LABEL_CHARS {
-    return value.to_string();
-  }
-  let mut output = value.chars().take(MAX_LABEL_CHARS).collect::<String>();
-  output.push('…');
-  output
-}
-
-fn retain_last<T>(values: &mut Vec<T>, limit: usize) {
-  if values.len() > limit {
-    values.drain(..values.len() - limit);
-  }
+  truncate_text(value, MAX_LABEL_CHARS).0
 }

@@ -3,6 +3,7 @@ import type { PropertyValues } from "lit";
 import { fetchJson, isAbortError } from "./api";
 import { displayPath, formatTimestamp, numberField } from "./format";
 import { buildLlmRequestOverview, cacheReadPercent } from "./llm-request";
+import "./llm-expandable-item";
 import type { LlmRequestContentSummary, LoadState, TimezoneMode } from "./types";
 
 function displayValue(value: string | undefined): string {
@@ -28,7 +29,10 @@ function formatBytes(value: number): string {
   if (value < 1_000) {
     return `${value} B`;
   }
-  return `${(value / 1_000).toFixed(1)} KB`;
+  if (value < 1_000_000) {
+    return `${(value / 1_000).toFixed(1)} KB`;
+  }
+  return `${(value / 1_000_000).toFixed(1)} MB`;
 }
 
 function statusTone(status: number | undefined): string {
@@ -116,6 +120,11 @@ export class LlmRequestOverview extends LitElement {
       }
       this.content_summary = summary;
       this.content_state = "ready";
+      await this.updateComplete;
+      const message_list = this.querySelector<HTMLElement>(".llm-message-list");
+      if (message_list) {
+        message_list.scrollTop = message_list.scrollHeight;
+      }
     } catch (error) {
       if (this.content_controller !== controller || isAbortError(error)) {
         return;
@@ -127,6 +136,16 @@ export class LlmRequestOverview extends LitElement {
         this.content_controller = undefined;
       }
     }
+  }
+
+  private itemUrl(endpoint: string, index: number): string {
+    const params = new URLSearchParams({
+      day: this.day,
+      request_id: this.request_id,
+      row_id: this.row_id,
+      index: String(index)
+    });
+    return `${endpoint}?${params}`;
   }
 
   private renderContentSummary() {
@@ -156,48 +175,39 @@ export class LlmRequestOverview extends LitElement {
         <section class="llm-content-panel" aria-labelledby="llm-messages-heading">
           <header>
             <div><p class="eyebrow">Conversation</p><h3 id="llm-messages-heading">Messages</h3></div>
-            <span>${summary.messages.length} of ${summary.messages_total} shown</span>
+            <span>${summary.messages.length} messages · newest below</span>
           </header>
-          <div class="llm-message-list">
+          <div class="llm-message-list" tabindex="0" aria-label="All messages in chronological order">
             ${summary.messages.length === 0
               ? html`<p class="llm-content-empty">No conversational messages recorded.</p>`
               : summary.messages.map((message) => html`
-                  <article class="llm-message-preview">
-                    <header>
-                      <strong>${message.role}</strong>
-                      <span>${message.phase}</span>
-                    </header>
-                    <p>${message.text ?? "Non-text message"}</p>
-                  </article>
+                  <llm-expandable-item
+                    .title=${message.role}
+                    .meta=${`${message.phase} · ${message.kind}`}
+                    .preview=${message.preview ?? undefined}
+                    .size_label=${formatBytes(message.content_bytes)}
+                    .load_url=${this.itemUrl("/api/request-llm-message", message.index)}
+                  ></llm-expandable-item>
                 `)}
           </div>
         </section>
 
         <section class="llm-content-panel" aria-labelledby="llm-tools-heading">
           <header>
-            <div><p class="eyebrow">Tool activity</p><h3 id="llm-tools-heading">Tools</h3></div>
-            <span>${summary.tool_calls_total} calls · ${summary.tool_results_total} results</span>
+            <div><p class="eyebrow">Request capabilities</p><h3 id="llm-tools-heading">Tool definitions</h3></div>
+            <span>${summary.tool_definitions.length} definitions</span>
           </header>
-          ${summary.tool_definitions.length > 0
-            ? html`
-                <div class="llm-tool-definitions">
-                  ${summary.tool_definitions.map((tool) => html`
-                    <span title=${tool.kind}><strong>${tool.name}</strong><small>${tool.kind}</small></span>
-                  `)}
-                  ${summary.tool_definitions_total > summary.tool_definitions.length
-                    ? html`<span>+${summary.tool_definitions_total - summary.tool_definitions.length} more</span>`
-                    : nothing}
-                </div>
-              `
-            : nothing}
-          <div class="llm-tool-list">
-            ${summary.tool_calls.length === 0
-              ? html`<p class="llm-content-empty">No tool calls recorded.</p>`
-              : summary.tool_calls.map((call) => html`
-                  <article class="llm-tool-call">
-                    <div><strong>${call.name}</strong><span>${call.kind} · ${call.phase}</span></div>
-                    <div><span>${formatBytes(call.argument_bytes)}</span>${call.status ? html`<span>${call.status}</span>` : nothing}</div>
-                  </article>
+          <div class="llm-tool-definition-list">
+            ${summary.tool_definitions.length === 0
+              ? html`<p class="llm-content-empty">No structured tool definitions were persisted.</p>`
+              : summary.tool_definitions.map((tool) => html`
+                  <llm-expandable-item
+                    .title=${tool.name}
+                    .meta=${tool.kind}
+                    .preview=${tool.description ?? undefined}
+                    .size_label=${tool.schema_bytes > 0 ? `${formatBytes(tool.schema_bytes)} schema` : "No schema"}
+                    .load_url=${this.itemUrl("/api/request-llm-tool-definition", tool.index)}
+                  ></llm-expandable-item>
                 `)}
           </div>
         </section>

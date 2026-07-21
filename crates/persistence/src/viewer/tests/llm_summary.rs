@@ -3,11 +3,11 @@ use serde_json::json;
 
 use crate::requests::open_day_db;
 
-use super::super::get_request_llm_summary;
+use super::super::{get_request_llm_message, get_request_llm_summary, get_request_llm_tool_definition};
 use super::support::{tempdir, write_request};
 
 #[test]
-fn summarizes_compressed_responses_messages_and_tools_with_bounded_previews() {
+fn indexes_all_messages_and_tool_definitions_with_lazy_details() {
   let dir = tempdir();
   write_request(
     &dir,
@@ -27,7 +27,7 @@ fn summarizes_compressed_responses_messages_and_tools_with_bounded_previews() {
   let request_body = serde_json::to_vec(&json!({
     "input": input,
     "tools": [
-      {"type": "function", "function": {"name": "lookup"}},
+      {"type": "function", "function": {"name": "lookup", "description": "Find a record", "parameters": {"type": "object"}}},
       {"type": "custom", "name": "shell"}
     ]
   }))
@@ -60,21 +60,39 @@ fn summarizes_compressed_responses_messages_and_tools_with_bounded_previews() {
   let summary = get_request_llm_summary(&dir, "2026-07-14", "request-llm-summary", None)
     .unwrap()
     .unwrap();
-  assert_eq!(summary.messages_total, 9);
-  assert_eq!(summary.messages.len(), 6);
-  assert_eq!(summary.messages.first().unwrap().text.as_deref(), Some("message 3"));
-  assert_eq!(summary.messages.last().unwrap().text.as_deref(), Some("finished"));
+  assert_eq!(summary.messages.len(), 9);
+  assert_eq!(summary.messages.first().unwrap().index, 0);
+  assert_eq!(summary.messages.first().unwrap().preview.as_deref(), Some("message 0"));
+  assert_eq!(summary.messages.last().unwrap().preview.as_deref(), Some("finished"));
   assert_eq!(summary.messages.last().unwrap().phase, "output");
-  assert_eq!(summary.tool_definitions_total, 2);
+  assert_eq!(summary.messages.last().unwrap().index, 8);
+  assert_eq!(summary.tool_definitions.len(), 2);
   assert_eq!(summary.tool_definitions[0].name, "lookup");
+  assert_eq!(
+    summary.tool_definitions[0].description.as_deref(),
+    Some("Find a record")
+  );
+  assert!(summary.tool_definitions[0].schema_bytes > 0);
   assert_eq!(summary.tool_definitions[1].name, "shell");
-  assert_eq!(summary.tool_calls_total, 2);
-  assert_eq!(summary.tool_calls[0].name, "lookup");
-  assert_eq!(summary.tool_calls[0].phase, "input");
-  assert_eq!(summary.tool_calls[1].name, "shell");
-  assert_eq!(summary.tool_calls[1].phase, "output");
-  assert_eq!(summary.tool_results_total, 1);
   assert!(summary.warning.is_none());
+
+  let message = get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 8)
+    .unwrap()
+    .unwrap();
+  assert_eq!(message.index, 8);
+  assert_eq!(message.value["role"], "assistant");
+  assert_eq!(message.value["content"][0]["text"], "finished");
+
+  let definition = get_request_llm_tool_definition(&dir, "2026-07-14", "request-llm-summary", None, 0)
+    .unwrap()
+    .unwrap();
+  assert_eq!(definition.index, 0);
+  assert_eq!(definition.value["function"]["name"], "lookup");
+  assert!(
+    get_request_llm_message(&dir, "2026-07-14", "request-llm-summary", None, 9)
+      .unwrap()
+      .is_none()
+  );
 }
 
 #[test]
@@ -105,6 +123,6 @@ fn returns_a_warning_instead_of_failing_for_unsupported_content_encoding() {
   let summary = get_request_llm_summary(&dir, "2026-07-14", "request-unsupported-encoding", None)
     .unwrap()
     .unwrap();
-  assert_eq!(summary.messages_total, 0);
+  assert!(summary.messages.is_empty());
   assert!(summary.warning.unwrap().contains("unsupported content encoding br"));
 }
