@@ -3,7 +3,8 @@ import type { PropertyValues } from "lit";
 import { fetchJson, isAbortError } from "./api";
 import "./payload-panel";
 import type { LoadState, RequestPayload } from "./types";
-import { inspectWebSearch, safeHttpUrl } from "./web-search";
+import type { WebSearchOperation } from "./web-search";
+import { inspectWebSearch, safeHttpUrl, webSearchOperationSummary } from "./web-search";
 
 function formatBytes(value: number): string {
   if (value < 1_000) {
@@ -13,6 +14,36 @@ function formatBytes(value: number): string {
     return `${(value / 1_000).toFixed(1)} KB`;
   }
   return `${(value / 1_000_000).toFixed(1)} MB`;
+}
+
+function operationKindLabel(operation: WebSearchOperation): string {
+  return {
+    search_query: "Query",
+    open: "Open",
+    click: "Click",
+    find: "Find"
+  }[operation.kind];
+}
+
+function operationDetail(operation: WebSearchOperation): string | undefined {
+  switch (operation.kind) {
+    case "search_query": {
+      const filters = [];
+      if (operation.domains.length > 0) {
+        filters.push(`Domains: ${operation.domains.join(", ")}`);
+      }
+      if (operation.recency_days !== undefined) {
+        filters.push(`Last ${operation.recency_days} days`);
+      }
+      return filters.join(" · ") || undefined;
+    }
+    case "open":
+      return operation.line_number === undefined ? undefined : `Starting at line ${operation.line_number}`;
+    case "click":
+      return `Link ${operation.link_id}`;
+    case "find":
+      return `Pattern: ${operation.pattern}`;
+  }
 }
 
 export class WebSearchDetail extends LitElement {
@@ -120,7 +151,7 @@ export class WebSearchDetail extends LitElement {
         <header class="web-search-heading">
           <div>
             <p class="eyebrow">Codex web search</p>
-            <h3>${inspection.queries.length} ${inspection.queries.length === 1 ? "query" : "queries"}</h3>
+            <h3>${webSearchOperationSummary(inspection.operations)}</h3>
           </div>
           <div class="web-search-metrics">
             <span><strong>${inspection.results.length}</strong> results</span>
@@ -133,26 +164,25 @@ export class WebSearchDetail extends LitElement {
           </div>
         </header>
 
-        <div class="web-search-queries">
-          ${inspection.queries.length === 0
-            ? html`<p class="web-search-empty">No valid search query was persisted.</p>`
-            : inspection.queries.map((query, index) => html`
-                <article>
-                  <span class="web-search-query-index">${index + 1}</span>
-                  <div>
-                    <code>${query.query}</code>
-                    ${query.domains.length > 0 || query.recency_days !== undefined
-                      ? html`
-                          <p>
-                            ${query.domains.length > 0 ? `Domains: ${query.domains.join(", ")}` : ""}
-                            ${query.domains.length > 0 && query.recency_days !== undefined ? " · " : ""}
-                            ${query.recency_days !== undefined ? `Last ${query.recency_days} days` : ""}
-                          </p>
-                        `
-                      : nothing}
-                  </div>
-                </article>
-              `)}
+        <div class="web-search-operations">
+          ${inspection.operations.length === 0
+            ? html`<p class="web-search-empty">No supported web operation was persisted.</p>`
+            : inspection.operations.map((operation, index) => {
+                const detail = operationDetail(operation);
+                const href = operation.kind === "open" ? safeHttpUrl(operation.value) : undefined;
+                return html`
+                  <article>
+                    <span class="web-search-operation-index">${index + 1}</span>
+                    <div>
+                      <span class="web-search-operation-kind">${operationKindLabel(operation)}</span>
+                      ${href
+                        ? html`<a href=${href} target="_blank" rel="noopener noreferrer"><code>${operation.value}</code></a>`
+                        : html`<code>${operation.value}</code>`}
+                      ${detail ? html`<p>${detail}</p>` : nothing}
+                    </div>
+                  </article>
+                `;
+              })}
         </div>
 
         <dl class="web-search-settings">

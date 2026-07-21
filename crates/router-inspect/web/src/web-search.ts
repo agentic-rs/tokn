@@ -1,10 +1,10 @@
 export const CODEX_WEB_SEARCH_ENDPOINT = "/backend-api/codex/alpha/search";
 
-export interface WebSearchQuery {
-  query: string;
-  domains: string[];
-  recency_days?: number;
-}
+export type WebSearchOperation =
+  | { kind: "search_query"; value: string; domains: string[]; recency_days?: number }
+  | { kind: "open"; value: string; line_number?: number }
+  | { kind: "click"; value: string; link_id: number }
+  | { kind: "find"; value: string; pattern: string };
 
 export interface WebSearchResult {
   type?: string;
@@ -16,7 +16,7 @@ export interface WebSearchResult {
 }
 
 export interface WebSearchInspection {
-  queries: WebSearchQuery[];
+  operations: WebSearchOperation[];
   response_length?: string;
   allowed_callers: string[];
   external_web_access?: boolean;
@@ -44,17 +44,68 @@ function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function queryFromValue(value: unknown): WebSearchQuery | undefined {
+function operationFromValue(kind: string, value: unknown): WebSearchOperation | undefined {
   const item = record(value);
-  const query = stringValue(item?.q);
-  if (!query) {
-    return undefined;
+  switch (kind) {
+    case "search_query": {
+      const query = stringValue(item?.q);
+      return query ? {
+        kind,
+        value: query,
+        domains: stringArray(item?.domains),
+        recency_days: finiteNumber(item?.recency)
+      } : undefined;
+    }
+    case "open": {
+      const ref_id = stringValue(item?.ref_id);
+      return ref_id ? { kind, value: ref_id, line_number: finiteNumber(item?.lineno) } : undefined;
+    }
+    case "click": {
+      const ref_id = stringValue(item?.ref_id);
+      const link_id = finiteNumber(item?.id);
+      return ref_id && link_id !== undefined ? { kind, value: ref_id, link_id } : undefined;
+    }
+    case "find": {
+      const ref_id = stringValue(item?.ref_id);
+      const pattern = stringValue(item?.pattern);
+      return ref_id && pattern ? { kind, value: ref_id, pattern } : undefined;
+    }
+    default:
+      return undefined;
   }
-  return {
-    query,
-    domains: stringArray(item?.domains),
-    recency_days: finiteNumber(item?.recency)
-  };
+}
+
+function operationsFromCommands(value: unknown): WebSearchOperation[] {
+  const commands = record(value);
+  if (!commands) {
+    return [];
+  }
+  return Object.entries(commands).flatMap(([kind, command]) => {
+    if (!Array.isArray(command)) {
+      return [];
+    }
+    return command.flatMap((item) => {
+      const operation = operationFromValue(kind, item);
+      return operation ? [operation] : [];
+    });
+  });
+}
+
+export function webSearchOperationSummary(operations: WebSearchOperation[]): string {
+  if (operations.length === 0) {
+    return "No operations";
+  }
+  const kinds = new Set(operations.map((operation) => operation.kind));
+  if (kinds.size !== 1) {
+    return `${operations.length} operations`;
+  }
+  const label = {
+    search_query: ["query", "queries"],
+    open: ["page open", "page opens"],
+    click: ["link click", "link clicks"],
+    find: ["find", "finds"]
+  }[operations[0].kind];
+  return `${operations.length} ${label[operations.length === 1 ? 0 : 1]}`;
 }
 
 function resultFromValue(value: unknown): WebSearchResult | undefined {
@@ -112,15 +163,11 @@ export function inspectWebSearch(request: unknown, response: unknown): WebSearch
   const response_record = record(response);
   const commands = record(request_record?.commands);
   const settings = record(request_record?.settings);
-  const query_values = Array.isArray(commands?.search_query) ? commands.search_query : [];
   const result_values = Array.isArray(response_record?.results) ? response_record.results : [];
   const encrypted_output = stringValue(response_record?.encrypted_output);
 
   return {
-    queries: query_values.flatMap((value) => {
-      const query = queryFromValue(value);
-      return query ? [query] : [];
-    }),
+    operations: operationsFromCommands(commands),
     response_length: stringValue(commands?.response_length),
     allowed_callers: stringArray(settings?.allowed_callers),
     external_web_access: typeof settings?.external_web_access === "boolean"

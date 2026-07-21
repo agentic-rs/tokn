@@ -2,7 +2,8 @@ import {
   decodedBase64ByteLength,
   inspectWebSearch,
   isCodexWebSearchEndpoint,
-  safeHttpUrl
+  safeHttpUrl,
+  webSearchOperationSummary
 } from "./web-search.js";
 
 function assertEqual(actual: unknown, expected: unknown, message: string) {
@@ -37,7 +38,7 @@ const inspection = inspectWebSearch(
 );
 
 assertEqual(inspection, {
-  queries: [{ query: "rust sqlite viewer", domains: ["docs.rs"], recency_days: 30 }],
+  operations: [{ kind: "search_query", value: "rust sqlite viewer", domains: ["docs.rs"], recency_days: 30 }],
   response_length: "short",
   allowed_callers: ["direct"],
   external_web_access: false,
@@ -53,6 +54,22 @@ assertEqual(inspection, {
   }],
   encrypted_output_bytes: 4
 }, "search payloads should become a compact inspection");
+
+const open_inspection = inspectWebSearch({
+  commands: {
+    open: [
+      { ref_id: "https://example.com/one" },
+      { ref_id: "turn1view0", lineno: 42 }
+    ],
+    response_length: "long"
+  }
+}, {});
+assertEqual(open_inspection.operations, [
+  { kind: "open", value: "https://example.com/one" },
+  { kind: "open", value: "turn1view0", line_number: 42 }
+], "open commands should be represented as web operations");
+assertEqual(webSearchOperationSummary(open_inspection.operations), "2 page opens", "open requests need an accurate heading");
+assertEqual(webSearchOperationSummary([]), "No operations", "missing commands should not be described as zero queries");
 
 assertEqual(decodedBase64ByteLength("AQID"), 3, "unpadded base64 should have a decoded size");
 assertEqual(decodedBase64ByteLength("gA-_"), 3, "URL-safe base64 should have a decoded size");
