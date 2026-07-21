@@ -22,6 +22,7 @@ gateway settles.
 - Endpoints for `GET /v1/models`, `POST /v1/chat/completions`,
   `POST /v1/responses`, and `POST /v1/messages`.
 - Profile-prefixed routes like `/{profile}/v1/chat/completions`.
+- Client API keys with per-key provider allowlists.
 - Multiple accounts per provider with active/fallback/disabled tiers.
 - Route modes for passthrough, provider switching, exact routing, catalogue
   routing, and fuzzy model-family routing.
@@ -81,6 +82,60 @@ For clients that expect `OPENAI_BASE_URL`, use:
 export OPENAI_BASE_URL=http://127.0.0.1:4141/v1
 ```
 
+## Client API Keys
+
+Client authentication is controlled explicitly in `config.toml` and is disabled
+by default:
+
+```toml
+[api_key]
+enabled = true
+```
+
+Create a key with access to every current and future provider (the default):
+
+```sh
+tokn-gateway api-key create my-client
+```
+
+Restrict a key by repeating `--provider`:
+
+```sh
+tokn-gateway api-key create openai-client \
+  --provider openai \
+  --provider github-copilot
+```
+
+The secret is printed only when the key is created. Send it as a standard
+Bearer token (or as `x-api-key`):
+
+```sh
+curl http://127.0.0.1:4141/v1/models \
+  -H "authorization: Bearer $TOKN_API_KEY"
+```
+
+When `[api_key].enabled` is true, gateway-managed `/v1/*` and
+profile-prefixed `/{profile}/v1/*` routes require a valid key. Intercepted proxy
+requests also require a key whenever their effective route mode is `route`,
+`exact`, `fuzzy`, or `switch`. `GET /v1/models` and `GET /v1/providers` expose
+only permitted providers, and routing, retries, session affinity, and proxy
+switching remain inside the key's provider allowlist. Provider permissions
+default to `*`; an explicit `*` cannot be combined with specific provider ids.
+
+List or revoke keys with:
+
+```sh
+tokn-gateway api-key list
+tokn-gateway api-key revoke KEY_ID
+```
+
+Enabling authentication with no active keys fails closed. Gateway credentials
+are removed before managed upstream dispatch. Effective `passthrough` mode is
+the exception: it bypasses API-key authentication and the authentication layer
+does not remove `Authorization` or `x-api-key`. Raw CONNECT tunnels and hosts in
+`proxy_mode.passthrough_hosts` cannot be inspected, so they are also left
+untouched and unauthenticated.
+
 ## Config And Data
 
 Default files live under `~/.tokn/router/`:
@@ -89,6 +144,7 @@ Default files live under `~/.tokn/router/`:
 - `config.d/`: non-secret, agent-owned binding and profile overlays.
 - `auth.yaml`: user-managed and shared account credentials.
 - `auth.d/`: credential-only fragments owned by linked agents.
+- `access.db`: hashed client API keys and provider permissions.
 - `usage.db`: usage summaries.
 - `sessions.db`: semantic message trees captured from live sessions.
 - `requests/`: archived request bodies.
@@ -104,6 +160,9 @@ tokn-gateway config path
 Minimal config:
 
 ```toml
+[api_key]
+enabled = false
+
 [server]
 host = "127.0.0.1"
 port = 4141
@@ -373,7 +432,10 @@ route_mode = "route"
 
 `tokn-gateway serve --with-proxy` runs both the API listener and proxy in one
 process. API routes use `[defaults]` or a named profile; proxy interception uses
-`[proxy_mode].route_mode` unless overridden with `--proxy-route-mode`.
+`[proxy_mode].route_mode` unless overridden with `--proxy-route-mode`. With
+`[api_key].enabled = true`, intercepted requests in any managed mode require a
+client key. Passthrough requests and non-intercepted CONNECT tunnels preserve
+the client's credentials and bypass the check.
 
 ## LAN Bootstrap
 

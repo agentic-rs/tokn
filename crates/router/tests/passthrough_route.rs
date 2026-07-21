@@ -90,6 +90,7 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
 
   // Build router state with our mock upstream as the account base_url.
   let mut cfg = Config::default();
+  cfg.api_key.enabled = true;
   cfg.profiles.insert(
     "passthrough".into(),
     ProfileConfig {
@@ -117,6 +118,8 @@ async fn passthrough_route_forwards_body_verbatim_and_injects_auth() {
     .method(Method::POST)
     .uri("/passthrough/v1/chat/completions")
     .header("content-type", "application/json")
+    // This is deliberately not a tokn API key. Passthrough bypasses client
+    // authentication even when the global API-key switch is enabled.
     .header("authorization", "Bearer client-side-secret-must-not-leak")
     .header("x-tokn-router-local-addr", "127.0.0.1:9999")
     .header("x-behave-as", "codex")

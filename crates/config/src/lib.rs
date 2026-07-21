@@ -19,6 +19,8 @@ pub const DEFAULT_PROVIDER: &str = ID_GITHUB_COPILOT;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
   #[serde(default)]
+  pub api_key: ApiKeyConfig,
+  #[serde(default)]
   pub server: ServerConfig,
   #[serde(default)]
   pub pool: PoolConfig,
@@ -38,6 +40,14 @@ pub struct Config {
   pub profiles: BTreeMap<String, ProfileConfig>,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApiKeyConfig {
+  /// Require client API keys for gateway-managed API and intercepted proxy requests.
+  /// Passthrough traffic always preserves client credentials and bypasses this check.
+  #[serde(default)]
+  pub enabled: bool,
 }
 
 /// Source files that contributed to an effective configuration.
@@ -935,6 +945,24 @@ mod tests {
   #[test]
   fn proxy_mode_defaults_to_route_mode() {
     assert_eq!(ProxyModeConfig::default().route_mode, RouteMode::Route);
+  }
+
+  #[test]
+  fn api_key_authentication_defaults_to_disabled() {
+    assert!(!Config::default().api_key.enabled);
+  }
+
+  #[test]
+  fn api_key_authentication_can_be_enabled() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [api_key]
+        enabled = true
+      "#,
+    )
+    .expect("config should deserialize");
+
+    assert!(cfg.api_key.enabled);
   }
 
   #[test]

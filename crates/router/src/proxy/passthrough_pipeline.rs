@@ -35,6 +35,7 @@ use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::header::HOST;
 use smol_str::SmolStr;
+use tokn_access::AccessContext;
 use tokn_accounts::routing::ResolveError;
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::request_event::{
@@ -285,6 +286,16 @@ async fn proxy_via_pipeline_inner(
       cfg_builder = cfg_builder
         .with_str(tokn_requests::stages::resolve::proxy::keys::PROVIDER_ID, provider_id)
         .with(tokn_requests::stages::send::proxy::send_keys::INJECT_AUTH, true);
+      if let Some(providers) = parts
+        .extensions
+        .get::<AccessContext>()
+        .and_then(|access| access.providers.provider_ids())
+      {
+        cfg_builder = cfg_builder.with(
+          tokn_requests::stages::ACCESS_ALLOWED_PROVIDERS_KEY,
+          serde_json::Value::Array(providers.iter().cloned().map(serde_json::Value::String).collect()),
+        );
+      }
       &state.proxy_switch_pipeline
     }
   };
@@ -414,6 +425,8 @@ fn proxy_pipeline_error_to_api_error(err: &tokn_requests::PipelineError, host_wi
       source: ResolveError::InvalidExactModel { .. },
     } => ApiError::bad_request(err.message().into_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
+    RequestsError::ProviderAccessDenied => ApiError::forbidden("API key does not allow the requested provider"),
+    RequestsError::InvalidAccessPolicy => ApiError::internal("invalid API-key provider policy"),
     RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
     RequestsError::NoProviderAccount { provider_id } => ApiError::bad_request(format!(
       "switch mode requires a recognized provider URL with a configured account, got provider '{provider_id}'"

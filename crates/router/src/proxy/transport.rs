@@ -264,10 +264,22 @@ async fn route_intercepted_request(
     req.uri().path_and_query().map(|v| v.as_str()).unwrap_or(&path),
   );
   tracing::trace!(%host, path = %path, method = %method, resolved_mode = ?route_mode, "resolved route mode for intercepted request");
-  let resolved_mode = route_mode;
-  if matches!(resolved_mode, Ok(RouteMode::Passthrough | RouteMode::Switch)) {
+  let resolved_mode = match route_mode {
+    Ok(mode) => mode,
+    Err(error) => return Ok(ApiError::bad_request(error.to_string()).into_response()),
+  };
+
+  if should_authenticate_proxy_request(&state, resolved_mode) {
+    if let Err(error) = crate::api::access::authenticate_managed_request(&state, &mut req).await {
+      let mut response = crate::api::access::authentication_error_response(error);
+      close_intercepted_connection_on_error(&mut response);
+      return Ok(response);
+    }
+  }
+
+  if matches!(resolved_mode, RouteMode::Passthrough | RouteMode::Switch) {
     let response = match resolved_mode {
-      Ok(RouteMode::Passthrough) => {
+      RouteMode::Passthrough => {
         super::passthrough_pipeline::proxy_passthrough_via_pipeline(
           &state,
           &intercepted_host,
@@ -279,7 +291,7 @@ async fn route_intercepted_request(
         )
         .await
       }
-      Ok(RouteMode::Switch) => {
+      RouteMode::Switch => {
         super::passthrough_pipeline::proxy_switch_via_pipeline(
           &state,
           &intercepted_host,
@@ -304,14 +316,10 @@ async fn route_intercepted_request(
     close_intercepted_connection_on_error(&mut response);
     return Ok(response);
   }
-  if let Err(err) = &resolved_mode {
-    return Ok(ApiError::bad_request(err.to_string()).into_response());
-  }
-
   let rewritten = if let Some(rewritten) = rewrite_target(&host, &path, &method) {
     rewritten
   } else {
-    emit_router_not_implemented(&state, &req, &host, peer, local, resolved_mode.ok());
+    emit_router_not_implemented(&state, &req, &host, peer, local, Some(resolved_mode));
     return Ok(ApiError::not_implemented(path, host).into_response());
   };
 
@@ -328,6 +336,7 @@ async fn route_intercepted_request(
     .unwrap_or_else(|_| Uri::from_static("/"));
 
   let (parts, body) = req.into_parts();
+  let extensions = parts.extensions;
   let mut builder = Request::builder().method(method).uri(uri).version(parts.version);
   for (key, value) in &parts.headers {
     if key != HOST {
@@ -340,7 +349,8 @@ async fn route_intercepted_request(
   );
   builder = builder.header("x-tokn-router-local-addr", local.to_string());
   let body = Body::new(body);
-  let request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
+  let mut request = builder.body(body).unwrap_or_else(|_| Request::new(Body::empty()));
+  *request.extensions_mut() = extensions;
 
   use tower::ServiceExt;
   let response = router
@@ -348,6 +358,10 @@ async fn route_intercepted_request(
     .await
     .unwrap_or_else(|err| ApiError::bad_gateway(err.to_string()).into_response());
   Ok(response)
+}
+
+fn should_authenticate_proxy_request(state: &AppState, mode: RouteMode) -> bool {
+  state.api_key_enabled && mode != RouteMode::Passthrough
 }
 
 fn default_proxy_provider_mode(
@@ -522,6 +536,28 @@ mod tests {
       .map(|(provider_id, mode)| ((*provider_id).to_string(), *mode))
       .collect::<BTreeMap<_, _>>();
     crate::api::build_proxy_state(&cfg, &[], Arc::new(EventBus::new(8))).expect("state")
+  }
+
+  #[test]
+  fn api_keys_apply_only_to_enabled_managed_proxy_modes() {
+    let mut disabled = state_with_provider_modes(&[]);
+    disabled.api_key_enabled = false;
+    for mode in [
+      RouteMode::Route,
+      RouteMode::Exact,
+      RouteMode::Fuzzy,
+      RouteMode::Switch,
+      RouteMode::Passthrough,
+    ] {
+      assert!(!should_authenticate_proxy_request(&disabled, mode));
+    }
+
+    let mut enabled = disabled;
+    enabled.api_key_enabled = true;
+    assert!(!should_authenticate_proxy_request(&enabled, RouteMode::Passthrough));
+    for mode in [RouteMode::Route, RouteMode::Exact, RouteMode::Fuzzy, RouteMode::Switch] {
+      assert!(should_authenticate_proxy_request(&enabled, mode));
+    }
   }
 
   #[test]

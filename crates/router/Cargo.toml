@@ -12,6 +12,7 @@ license.workspace = true
 tokn-core = { workspace = true }
 tokn-accounts = { workspace = true }
 tokn-auth = { workspace = true }
+tokn-access = { workspace = true }
 tokn-config = { workspace = true }
 tokn-catalogue = { workspace = true }
 tokn-convert = { workspace = true }
@@ -53,3 +54,6 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 time = { workspace = true }
 zstd = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

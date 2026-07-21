@@ -18,5 +18,6 @@ pub use convert_response::{DefaultConvertResponse, NoopConvertResponse, Passthro
 pub use extract::{DefaultExtract, PassthroughExtract};
 pub use resolve::{
   AccountSelector, PoolAccountSelector, PoolResolve, ProxyProviderResolve, ProxyResolve, SelectorOutcome,
+  ACCESS_ALLOWED_PROVIDERS_KEY,
 };
 pub use send::{DefaultSend, NoopSend, ProxySend};

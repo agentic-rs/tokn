@@ -2,12 +2,13 @@ use super::error::ApiError;
 use super::{AppState, LiveAppState, RequestPolicyRuntime};
 use crate::pipeline::{request_header_extract, ChatParser, MessagesParser, RequestParser, ResponsesParser};
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use serde_json::Value;
 use smol_str::SmolStr;
 use std::sync::Arc;
+use tokn_access::AccessContext;
 use tokn_accounts::routing::{route_mode_as_str, ResolveError};
 use tokn_core::event::Event as CoreEvent;
 use tokn_core::request_event::{RecordEvent, RequestEndpoint, RequestEvent, RequestEventPayload};
@@ -20,6 +21,7 @@ async fn handle(
   state: AppState,
   policy: Arc<RequestPolicyRuntime>,
   parser: &dyn RequestParser,
+  access: &AccessContext,
   mut inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
@@ -71,9 +73,14 @@ async fn handle(
     Some(tokn_config::RouteMode::Switch) => &policy.switch_pipeline,
     _ => &policy.request_pipeline,
   };
-  let run_config = tokn_requests::RunConfig::builder()
-    .with_agent_id_opt(policy.agent_id.clone())
-    .build();
+  let mut run_config = tokn_requests::RunConfig::builder().with_agent_id_opt(policy.agent_id.clone());
+  if let Some(providers) = access.providers.provider_ids() {
+    run_config = run_config.with(
+      tokn_requests::stages::ACCESS_ALLOWED_PROVIDERS_KEY,
+      Value::Array(providers.iter().cloned().map(Value::String).collect()),
+    );
+  }
+  let run_config = run_config.build();
   match pipeline.run_with(raw, run_config).await {
     Ok(converted) => Ok(super::response::converted_to_axum(converted)),
     Err(err) => Err(pipeline_error_to_api_error(err)),
@@ -89,6 +96,8 @@ fn pipeline_error_to_api_error(err: tokn_requests::PipelineError) -> ApiError {
       source: ResolveError::InvalidExactModel { .. },
     } => ApiError::bad_request(err.message().into_owned()),
     RequestsError::SessionExpired { session_id } => ApiError::session_expired(session_id.to_string()),
+    RequestsError::ProviderAccessDenied => ApiError::forbidden("API key does not allow the requested provider"),
+    RequestsError::InvalidAccessPolicy => ApiError::internal("invalid API-key provider policy"),
     RequestsError::NoAccount { endpoint, model } => ApiError::not_implemented(endpoint.to_string(), model.to_string()),
     RequestsError::NoProviderAccount { provider_id } => ApiError::not_implemented("provider", provider_id.to_string()),
     RequestsError::UpstreamStatus { status, body } => match StatusCode::from_u16(*status) {
@@ -149,12 +158,13 @@ fn apply_endpoint_compat_defaults(
 )]
 pub async fn chat_completions(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = state.default_policy.clone();
-  handle(state, policy, &ChatParser, inbound, body).await
+  handle(state, policy, &ChatParser, &access, inbound, body).await
 }
 
 #[instrument(
@@ -169,12 +179,13 @@ pub async fn chat_completions(
 )]
 pub async fn responses(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = state.default_policy.clone();
-  handle(state, policy, &ResponsesParser, inbound, body).await
+  handle(state, policy, &ResponsesParser, &access, inbound, body).await
 }
 
 #[instrument(
@@ -189,47 +200,51 @@ pub async fn responses(
 )]
 pub async fn messages(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = state.default_policy.clone();
-  handle(state, policy, &MessagesParser, inbound, body).await
+  handle(state, policy, &MessagesParser, &access, inbound, body).await
 }
 
 // --- Profile-prefixed variants ---
 
 pub async fn chat_completions_with_profile(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = profile_policy(&state, &profile)?;
-  handle(state, policy, &ChatParser, inbound, body).await
+  handle(state, policy, &ChatParser, &access, inbound, body).await
 }
 
 pub async fn responses_with_profile(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = profile_policy(&state, &profile)?;
-  handle(state, policy, &ResponsesParser, inbound, body).await
+  handle(state, policy, &ResponsesParser, &access, inbound, body).await
 }
 
 pub async fn messages_with_profile(
   State(state): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   Path(profile): Path<String>,
   inbound: HeaderMap,
   body: Bytes,
 ) -> Result<Response, ApiError> {
   let state = state.current();
   let policy = profile_policy(&state, &profile)?;
-  handle(state, policy, &MessagesParser, inbound, body).await
+  handle(state, policy, &MessagesParser, &access, inbound, body).await
 }
 
 fn profile_policy(state: &AppState, profile: &str) -> Result<Arc<RequestPolicyRuntime>, ApiError> {

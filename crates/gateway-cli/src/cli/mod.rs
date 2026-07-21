@@ -7,6 +7,7 @@ use crate::logging::{self, RunMode};
 
 mod account;
 mod agent;
+mod api_key;
 mod config_cmd;
 mod error;
 mod headers;
@@ -44,6 +45,9 @@ pub enum Cmd {
   /// Manage agent account imports and gateway bindings
   #[command(subcommand)]
   Agent(agent::AgentCmd),
+  /// Manage client API keys and their allowed providers
+  #[command(name = "api-key", subcommand)]
+  ApiKey(api_key::ApiKeyCmd),
   /// Show the Copilot identity headers that will be sent upstream
   Headers(headers::HeadersArgs),
   /// Run the local OpenAI-compatible server
@@ -98,6 +102,7 @@ impl Cli {
     let r: anyhow::Result<()> = match self.cmd {
       Cmd::Account(c) => account::run(cfg_path, c).await,
       Cmd::Agent(c) => agent::run(cfg_path, c).await,
+      Cmd::ApiKey(c) => api_key::run(c).await,
       Cmd::Headers(a) => headers::run(cfg_path, a).await,
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
@@ -138,6 +143,8 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
     Cmd::Inspect(_) => RunMode::ReadOnlyCli,
     Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Sessions(_) => RunMode::MutatingCli,
+    Cmd::ApiKey(api_key::ApiKeyCmd::List) => RunMode::ReadOnlyCli,
+    Cmd::ApiKey(api_key::ApiKeyCmd::Create(_) | api_key::ApiKeyCmd::Revoke { .. }) => RunMode::MutatingCli,
     Cmd::Agent(c) => match c {
       agent::AgentCmd::List | agent::AgentCmd::Show(_) => RunMode::ReadOnlyCli,
       agent::AgentCmd::Import(_) | agent::AgentCmd::Link(_) | agent::AgentCmd::Sync(_) | agent::AgentCmd::Unlink(_) => {

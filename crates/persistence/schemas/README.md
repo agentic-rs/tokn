@@ -12,6 +12,9 @@ schema unless a migration is intentionally added.
 - `squash/<db>/vA.B.C_vX.Y.Z_000N_000M.sql`: maintenance-only rollups from one
   snapshot version to another.
 
+The `access` database was introduced in v0.2.1, so its history starts at
+`snapshot/access/v0.2.1.sql` rather than an artificial pre-release snapshot.
+
 ## Version mapping
 
 - `snapshot/<db>/v0.0.0.sql` is the original released schema and still maps to

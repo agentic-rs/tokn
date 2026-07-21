@@ -40,6 +40,12 @@ pub enum RequestsError {
   #[snafu(display("no account configured for provider {provider_id}"))]
   NoProviderAccount { provider_id: SmolStr },
 
+  #[snafu(display("API key does not allow the requested provider"))]
+  ProviderAccessDenied,
+
+  #[snafu(display("invalid API-key provider policy"))]
+  InvalidAccessPolicy,
+
   #[snafu(display("invalid `{key}` endpoint `{value}`"))]
   InvalidConfiguredEndpoint { key: &'static str, value: SmolStr },
 

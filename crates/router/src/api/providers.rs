@@ -1,25 +1,30 @@
 use super::error::ApiError;
 use super::{AppState, LiveAppState, RequestPolicyRuntime};
-use axum::extract::{Path, State};
+use axum::extract::{Extension, Path, State};
 use axum::Json;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use tokn_access::AccessContext;
 use tokn_accounts::routing::route_mode_as_str;
 
-pub async fn list_providers(State(s): State<LiveAppState>) -> Result<Json<Value>, ApiError> {
+pub async fn list_providers(
+  State(s): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
+) -> Result<Json<Value>, ApiError> {
   let s = s.current();
   let policy = s.default_policy.clone();
-  list_providers_for_policy(policy)
+  list_providers_for_policy(policy, &access)
 }
 
 pub async fn list_providers_with_profile(
   State(s): State<LiveAppState>,
+  Extension(access): Extension<AccessContext>,
   Path(profile): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
   let s = s.current();
   let policy = profile_policy(&s, &profile)?;
-  list_providers_for_policy(policy)
+  list_providers_for_policy(policy, &access)
 }
 
 fn profile_policy(s: &AppState, profile: &str) -> Result<Arc<RequestPolicyRuntime>, ApiError> {
@@ -29,10 +34,16 @@ fn profile_policy(s: &AppState, profile: &str) -> Result<Arc<RequestPolicyRuntim
     .ok_or_else(|| ApiError::bad_request(format!("unknown profile '{profile}'")))
 }
 
-fn list_providers_for_policy(policy: Arc<RequestPolicyRuntime>) -> Result<Json<Value>, ApiError> {
+fn list_providers_for_policy(
+  policy: Arc<RequestPolicyRuntime>,
+  access: &AccessContext,
+) -> Result<Json<Value>, ApiError> {
   let mut providers: BTreeMap<String, ProviderSummary> = BTreeMap::new();
 
   for account in policy.pool.all() {
+    if !access.providers.allows(account.provider.info().id.as_str()) {
+      continue;
+    }
     let info = account.provider.info();
     providers
       .entry(info.id.clone())
