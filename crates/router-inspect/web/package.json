@@ -5,7 +5,8 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "check": "tsc --noEmit",
-    "test:tree": "tsc -p tsconfig.test.json && node ../../../target/router-inspect-web-tests/session-tree.spec.js",
+    "test": "tsc -p tsconfig.test.json && node ../../../target/router-inspect-web-tests/session-tree.spec.js && node ../../../target/router-inspect-web-tests/web-search.spec.js",
+    "test:tree": "pnpm test",
     "build": "vite build"
   },
   "dependencies": {

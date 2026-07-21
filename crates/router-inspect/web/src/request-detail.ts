@@ -1,7 +1,9 @@
 import { LitElement, html, nothing } from "lit";
 import "./payload-panel";
+import "./web-search-detail";
 import { displayPath, formatTimestamp, numberField, shortId, stringField } from "./format";
 import type { DetailTab, LoadState, RequestDetail, RequestSummary, TimezoneMode } from "./types";
+import { isCodexWebSearchEndpoint } from "./web-search";
 
 const DETAIL_TABS: { id: DetailTab; label: string }[] = [
   { id: "overview", label: "Overview" },
@@ -135,7 +137,19 @@ export class RequestDetailView extends LitElement {
     const inbound_status = numberField(request, "inbound_resp_status");
     const outbound_status = numberField(request, "outbound_resp_status");
     const final_status = numberField(request, "status");
+    const request_id = stringField(request, "request_id") ?? this.summary?.request_id;
+    const row_id = this.detail?.row_id;
+    const endpoint = stringField(request, "inbound_req_url") ?? stringField(request, "endpoint");
+    const search_detail = this.detail && request_id && row_id && isCodexWebSearchEndpoint(endpoint)
+      ? html`
+          <web-search-detail
+            .request_url=${payloadUrl(this.detail.day, request_id, row_id, "inbound_req_body")}
+            .response_url=${payloadUrl(this.detail.day, request_id, row_id, "inbound_resp_body")}
+          ></web-search-detail>
+        `
+      : nothing;
     return html`
+      ${search_detail}
       <section class="flow-grid" aria-label="Request flow">
         <div>
           <span>Client request</span>
