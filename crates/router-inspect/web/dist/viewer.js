@@ -111,7 +111,6 @@
             .response_url=${q(this.detail.day,d,u,"inbound_resp_body")}
           ></web-search-detail>
         `:_;return a`
-      ${p}
       <section class="flow-grid" aria-label="Request flow">
         <div>
           <span>Client request</span>
@@ -138,10 +137,20 @@
             </div>
           `)}
       </dl>
+      ${p}
+      <div class="payload-stack">
+        <payload-panel label="Usage" .value=${e.usage_json}></payload-panel>
+      </div>
+    `}renderRaw(e){return a`
+      <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
       <div class="payload-stack">
         <payload-panel label="Request parameters" .value=${e.params_json}></payload-panel>
-        <payload-panel label="Usage" .value=${e.usage_json}></payload-panel>
         <payload-panel label="Request context" .value=${e.ctx_json}></payload-panel>
+        <payload-panel
+          label="Persisted overview record"
+          .value=${e}
+          .redact_record_headers=${!0}
+        ></payload-panel>
       </div>
     `}renderClient(e,t,s,o){return a`
       <section class="payload-group">
@@ -213,14 +222,7 @@
           .load_url=${q(t,s,o,"outbound_resp_body")}
         ></payload-panel>
       </section>
-    `}renderTab(e,t,s,o){switch(this.active_tab){case"client":return this.renderClient(e,t,s,o);case"provider":return this.renderProvider(e,t,s,o);case"raw":return a`
-          <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
-          <payload-panel
-            label="Persisted overview record"
-            .value=${e}
-            .redact_record_headers=${!0}
-          ></payload-panel>
-        `;default:return this.renderOverview(e)}}render(){if(!this.detail)return this.state==="loading"?a`
+    `}renderTab(e,t,s,o){switch(this.active_tab){case"client":return this.renderClient(e,t,s,o);case"provider":return this.renderProvider(e,t,s,o);case"raw":return this.renderRaw(e);default:return this.renderOverview(e)}}render(){if(!this.detail)return this.state==="loading"?a`
           <section class="detail-state" aria-live="polite">
             <button type="button" class="mobile-back-button" @click=${this.close}>← Requests</button>
             <span class="spinner" aria-hidden="true"></span>

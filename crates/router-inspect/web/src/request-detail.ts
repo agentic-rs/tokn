@@ -149,7 +149,6 @@ export class RequestDetailView extends LitElement {
         `
       : nothing;
     return html`
-      ${search_detail}
       <section class="flow-grid" aria-label="Request flow">
         <div>
           <span>Client request</span>
@@ -178,10 +177,24 @@ export class RequestDetailView extends LitElement {
           `
         )}
       </dl>
+      ${search_detail}
+      <div class="payload-stack">
+        <payload-panel label="Usage" .value=${request.usage_json}></payload-panel>
+      </div>
+    `;
+  }
+
+  private renderRaw(request: Record<string, unknown>) {
+    return html`
+      <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
       <div class="payload-stack">
         <payload-panel label="Request parameters" .value=${request.params_json}></payload-panel>
-        <payload-panel label="Usage" .value=${request.usage_json}></payload-panel>
         <payload-panel label="Request context" .value=${request.ctx_json}></payload-panel>
+        <payload-panel
+          label="Persisted overview record"
+          .value=${request}
+          .redact_record_headers=${true}
+        ></payload-panel>
       </div>
     `;
   }
@@ -271,14 +284,7 @@ export class RequestDetailView extends LitElement {
       case "provider":
         return this.renderProvider(request, day, request_id, row_id);
       case "raw":
-        return html`
-          <p class="raw-note">Network headers and bodies remain lazy and are not included in this overview record.</p>
-          <payload-panel
-            label="Persisted overview record"
-            .value=${request}
-            .redact_record_headers=${true}
-          ></payload-panel>
-        `;
+        return this.renderRaw(request);
       default:
         return this.renderOverview(request);
     }
