@@ -5,16 +5,15 @@
 
 use anyhow::{bail, Context, Result};
 use parking_lot::Mutex;
-use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
+use tokn_persistence::{AccessDb, NewApiKeyRecord};
 use uuid::Uuid;
 
 const KEY_PREFIX: &str = "tokn";
-const SCHEMA_VERSION: i64 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProviderAccess {
@@ -126,7 +125,7 @@ pub enum AuthenticationError {
 /// created or revoked by a separate CLI process without a restart.
 pub struct AccessStore {
   path: PathBuf,
-  connection: Mutex<Connection>,
+  database: Mutex<AccessDb>,
 }
 
 impl std::fmt::Debug for AccessStore {
@@ -137,27 +136,19 @@ impl std::fmt::Debug for AccessStore {
 
 impl AccessStore {
   pub fn disabled() -> Self {
-    let connection = Connection::open_in_memory().expect("open in-memory access store");
-    migrate(&connection).expect("initialize in-memory access store");
+    let database = AccessDb::open_in_memory().expect("open in-memory access store");
     Self {
       path: PathBuf::from(":memory:"),
-      connection: Mutex::new(connection),
+      database: Mutex::new(database),
     }
   }
 
   pub fn open(path: impl AsRef<Path>) -> Result<Self> {
     let path = path.as_ref().to_path_buf();
-    if let Some(parent) = path.parent() {
-      std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    let connection = Connection::open(&path).with_context(|| format!("open {}", path.display()))?;
-    connection.busy_timeout(std::time::Duration::from_secs(5))?;
-    connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
-    migrate(&connection)?;
-    secure_file(&path)?;
+    let database = AccessDb::open(&path).with_context(|| format!("open {}", path.display()))?;
     Ok(Self {
       path,
-      connection: Mutex::new(connection),
+      database: Mutex::new(database),
     })
   }
 
@@ -172,9 +163,7 @@ impl AccessStore {
   /// Authentication switches on permanently when the first key is created.
   /// Revoking the final key therefore fails closed instead of disabling auth.
   pub fn is_enabled(&self) -> Result<bool> {
-    let connection = self.connection.lock();
-    let count: i64 = connection.query_row("SELECT COUNT(*) FROM api_keys", [], |row| row.get(0))?;
-    Ok(count > 0)
+    Ok(self.database.lock().has_keys()?)
   }
 
   pub fn create_key(&self, name: impl Into<String>, provider_ids: Vec<String>) -> Result<CreatedApiKey> {
@@ -190,12 +179,15 @@ impl AccessStore {
       let secret = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
       let token = format!("{KEY_PREFIX}_{id}_{secret}");
       let hash = hash_secret(secret.as_bytes());
-      let inserted = self.connection.lock().execute(
-        "INSERT OR IGNORE INTO api_keys (id, name, secret_hash, allowed_providers, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, name, hash.as_slice(), providers.to_json()?, created_at],
-      )?;
-      if inserted == 1 {
+      let allowed_providers = providers.to_json()?;
+      let inserted = self.database.lock().insert_key(&NewApiKeyRecord {
+        id: &id,
+        name: &name,
+        secret_hash: hash.as_slice(),
+        allowed_providers: &allowed_providers,
+        created_at,
+      })?;
+      if inserted {
         return Ok(CreatedApiKey {
           id,
           name,
@@ -209,29 +201,18 @@ impl AccessStore {
   }
 
   pub fn list_keys(&self) -> Result<Vec<ApiKeySummary>> {
-    let connection = self.connection.lock();
-    let mut statement = connection.prepare(
-      "SELECT id, name, allowed_providers, created_at, revoked_at
-       FROM api_keys ORDER BY created_at, id",
-    )?;
-    let rows = statement.query_map([], |row| {
-      Ok((
-        row.get::<_, String>(0)?,
-        row.get::<_, String>(1)?,
-        row.get::<_, String>(2)?,
-        row.get::<_, i64>(3)?,
-        row.get::<_, Option<i64>>(4)?,
-      ))
-    })?;
-    rows
-      .map(|row| {
-        let (id, name, providers, created_at, revoked_at) = row?;
+    self
+      .database
+      .lock()
+      .list_keys()?
+      .into_iter()
+      .map(|record| {
         Ok(ApiKeySummary {
-          id,
-          name,
-          providers: ProviderAccess::from_json(&providers)?,
-          created_at,
-          revoked_at,
+          id: record.id,
+          name: record.name,
+          providers: ProviderAccess::from_json(&record.allowed_providers)?,
+          created_at: record.created_at,
+          revoked_at: record.revoked_at,
         })
       })
       .collect()
@@ -239,46 +220,31 @@ impl AccessStore {
 
   pub fn revoke_key(&self, id: &str) -> Result<bool> {
     let revoked_at = OffsetDateTime::now_utc().unix_timestamp();
-    let changed = self.connection.lock().execute(
-      "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?1) WHERE id = ?2",
-      params![revoked_at, id],
-    )?;
-    Ok(changed == 1)
+    Ok(self.database.lock().revoke_key(id, revoked_at)?)
   }
 
   pub fn authenticate(&self, token: Option<&str>) -> Result<AccessContext, AuthenticationError> {
     let token = token.ok_or(AuthenticationError::Missing)?;
     let (id, secret) = parse_token(token).ok_or(AuthenticationError::Invalid)?;
     let record = self
-      .connection
+      .database
       .lock()
-      .query_row(
-        "SELECT name, secret_hash, allowed_providers, revoked_at FROM api_keys WHERE id = ?1",
-        [id],
-        |row| {
-          Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Vec<u8>>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<i64>>(3)?,
-          ))
-        },
-      )
-      .optional()
+      .find_key(id)
       .map_err(|_| AuthenticationError::Invalid)?
       .ok_or(AuthenticationError::Invalid)?;
-    let (name, expected_hash, allowed_providers, revoked_at) = record;
-    if revoked_at.is_some() {
+    if record.revoked_at.is_some() {
       return Err(AuthenticationError::Revoked);
     }
     let actual_hash = hash_secret(secret.as_bytes());
-    if expected_hash.len() != actual_hash.len() || !bool::from(expected_hash.as_slice().ct_eq(actual_hash.as_slice())) {
+    if record.secret_hash.len() != actual_hash.len()
+      || !bool::from(record.secret_hash.as_slice().ct_eq(actual_hash.as_slice()))
+    {
       return Err(AuthenticationError::Invalid);
     }
-    let providers = ProviderAccess::from_json(&allowed_providers).map_err(|_| AuthenticationError::Invalid)?;
+    let providers = ProviderAccess::from_json(&record.allowed_providers).map_err(|_| AuthenticationError::Invalid)?;
     Ok(AccessContext {
       key_id: Some(id.to_string()),
-      key_name: Some(name),
+      key_name: Some(record.name),
       providers,
     })
   }
@@ -300,43 +266,6 @@ fn parse_token(token: &str) -> Option<(&str, &str)> {
 
 fn hash_secret(secret: &[u8]) -> [u8; 32] {
   Sha256::digest(secret).into()
-}
-
-fn migrate(connection: &Connection) -> Result<()> {
-  let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-  if version > SCHEMA_VERSION {
-    bail!("access database schema {version} is newer than supported schema {SCHEMA_VERSION}");
-  }
-  if version == 0 {
-    connection.execute_batch(
-      "BEGIN IMMEDIATE;
-       CREATE TABLE api_keys (
-         id TEXT PRIMARY KEY,
-         name TEXT NOT NULL,
-         secret_hash BLOB NOT NULL,
-         allowed_providers TEXT NOT NULL,
-         created_at INTEGER NOT NULL,
-         revoked_at INTEGER
-       );
-       PRAGMA user_version = 1;
-       COMMIT;",
-    )?;
-  }
-  Ok(())
-}
-
-#[cfg(unix)]
-fn secure_file(path: &Path) -> Result<()> {
-  use std::os::unix::fs::PermissionsExt;
-  let mut permissions = std::fs::metadata(path)?.permissions();
-  permissions.set_mode(0o600);
-  std::fs::set_permissions(path, permissions)?;
-  Ok(())
-}
-
-#[cfg(not(unix))]
-fn secure_file(_path: &Path) -> Result<()> {
-  Ok(())
 }
 
 #[cfg(test)]

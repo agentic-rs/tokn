@@ -1,3 +1,4 @@
+pub mod access;
 pub mod archive;
 pub mod migrate;
 pub mod requests;
@@ -5,6 +6,7 @@ pub mod sessions;
 pub mod usage;
 pub mod viewer;
 
+pub use access::{AccessDb, ApiKeyRecord, ApiKeySummaryRecord, NewApiKeyRecord};
 pub use requests::{read_request_row, RequestEventHandler};
 pub use sessions::SessionEventHandler;
 pub use viewer::{
