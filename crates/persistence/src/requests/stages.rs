@@ -27,6 +27,8 @@ pub struct RequestEventHandler {
 }
 
 pub struct InboundConnectionUpdate<'a> {
+  user: Option<&'a str>,
+  api_key_id: Option<&'a str>,
   local_addr: Option<&'a str>,
   peer_addr: Option<&'a str>,
   mode: &'a str,
@@ -95,6 +97,8 @@ impl EventHandler for RequestEventHandler {
         }
         match record {
           RecordEvent::InboundConnection {
+            user,
+            api_key_id,
             local_addr,
             peer_addr,
             mode,
@@ -105,6 +109,8 @@ impl EventHandler for RequestEventHandler {
             request_id,
             attempt,
             InboundConnectionUpdate {
+              user: user.as_deref(),
+              api_key_id: api_key_id.as_deref(),
               local_addr: local_addr.as_deref(),
               peer_addr: peer_addr.as_deref(),
               mode: mode.as_str(),
@@ -161,9 +167,16 @@ impl RequestEventHandler {
     if let Some(peer_addr) = update.peer_addr {
       ctx.insert("peer_addr".to_string(), Value::String(peer_addr.to_string()));
     }
+    if let Some(api_key_id) = update.api_key_id {
+      ctx.insert("api_key_id".to_string(), Value::String(api_key_id.to_string()));
+    }
     ctx.insert("mode".to_string(), Value::String(update.mode.to_string()));
     ctx.insert("pipeline_id".to_string(), Value::String(update.method.to_string()));
     patch_ctx_json(conn, &id, ctx)?;
+    conn.execute(
+      "UPDATE request_connection SET user = COALESCE(user, ?2) WHERE request_id = ?1",
+      params![id, update.user],
+    )?;
     conn.execute(
       "INSERT INTO request_downstream (request_id, inbound_req_method, inbound_req_url)
        VALUES (?1, ?2, ?3)

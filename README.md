@@ -136,6 +136,10 @@ does not remove `Authorization` or `x-api-key`. Raw CONNECT tunnels and hosts in
 `proxy_mode.passthrough_hosts` cannot be inspected, so they are also left
 untouched and unauthenticated.
 
+For authenticated managed requests, persistence records the key name as the
+request `user` and its non-secret key id as `ctx_json.api_key_id` in request and
+usage data. The token and its hash are never copied into those databases.
+
 ## Config And Data
 
 Default files live under `~/.tokn/router/`:

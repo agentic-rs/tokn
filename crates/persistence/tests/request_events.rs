@@ -509,6 +509,8 @@ fn inbound_connection_record_updates_connection_fields() {
     req,
     0,
     RecordEvent::InboundConnection {
+      user: Some(SmolStr::new("client-a")),
+      api_key_id: Some(SmolStr::new("key-a")),
       local_addr: Some(SmolStr::new("127.0.0.1:4141")),
       peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
       mode: SmolStr::new("route"),
@@ -520,6 +522,8 @@ fn inbound_connection_record_updates_connection_fields() {
 
   let row = fetch_row(&dir, req);
   let ctx = ctx(&row);
+  assert_eq!(as_text(&row["user"]).as_deref(), Some("client-a"));
+  assert_eq!(ctx["api_key_id"], serde_json::json!("key-a"));
   assert_eq!(ctx["local_addr"], serde_json::json!("127.0.0.1:4141"));
   assert_eq!(ctx["peer_addr"], serde_json::json!("127.0.0.1:4142"));
   assert_eq!(ctx["mode"], serde_json::json!("route"));
@@ -540,6 +544,8 @@ fn record_without_started_bootstraps_row() {
     req,
     0,
     RecordEvent::InboundConnection {
+      user: None,
+      api_key_id: None,
       local_addr: Some(SmolStr::new("127.0.0.1:4141")),
       peer_addr: Some(SmolStr::new("127.0.0.1:4142")),
       mode: SmolStr::new("route"),

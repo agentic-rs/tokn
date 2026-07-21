@@ -18,6 +18,7 @@ struct PendingUsageRecord {
   project_id: Option<String>,
   ver: Option<String>,
   request_error: Option<String>,
+  user: Option<String>,
   endpoint: Option<String>,
   account_id: Option<String>,
   provider_id: Option<String>,
@@ -38,6 +39,7 @@ pub struct UsageRecord<'a> {
   pub project_id: Option<&'a str>,
   pub ver: Option<&'a str>,
   pub request_error: Option<&'a str>,
+  pub user: Option<&'a str>,
   pub endpoint: &'a RequestEndpoint,
   pub account_id: Option<&'a str>,
   pub provider_id: Option<&'a str>,
@@ -49,13 +51,15 @@ pub struct UsageRecord<'a> {
 }
 
 struct InboundConnectionRecord<'a> {
+  user: Option<&'a str>,
+  api_key_id: Option<&'a str>,
   local_addr: Option<&'a str>,
   peer_addr: Option<&'a str>,
   mode: &'a str,
   method: &'a str,
 }
 
-const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
+const BOOTSTRAP: &str = include_str!("../schemas/snapshot/usage/v0.2.1.sql");
 const MIGRATIONS: &[migrate::Migration] = &[
   migrate::Migration {
     version: 1,
@@ -81,6 +85,11 @@ const MIGRATIONS: &[migrate::Migration] = &[
     version: 5,
     name: "request_metadata",
     sql: include_str!("../schemas/migrations/usage/0005_request_metadata.sql"),
+  },
+  migrate::Migration {
+    version: 6,
+    name: "add_user",
+    sql: include_str!("../schemas/migrations/usage/0006_add_user.sql"),
   },
 ];
 
@@ -119,6 +128,7 @@ impl UsageDb {
          project_id,
          ver,
          request_error,
+         user,
          endpoint,
          account_id,
          provider_id,
@@ -129,7 +139,7 @@ impl UsageDb {
          status
        )
        VALUES (
-         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
        )",
       params![
         r.ts,
@@ -138,6 +148,7 @@ impl UsageDb {
         r.project_id,
         r.ver,
         r.request_error,
+        r.user,
         r.endpoint.as_str(),
         r.account_id,
         r.provider_id,
@@ -267,6 +278,7 @@ impl UsageEventHandler {
         project_id: pending.project_id.as_deref(),
         ver: pending.ver.as_deref(),
         request_error: pending.request_error.as_deref(),
+        user: pending.user.as_deref(),
         endpoint: &endpoint,
         account_id: pending.account_id.as_deref(),
         provider_id: pending.provider_id.as_deref(),
@@ -346,6 +358,14 @@ impl UsageEventHandler {
 
   fn on_inbound_connection(&mut self, request_id: &str, attempt: u32, record: InboundConnectionRecord<'_>) {
     let pending = self.ensure_pending(request_id, attempt, 0);
+    if pending.user.is_none() {
+      pending.user = record.user.map(str::to_string);
+    }
+    if let Some(api_key_id) = record.api_key_id {
+      pending
+        .ctx_json
+        .insert("api_key_id".to_string(), Value::String(api_key_id.to_string()));
+    }
     if let Some(local_addr) = record.local_addr {
       pending
         .ctx_json
@@ -423,6 +443,8 @@ impl EventHandler for UsageEventHandler {
       },
       RequestEventPayload::Record(record) => match record {
         RecordEvent::InboundConnection {
+          user,
+          api_key_id,
           local_addr,
           peer_addr,
           mode,
@@ -434,6 +456,8 @@ impl EventHandler for UsageEventHandler {
             request_id,
             attempt,
             InboundConnectionRecord {
+              user: user.as_deref(),
+              api_key_id: api_key_id.as_deref(),
               local_addr: local_addr.as_deref(),
               peer_addr: peer_addr.as_deref(),
               mode,
@@ -564,6 +588,7 @@ mod tests {
       project_id: Some("project-1"),
       ver: Some("v1"),
       request_error: None,
+      user: Some("client-a"),
       endpoint: &Endpoint::ChatCompletions.into(),
       account_id: Some("account"),
       provider_id: Some("provider"),
@@ -605,6 +630,8 @@ mod tests {
       0,
       1_001,
       RecordEvent::InboundConnection {
+        user: Some(SmolStr::new("client-a")),
+        api_key_id: Some(SmolStr::new("key-a")),
         local_addr: Some(SmolStr::new("127.0.0.1:4141")),
         peer_addr: Some(SmolStr::new("127.0.0.1:9999")),
         mode: SmolStr::new("router"),
@@ -713,6 +740,7 @@ mod tests {
     assert_eq!(
       parse_json(row.9.as_deref()),
       Some(json!({
+        "api_key_id": "key-a",
         "local_addr": "127.0.0.1:4141",
         "peer_addr": "127.0.0.1:9999",
         "mode": "router",
@@ -722,6 +750,14 @@ mod tests {
       }))
     );
     assert_eq!(row.10, Some(200));
+    let user: Option<String> = conn
+      .query_row(
+        "SELECT user FROM requests WHERE request_id = ?1",
+        params![request_id],
+        |row| row.get(0),
+      )
+      .unwrap();
+    assert_eq!(user.as_deref(), Some("client-a"));
   }
 
   #[test]

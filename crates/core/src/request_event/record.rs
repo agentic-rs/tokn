@@ -42,6 +42,11 @@ pub enum RecordEvent {
   /// supply whatever connection context they have without widening
   /// [`RawInbound`](tokn_requests::RawInbound).
   InboundConnection {
+    /// Authenticated client label. This is the API-key name for managed
+    /// requests and is absent when client authentication is bypassed.
+    user: Option<SmolStr>,
+    /// Stable identifier of the client API key used for authentication.
+    api_key_id: Option<SmolStr>,
     local_addr: Option<SmolStr>,
     peer_addr: Option<SmolStr>,
     mode: SmolStr,

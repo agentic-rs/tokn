@@ -230,10 +230,12 @@ async fn proxy_via_pipeline_inner(
   };
   let hx = request_header_extract(&parts.headers);
   let request_id = SmolStr::new(&hx.request_id);
+  let access = parts.extensions.get::<AccessContext>();
 
   emit_proxy_inbound(
     state,
     request_id.clone(),
+    access,
     local_addr.as_deref(),
     peer_addr.as_deref(),
     mode_name,
@@ -338,6 +340,7 @@ fn decode_proxy_body(headers: &tokn_headers::HeaderMap, raw_body: Bytes) -> Byte
 fn emit_proxy_inbound(
   state: &AppState,
   request_id: SmolStr,
+  access: Option<&AccessContext>,
   local_addr: Option<&str>,
   peer_addr: Option<&str>,
   mode: &str,
@@ -350,6 +353,8 @@ fn emit_proxy_inbound(
     attempt: 0,
     ts,
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      user: access.and_then(|access| access.key_name.clone()).map(SmolStr::from),
+      api_key_id: access.and_then(|access| access.key_id.clone()).map(SmolStr::from),
       local_addr: local_addr.map(SmolStr::new),
       peer_addr: peer_addr.map(SmolStr::new),
       mode: SmolStr::new(mode),

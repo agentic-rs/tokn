@@ -1,0 +1,1 @@
+{"table":"requests","values":{"id":1,"ts":200,"session_id":null,"request_id":null,"project_id":null,"ver":null,"request_error":null,"endpoint":null,"account_id":"acct-1","provider_id":"prov-1","model":"model-1","params_json":{"initiator":"user","stream":true},"usage_json":{"input":5,"output":7},"ctx_json":{"latency_ms":42},"status":200,"user":null}}
