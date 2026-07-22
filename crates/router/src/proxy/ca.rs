@@ -14,6 +14,8 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 const CA_CERT_FILE: &str = "ca.crt";
 const CA_KEY_FILE: &str = "ca.key";
 const CA_BUNDLE_FILE: &str = "ca-bundle.crt";
+const LEAF_VALIDITY: TimeDuration = TimeDuration::days(7);
+const LEAF_REFRESH_AFTER: TimeDuration = TimeDuration::days(6);
 
 pub fn load_or_generate_ca(dir: &Path, force_regenerate: bool) -> Result<ProxyCa> {
   std::fs::create_dir_all(dir).with_context(|| format!("create ca dir {}", dir.display()))?;
@@ -88,7 +90,13 @@ pub struct ProxyCa {
   dir: PathBuf,
   cert_pem: String,
   issuer: Arc<Issuer<'static, KeyPair>>,
-  cert_cache: Arc<Mutex<HashMap<String, Arc<CertifiedKey>>>>,
+  cert_cache: Arc<Mutex<HashMap<String, CachedCertificate>>>,
+}
+
+#[derive(Clone)]
+struct CachedCertificate {
+  certified_key: Arc<CertifiedKey>,
+  refresh_at: OffsetDateTime,
 }
 
 impl ProxyCa {
@@ -129,14 +137,24 @@ impl ProxyCa {
   }
 
   pub(super) fn certified_key_for(&self, host: &str) -> Result<Arc<CertifiedKey>> {
-    if let Some(existing) = self.cert_cache.lock().get(host).cloned() {
+    self.certified_key_for_at(host, OffsetDateTime::now_utc())
+  }
+
+  fn certified_key_for_at(&self, host: &str, now: OffsetDateTime) -> Result<Arc<CertifiedKey>> {
+    if let Some(existing) = self
+      .cert_cache
+      .lock()
+      .get(host)
+      .filter(|cached| now < cached.refresh_at)
+      .map(|cached| cached.certified_key.clone())
+    {
       return Ok(existing);
     }
 
     let mut params = CertificateParams::new(vec![host.to_string()]).context("build leaf certificate params")?;
     params.distinguished_name.push(rcgen::DnType::CommonName, host);
-    params.not_before = OffsetDateTime::now_utc() - TimeDuration::days(1);
-    params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(7);
+    params.not_before = now - TimeDuration::days(1);
+    params.not_after = now + LEAF_VALIDITY;
     params.is_ca = IsCa::NoCa;
     params.key_usages = vec![
       rcgen::KeyUsagePurpose::DigitalSignature,
@@ -157,7 +175,15 @@ impl ProxyCa {
       )
       .context("build rustls certified key")?,
     );
-    self.cert_cache.lock().insert(host.to_string(), certified.clone());
+    let cached = CachedCertificate {
+      certified_key: certified.clone(),
+      refresh_at: now + LEAF_REFRESH_AFTER,
+    };
+    let mut cache = self.cert_cache.lock();
+    if let Some(existing) = cache.get(host).filter(|existing| now < existing.refresh_at) {
+      return Ok(existing.certified_key.clone());
+    }
+    cache.insert(host.to_string(), cached);
     Ok(certified)
   }
 }
@@ -208,5 +234,38 @@ impl ResolvesServerCert for DynamicResolver {
   fn resolve(&self, client_hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
     let host = client_hello.server_name().unwrap_or(&self.fallback_host);
     self.ca.certified_key_for(host).ok()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn cached_leaf_is_refreshed_before_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let ca = load_or_generate_ca(dir.path(), false).unwrap();
+    let generated_at = OffsetDateTime::now_utc();
+
+    let initial = ca.certified_key_for_at("example.com", generated_at).unwrap();
+    let cached = ca
+      .certified_key_for_at(
+        "example.com",
+        generated_at + LEAF_REFRESH_AFTER - TimeDuration::seconds(1),
+      )
+      .unwrap();
+    let refreshed = ca
+      .certified_key_for_at("example.com", generated_at + LEAF_REFRESH_AFTER)
+      .unwrap();
+    let refreshed_cached = ca
+      .certified_key_for_at(
+        "example.com",
+        generated_at + LEAF_REFRESH_AFTER + TimeDuration::seconds(1),
+      )
+      .unwrap();
+
+    assert!(Arc::ptr_eq(&initial, &cached));
+    assert!(!Arc::ptr_eq(&initial, &refreshed));
+    assert!(Arc::ptr_eq(&refreshed, &refreshed_cached));
   }
 }
