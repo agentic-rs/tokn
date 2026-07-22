@@ -1128,6 +1128,42 @@ mod tests {
     assert_eq!(denied.status(), StatusCode::FORBIDDEN);
   }
 
+  #[tokio::test]
+  async fn authenticated_request_emits_api_key_attribution() {
+    let temp = tempfile::tempdir().unwrap();
+    let access = tokn_access::AccessStore::open(temp.path().join("access.db")).unwrap();
+    let created = access.create_key("test-client", vec!["openai".into()]).unwrap();
+    let mut cfg = Config::default();
+    cfg.api_key.enabled = true;
+    let events = Arc::new(EventBus::new(32));
+    let mut receiver = events.subscribe();
+    let mut state = build_state(&cfg, &[core_account(zai_account())], events).unwrap();
+    state.access = Arc::new(access);
+
+    let mut request = chat_request("attributed-key");
+    request
+      .headers_mut()
+      .insert("authorization", format!("Bearer {}", created.token).parse().unwrap());
+    let response = router(state).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let mut attribution = None;
+    while let Ok(event) = receiver.try_recv() {
+      if let tokn_core::event::Event::Requests(request) = event.as_ref() {
+        if let tokn_core::request_event::RequestEventPayload::Record(
+          tokn_core::request_event::RecordEvent::InboundConnection { user, api_key_id, .. },
+        ) = &request.payload
+        {
+          attribution = Some((user.clone(), api_key_id.clone()));
+          break;
+        }
+      }
+    }
+    let (user, api_key_id) = attribution.expect("authenticated inbound connection event");
+    assert_eq!(user.as_deref(), Some("test-client"));
+    assert_eq!(api_key_id.as_deref(), Some(created.id.as_str()));
+  }
+
   async fn one_shot_models_upstream(
     model_id: &'static str,
   ) -> (

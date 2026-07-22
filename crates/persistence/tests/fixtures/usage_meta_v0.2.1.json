@@ -1,0 +1,32 @@
+{
+  "expected_version": 6,
+  "input": [
+    {
+      "table": "requests",
+      "columns": ["id", "ts", "account_id", "provider_id", "model", "initiator", "prompt_tok", "completion_tok", "latency_ms", "status", "stream"]
+    }
+  ],
+  "output": [
+    {
+      "table": "requests",
+      "columns": [
+        "id",
+        "ts",
+        "session_id",
+        "request_id",
+        "project_id",
+        "ver",
+        "request_error",
+        "endpoint",
+        "account_id",
+        "provider_id",
+        "model",
+        "params_json",
+        "usage_json",
+        "ctx_json",
+        "status",
+        "user"
+      ]
+    }
+  ]
+}

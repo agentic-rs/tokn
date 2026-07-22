@@ -24,7 +24,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokn_access::{AccessContext, ProviderAccess};
 use tokn_config::RouteMode;
 use tokn_core::account::{AccountTier, AuthType};
-use tokn_core::event::EventBus;
+use tokn_core::event::{Event, EventBus};
+use tokn_core::request_event::{RecordEvent, RequestEventPayload};
 use tokn_router::api::build_proxy_state;
 use tokn_router::config::Config;
 use tokn_router::proxy::passthrough_pipeline::{proxy_passthrough_via_pipeline_inner, proxy_switch_via_pipeline_inner};
@@ -412,6 +413,7 @@ async fn proxy_passthrough_pipeline_forwards_request_and_preserves_client_auth()
     method,
     inbound_method,
     url,
+    ..
   }) = &events[p_inbound].payload
   {
     assert_eq!(local_addr.as_deref(), Some(addr.to_string().as_str()));
@@ -897,7 +899,9 @@ async fn proxy_switch_rejects_unrecognized_provider_url() {
 async fn proxy_switch_rejects_a_provider_outside_the_api_key_allowlist() {
   let mut cfg = Config::default();
   cfg.server.route_mode = RouteMode::Switch;
-  let state = build_proxy_state(&cfg, &[openai_account()], Arc::new(EventBus::noop())).unwrap();
+  let events = Arc::new(EventBus::new(32));
+  let mut receiver = events.subscribe();
+  let state = build_proxy_state(&cfg, &[openai_account()], events).unwrap();
 
   let mut req = Request::builder()
     .method(Method::GET)
@@ -915,6 +919,18 @@ async fn proxy_switch_rejects_a_provider_outside_the_api_key_allowlist() {
     proxy_switch_via_pipeline_inner(&state, "api.openai.com", 443, "https", None, None, parts, Bytes::new()).await;
 
   assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+  let mut attribution = None;
+  while let Ok(event) = receiver.try_recv() {
+    if let Event::Requests(request) = event.as_ref() {
+      if let RequestEventPayload::Record(RecordEvent::InboundConnection { user, api_key_id, .. }) = &request.payload {
+        attribution = Some((user.clone(), api_key_id.clone()));
+        break;
+      }
+    }
+  }
+  let (user, api_key_id) = attribution.expect("proxy switch inbound attribution");
+  assert_eq!(user.as_deref(), Some("restricted-client"));
+  assert_eq!(api_key_id.as_deref(), Some("key-test"));
 }
 
 #[tokio::test]

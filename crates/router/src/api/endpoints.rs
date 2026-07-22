@@ -50,6 +50,8 @@ async fn handle(
     attempt: 0,
     ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      user: access.key_name.clone().map(SmolStr::from),
+      api_key_id: access.key_id.clone().map(SmolStr::from),
       local_addr: local_addr.clone().map(SmolStr::from),
       peer_addr: None,
       mode: SmolStr::new(request_record_mode(mode)),

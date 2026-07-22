@@ -425,6 +425,7 @@ fn emit_router_not_implemented(
   let response_body = serde_json::from_slice(&api_err.body_bytes()).unwrap_or(serde_json::Value::Null);
   let mut response_headers = tokn_headers::HeaderMap::new();
   response_headers.insert("content-type", "application/json");
+  let access = req.extensions().get::<tokn_access::AccessContext>();
 
   state.events.emit(CoreEvent::Requests(RequestEvent {
     request_id: request_id.clone(),
@@ -439,6 +440,8 @@ fn emit_router_not_implemented(
     attempt: 0,
     ts,
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      user: access.and_then(|access| access.key_name.clone()).map(SmolStr::from),
+      api_key_id: access.and_then(|access| access.key_id.clone()).map(SmolStr::from),
       local_addr: Some(SmolStr::new(local.to_string())),
       peer_addr: Some(SmolStr::new(peer.to_string())),
       mode: SmolStr::new(route_mode_as_str(mode.unwrap_or(RouteMode::Route))),

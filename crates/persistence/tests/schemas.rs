@@ -89,8 +89,10 @@ const SESSIONS_MIGRATIONS: &[Migration] = &[
 const USAGE_V0_0_0: &str = include_str!("../schemas/snapshot/usage/v0.0.0.sql");
 const USAGE_V0_1_1: &str = include_str!("../schemas/snapshot/usage/v0.1.1.sql");
 const USAGE_V0_2_0: &str = include_str!("../schemas/snapshot/usage/v0.2.0.sql");
+const USAGE_V0_2_1: &str = include_str!("../schemas/snapshot/usage/v0.2.1.sql");
 const USAGE_SQUASH_V0_1_1: &str = include_str!("../schemas/squash/usage/v0.0.0_v0.1.1_0001_0004.sql");
 const USAGE_SQUASH_V0_2_0: &str = include_str!("../schemas/squash/usage/v0.1.1_v0.2.0_0004_0005.sql");
+const USAGE_SQUASH_V0_2_1: &str = include_str!("../schemas/squash/usage/v0.2.0_v0.2.1_0005_0006.sql");
 const USAGE_MIGRATIONS: &[Migration] = &[
   Migration {
     version: 1,
@@ -116,6 +118,11 @@ const USAGE_MIGRATIONS: &[Migration] = &[
     version: 5,
     name: "request_metadata",
     sql: include_str!("../schemas/migrations/usage/0005_request_metadata.sql"),
+  },
+  Migration {
+    version: 6,
+    name: "add_user",
+    sql: include_str!("../schemas/migrations/usage/0006_add_user.sql"),
   },
 ];
 
@@ -224,6 +231,19 @@ const USAGE_V0_2_0_CASE: DbCase = DbCase {
   expected_jsonl: include_str!("fixtures/usage_expected_v0.2.0.jsonl"),
 };
 
+const USAGE_V0_2_1_CASE: DbCase = DbCase {
+  name: "usage",
+  v0_0_0: USAGE_V0_0_0,
+  target_snapshot: USAGE_V0_2_1,
+  target_squash: USAGE_SQUASH_V0_2_1,
+  target_version: 6,
+  squash_start_version: 5,
+  migrations: USAGE_MIGRATIONS,
+  meta_json: include_str!("fixtures/usage_meta_v0.2.1.json"),
+  seed_jsonl: include_str!("fixtures/usage_seed_v0.1.1.jsonl"),
+  expected_jsonl: include_str!("fixtures/usage_expected_v0.2.1.jsonl"),
+};
+
 #[test]
 fn requests_v0_1_1_migrations_and_squash_match_fixture() {
   assert_case(REQUESTS_V0_1_1_CASE);
@@ -257,6 +277,11 @@ fn usage_v0_1_1_migrations_and_squash_match_fixture() {
 #[test]
 fn usage_v0_2_0_migrations_and_squash_match_fixture() {
   assert_case(USAGE_V0_2_0_CASE);
+}
+
+#[test]
+fn usage_v0_2_1_migrations_and_squash_match_fixture() {
+  assert_case(USAGE_V0_2_1_CASE);
 }
 
 fn assert_case(case: DbCase) {

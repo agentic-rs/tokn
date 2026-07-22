@@ -259,6 +259,8 @@ pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
     attempt: 0,
     ts: tokn_core::util::now_unix_ms(),
     payload: RequestEventPayload::Record(RecordEvent::InboundConnection {
+      user: None,
+      api_key_id: None,
       local_addr: None,
       peer_addr: None,
       mode: "smoke".into(),
@@ -467,6 +469,8 @@ fn print_event(event: &Event) {
     }
     EventPayload::Record(r) => match r {
       RecordEvent::InboundConnection {
+        user,
+        api_key_id,
         local_addr,
         peer_addr,
         mode,
@@ -475,7 +479,9 @@ fn print_event(event: &Event) {
         url,
       } => {
         println!(
-          "[record:inbound_conn] mode={mode} method={method} inbound_method={inbound_method} local={} peer={} url={}",
+          "[record:inbound_conn] mode={mode} method={method} inbound_method={inbound_method} user={} api_key_id={} local={} peer={} url={}",
+          user.as_deref().unwrap_or("-"),
+          api_key_id.as_deref().unwrap_or("-"),
           local_addr.as_deref().unwrap_or("-"),
           peer_addr.as_deref().unwrap_or("-"),
           url.as_deref().unwrap_or("-")
