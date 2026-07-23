@@ -171,6 +171,11 @@ enabled = false
 host = "127.0.0.1"
 port = 4141
 
+[server.cors]
+# Cross-origin browser access is disabled by default. Use exact origins only.
+enabled = false
+allowed_origins = []
+
 [defaults]
 mode = "route"
 # Required when mode is "passthrough" or "switch"; optional otherwise.

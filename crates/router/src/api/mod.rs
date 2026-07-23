@@ -10,7 +10,7 @@ pub mod response;
 use crate::api::identity::AccountIdentityResolver;
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use axum::http::{HeaderMap, HeaderName, Request, Response};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::response::Response as AxumResponse;
@@ -35,6 +35,7 @@ use tokn_core::event::EventBus;
 
 const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy =
   tokn_requests::RetryPolicy::new(2, Duration::from_millis(100));
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
@@ -120,6 +121,7 @@ pub struct AppState {
   pub http: reqwest::Client,
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
+  pub cors_allowed_origins: Arc<BTreeSet<String>>,
   pub proxy_provider_modes: Arc<std::collections::BTreeMap<String, ProxyProviderMode>>,
   /// Shared `tokn-requests` pipeline used for router-owned JSON endpoints.
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
@@ -238,6 +240,7 @@ pub fn router(state: AppState) -> Router {
 
 pub fn router_live(state: LiveAppState) -> Router {
   let request_id_header = HeaderName::from_static(REQUEST_ID_HEADER);
+  let cors = cors_layer(state.clone());
 
   // TraceLayer is customised so the per-request span carries `request_id`
   // (set by SetRequestIdLayer below) and emits a single info-level summary
@@ -301,17 +304,24 @@ pub fn router_live(state: LiveAppState) -> Router {
     .route("/{profile}/v1/responses", post(endpoints::responses_with_profile))
     .route("/{profile}/v1/messages", post(endpoints::messages_with_profile));
 
-  Router::new()
+  let client_routes = Router::new()
     .route("/v1/providers", get(providers::list_providers))
     .route("/v1/models", get(models::list_models))
     .route("/v1/chat/completions", post(endpoints::chat_completions))
     .route("/v1/responses", post(endpoints::responses))
     .route("/v1/messages", post(endpoints::messages))
     .merge(profile_routes)
+    .layer(middleware::from_fn_with_state(state.clone(), access::authenticate))
+    // CORS must be outside authentication so browser preflight requests do
+    // not need an API key. The origin predicate reads the live state, which
+    // lets config reloads replace the allowlist without rebuilding the router.
+    .layer(cors);
+
+  Router::new()
+    .merge(client_routes)
     .route("/admin/config/reload", post(admin_config_reload))
     .route("/healthz", get(health))
     .with_state(state.clone())
-    .layer(middleware::from_fn_with_state(state.clone(), access::authenticate))
     // Layers run outermost-first on request, innermost-first on response.
     // SetRequestIdLayer with MakeRequestUuid only assigns a fresh UUID when
     // the inbound request lacks the header, so client-supplied ids pass
@@ -321,6 +331,33 @@ pub fn router_live(state: LiveAppState) -> Router {
     .layer(trace)
     .layer(SetRequestIdLayer::new(request_id_header, MakeRequestUuid))
     .layer(middleware::from_fn(track_request))
+}
+
+fn cors_layer(state: LiveAppState) -> CorsLayer {
+  let allowed_origins = AllowOrigin::predicate(move |origin: &HeaderValue, _| {
+    origin
+      .to_str()
+      .ok()
+      .is_some_and(|origin| state.current().cors_allowed_origins.contains(origin))
+  });
+  CorsLayer::new()
+    .allow_origin(allowed_origins)
+    .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+    .allow_headers([
+      header::ACCEPT,
+      header::AUTHORIZATION,
+      header::CONTENT_TYPE,
+      HeaderName::from_static("x-api-key"),
+      HeaderName::from_static(REQUEST_ID_HEADER),
+      HeaderName::from_static(SESSION_ID_HEADER),
+      HeaderName::from_static("openai-beta"),
+      HeaderName::from_static("openai-organization"),
+      HeaderName::from_static("openai-project"),
+      HeaderName::from_static("anthropic-version"),
+      HeaderName::from_static("anthropic-beta"),
+    ])
+    .expose_headers([HeaderName::from_static(REQUEST_ID_HEADER)])
+    .max_age(Duration::from_secs(600))
 }
 
 async fn health() -> &'static str {
@@ -436,6 +473,11 @@ fn build_state_inner(
   }
   let proxy_passthrough_pipeline = build_proxy_passthrough_pipeline(http.clone(), events.clone());
   let proxy_switch_pipeline = build_proxy_switch_pipeline(pool.clone(), http.clone(), events.clone());
+  let cors_allowed_origins = if cfg.server.cors.enabled {
+    cfg.server.cors.canonical_allowed_origins()?
+  } else {
+    BTreeSet::new()
+  };
   Ok(AppState {
     access: Arc::new(tokn_access::AccessStore::disabled()),
     api_key_enabled: cfg.api_key.enabled,
@@ -452,6 +494,7 @@ fn build_state_inner(
     http,
     events,
     body_max_bytes,
+    cors_allowed_origins: Arc::new(cors_allowed_origins),
     proxy_provider_modes: Arc::new(cfg.proxy_mode.provider_modes.clone()),
     proxy_passthrough_pipeline,
     proxy_switch_pipeline,
@@ -1017,6 +1060,136 @@ mod tests {
     let mut state = build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap();
     state.access = Arc::new(access);
     (state, created.token)
+  }
+
+  fn cors_preflight(origin: &str) -> Request<Body> {
+    Request::builder()
+      .method(Method::OPTIONS)
+      .uri("/v1/responses")
+      .header(header::ORIGIN, origin)
+      .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+      .header(
+        header::ACCESS_CONTROL_REQUEST_HEADERS,
+        "authorization,x-api-key,content-type,openai-beta",
+      )
+      .body(Body::empty())
+      .unwrap()
+  }
+
+  fn cors_state(origin: &str, api_key_enabled: bool) -> AppState {
+    let mut cfg = Config::default();
+    cfg.api_key.enabled = api_key_enabled;
+    cfg.server.cors.enabled = true;
+    cfg.server.cors.allowed_origins = vec![origin.into()];
+    build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap()
+  }
+
+  #[tokio::test]
+  async fn cors_preflight_precedes_authentication_and_is_scoped_to_client_routes() {
+    let origin = "https://app.example.com";
+    let app = router(cors_state(origin, true));
+
+    let preflight = app.clone().oneshot(cors_preflight(origin)).await.unwrap();
+    assert_eq!(preflight.status(), StatusCode::OK);
+    assert_eq!(
+      preflight.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+      origin
+    );
+    assert!(preflight
+      .headers()
+      .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+      .unwrap()
+      .to_str()
+      .unwrap()
+      .contains("POST"));
+    let allowed_headers = preflight
+      .headers()
+      .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+      .unwrap()
+      .to_str()
+      .unwrap();
+    assert!(allowed_headers.contains("authorization"));
+    assert!(allowed_headers.contains("x-api-key"));
+    assert!(preflight
+      .headers()
+      .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
+      .is_none());
+
+    let unauthorized = app
+      .clone()
+      .oneshot(
+        Request::get("/v1/providers")
+          .header(header::ORIGIN, origin)
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+      unauthorized.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+      origin
+    );
+    assert_eq!(
+      unauthorized
+        .headers()
+        .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+        .unwrap(),
+      REQUEST_ID_HEADER
+    );
+
+    let health = app
+      .clone()
+      .oneshot(
+        Request::get("/healthz")
+          .header(header::ORIGIN, origin)
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert!(health.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+
+    let admin_preflight = app
+      .oneshot(
+        Request::builder()
+          .method(Method::OPTIONS)
+          .uri("/admin/config/reload")
+          .header(header::ORIGIN, origin)
+          .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert!(admin_preflight
+      .headers()
+      .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+      .is_none());
+  }
+
+  #[tokio::test]
+  async fn cors_allowlist_follows_live_config_reload() {
+    let first_origin = "https://first.example.com";
+    let second_origin = "http://localhost:3000";
+    let live = LiveAppState::new(cors_state(first_origin, false));
+    let app = router_live(live.clone());
+
+    let first = app.clone().oneshot(cors_preflight(first_origin)).await.unwrap();
+    assert_eq!(
+      first.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+      first_origin
+    );
+
+    live.swap(cors_state(second_origin, false));
+
+    let stale = app.clone().oneshot(cors_preflight(first_origin)).await.unwrap();
+    assert!(stale.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+    let current = app.oneshot(cors_preflight(second_origin)).await.unwrap();
+    assert_eq!(
+      current.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
+      second_origin
+    );
   }
 
   #[tokio::test]
