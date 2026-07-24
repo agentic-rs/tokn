@@ -10,7 +10,7 @@ pub mod response;
 use crate::api::identity::AccountIdentityResolver;
 use anyhow::Result;
 use arc_swap::ArcSwap;
-use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::response::Response as AxumResponse;
@@ -35,7 +35,7 @@ use tokn_core::event::EventBus;
 
 const PIPELINE_RETRY_POLICY: tokn_requests::RetryPolicy =
   tokn_requests::RetryPolicy::new(2, Duration::from_millis(100));
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{Level, Span};
@@ -344,19 +344,7 @@ fn cors_layer(state: LiveAppState) -> CorsLayer {
   CorsLayer::new()
     .allow_origin(allowed_origins)
     .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-    .allow_headers([
-      header::ACCEPT,
-      header::AUTHORIZATION,
-      header::CONTENT_TYPE,
-      HeaderName::from_static("x-api-key"),
-      HeaderName::from_static(REQUEST_ID_HEADER),
-      HeaderName::from_static(SESSION_ID_HEADER),
-      HeaderName::from_static("openai-beta"),
-      HeaderName::from_static("openai-organization"),
-      HeaderName::from_static("openai-project"),
-      HeaderName::from_static("anthropic-version"),
-      HeaderName::from_static("anthropic-beta"),
-    ])
+    .allow_headers(AllowHeaders::mirror_request())
     .expose_headers([HeaderName::from_static(REQUEST_ID_HEADER)])
     .max_age(Duration::from_secs(600))
 }
@@ -884,7 +872,7 @@ mod tests {
   use crate::config::{Account as AccountCfg, Config, ProfileConfig, RouteMode};
   use crate::util::secret::Secret;
   use axum::body::{to_bytes, Body};
-  use axum::http::{Method, Request, StatusCode};
+  use axum::http::{header, Method, Request, StatusCode};
   use axum::routing::get;
   use bytes::Bytes;
   use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1090,7 +1078,11 @@ mod tests {
       .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
       .header(
         header::ACCESS_CONTROL_REQUEST_HEADERS,
-        "authorization,x-api-key,content-type,openai-beta",
+        concat!(
+          "authorization,x-api-key,content-type,openai-beta,",
+          "x-client-session-id,x-opencode-request,x-opencode-project,",
+          "x-future-client-metadata"
+        ),
       )
       .body(Body::empty())
       .unwrap()
@@ -1135,8 +1127,20 @@ mod tests {
       .unwrap()
       .to_str()
       .unwrap();
-    assert!(allowed_headers.contains("authorization"));
-    assert!(allowed_headers.contains("x-api-key"));
+    let allowed_headers = allowed_headers.split(',').map(str::trim).collect::<BTreeSet<_>>();
+    assert_eq!(
+      allowed_headers,
+      BTreeSet::from([
+        "authorization",
+        "content-type",
+        "openai-beta",
+        "x-api-key",
+        "x-client-session-id",
+        "x-future-client-metadata",
+        "x-opencode-project",
+        "x-opencode-request",
+      ])
+    );
     assert!(preflight
       .headers()
       .get(header::ACCESS_CONTROL_ALLOW_CREDENTIALS)
