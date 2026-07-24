@@ -210,12 +210,14 @@ pub struct CorsConfig {
   #[serde(default)]
   pub enabled: bool,
   #[serde(default)]
+  pub allow_localhost: bool,
+  #[serde(default)]
   pub allowed_origins: Vec<String>,
 }
 
 impl CorsConfig {
   pub fn validate(&self) -> Result<()> {
-    if self.enabled && self.allowed_origins.is_empty() {
+    if self.enabled && !self.allow_localhost && self.allowed_origins.is_empty() {
       return error::CorsOriginsEmptySnafu.fail();
     }
     self.canonical_allowed_origins().map(|_| ())
@@ -1024,7 +1026,22 @@ mod tests {
   fn cors_defaults_to_disabled() {
     let cors = &Config::default().server.cors;
     assert!(!cors.enabled);
+    assert!(!cors.allow_localhost);
     assert!(cors.allowed_origins.is_empty());
+  }
+
+  #[test]
+  fn enabled_cors_can_allow_localhost_without_exact_origins() {
+    let cfg: Config = toml::from_str(
+      r#"
+        [server.cors]
+        enabled = true
+        allow_localhost = true
+      "#,
+    )
+    .expect("config should deserialize");
+
+    cfg.validate().unwrap();
   }
 
   #[test]

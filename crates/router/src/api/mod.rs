@@ -122,6 +122,7 @@ pub struct AppState {
   pub events: Arc<EventBus>,
   pub body_max_bytes: usize,
   pub cors_allowed_origins: Arc<BTreeSet<String>>,
+  pub cors_allow_localhost: bool,
   pub proxy_provider_modes: Arc<std::collections::BTreeMap<String, ProxyProviderMode>>,
   /// Shared `tokn-requests` pipeline used for router-owned JSON endpoints.
   pub request_pipeline: Arc<tokn_requests::Pipeline>,
@@ -335,10 +336,10 @@ pub fn router_live(state: LiveAppState) -> Router {
 
 fn cors_layer(state: LiveAppState) -> CorsLayer {
   let allowed_origins = AllowOrigin::predicate(move |origin: &HeaderValue, _| {
-    origin
-      .to_str()
-      .ok()
-      .is_some_and(|origin| state.current().cors_allowed_origins.contains(origin))
+    origin.to_str().ok().is_some_and(|origin| {
+      let state = state.current();
+      state.cors_allowed_origins.contains(origin) || (state.cors_allow_localhost && is_localhost_origin(origin))
+    })
   });
   CorsLayer::new()
     .allow_origin(allowed_origins)
@@ -358,6 +359,24 @@ fn cors_layer(state: LiveAppState) -> CorsLayer {
     ])
     .expose_headers([HeaderName::from_static(REQUEST_ID_HEADER)])
     .max_age(Duration::from_secs(600))
+}
+
+fn is_localhost_origin(origin: &str) -> bool {
+  let Ok(origin) = reqwest::Url::parse(origin) else {
+    return false;
+  };
+  if !matches!(origin.scheme(), "http" | "https")
+    || !origin.username().is_empty()
+    || origin.password().is_some()
+    || origin.path() != "/"
+    || origin.query().is_some()
+    || origin.fragment().is_some()
+  {
+    return false;
+  }
+  origin.host_str().is_some_and(|host| {
+    host == "localhost" || host.ends_with(".localhost") || host == "127.0.0.1" || matches!(host, "::1" | "[::1]")
+  })
 }
 
 async fn health() -> &'static str {
@@ -495,6 +514,7 @@ fn build_state_inner(
     events,
     body_max_bytes,
     cors_allowed_origins: Arc::new(cors_allowed_origins),
+    cors_allow_localhost: cfg.server.cors.enabled && cfg.server.cors.allow_localhost,
     proxy_provider_modes: Arc::new(cfg.proxy_mode.provider_modes.clone()),
     proxy_passthrough_pipeline,
     proxy_switch_pipeline,
@@ -1084,6 +1104,13 @@ mod tests {
     build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap()
   }
 
+  fn localhost_cors_state() -> AppState {
+    let mut cfg = Config::default();
+    cfg.server.cors.enabled = true;
+    cfg.server.cors.allow_localhost = true;
+    build_state(&cfg, &[core_account(zai_account())], Arc::new(EventBus::noop())).unwrap()
+  }
+
   #[tokio::test]
   async fn cors_preflight_precedes_authentication_and_is_scoped_to_client_routes() {
     let origin = "https://app.example.com";
@@ -1169,7 +1196,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn cors_allowlist_follows_live_config_reload() {
+  async fn cors_policy_follows_live_config_reload() {
     let first_origin = "https://first.example.com";
     let second_origin = "http://localhost:3000";
     let live = LiveAppState::new(cors_state(first_origin, false));
@@ -1181,7 +1208,7 @@ mod tests {
       first_origin
     );
 
-    live.swap(cors_state(second_origin, false));
+    live.swap(localhost_cors_state());
 
     let stale = app.clone().oneshot(cors_preflight(first_origin)).await.unwrap();
     assert!(stale.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
@@ -1190,6 +1217,40 @@ mod tests {
       current.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).unwrap(),
       second_origin
     );
+  }
+
+  #[tokio::test]
+  async fn cors_can_allow_localhost_origin_family() {
+    let app = router(localhost_cors_state());
+    for origin in [
+      "http://localhost",
+      "https://localhost:8443",
+      "http://app.localhost:3000",
+      "https://nested.app.localhost",
+      "http://127.0.0.1:5173",
+      "https://[::1]:9443",
+    ] {
+      let response = app.clone().oneshot(cors_preflight(origin)).await.unwrap();
+      assert_eq!(
+        response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+        Some(&HeaderValue::try_from(origin).unwrap()),
+        "origin should be allowed: {origin}"
+      );
+    }
+
+    for origin in [
+      "http://localhost.example.com",
+      "http://examplelocalhost",
+      "http://127.0.0.2:5173",
+      "http://192.168.1.10",
+      "https://example.com",
+    ] {
+      let response = app.clone().oneshot(cors_preflight(origin)).await.unwrap();
+      assert!(
+        response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none(),
+        "origin should be rejected: {origin}"
+      );
+    }
   }
 
   #[tokio::test]

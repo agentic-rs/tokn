@@ -172,8 +172,11 @@ host = "127.0.0.1"
 port = 4141
 
 [server.cors]
-# Cross-origin browser access is disabled by default. Use exact origins only.
+# Cross-origin browser access is disabled by default.
 enabled = false
+# Allows http(s) localhost, *.localhost, 127.0.0.1, and [::1] origins on any port.
+allow_localhost = false
+# Use exact origins for non-local websites.
 allowed_origins = []
 
 [defaults]
