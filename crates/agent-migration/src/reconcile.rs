@@ -1342,7 +1342,9 @@ fn preflight_agent_config_restoration(chain: &[(PathBuf, MigrationManifest)]) ->
       .get_mut(&change.path)
       .expect("simulated agent config was inserted above");
     let current = config.agents.get(manifest.agent.as_str());
-    let matches = current == Some(&change.after) || (!change.applied && current == change.before.as_ref());
+    // An interrupted unlink may already have restored this binding before it
+    // could mark the manifest unlinked. Treat that state as idempotent.
+    let matches = current == Some(&change.after) || current == change.before.as_ref();
     if !matches {
       bail!(
         "{} binding in {} changed after the link or sync recorded by {}; refusing to unlink because rollback would overwrite that change",
@@ -1369,7 +1371,10 @@ fn restore_agent_config_changes(chain: &[(PathBuf, MigrationManifest)], actions:
       .transpose()?
       .unwrap_or_default();
     let current = config.agents.get(manifest.agent.as_str());
-    if current != Some(&change.after) && (change.applied || current != change.before.as_ref()) {
+    if current == change.before.as_ref() {
+      continue;
+    }
+    if current != Some(&change.after) {
       bail!(
         "{} binding in {} changed while unlinking; rerun the command",
         manifest.agent,
@@ -6910,6 +6915,55 @@ providers = ["anthropic"]
     assert!(!restored.agents.contains_key("opencode"));
     assert_eq!(restored.agents.get("codex-cli"), Some(&codex));
     assert!(matches!(report.actions.as_slice(), [FileAction::Updated(path)] if path == &agent_config_path));
+  }
+
+  #[test]
+  fn unlink_retry_accepts_an_already_restored_agent_binding() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent_config_path = dir.path().join("agent.yaml");
+    let manifest_path = dir.path().join("20260907T000000Z-opencode.json");
+    let mut config = crate::AgentIntegrationConfig::empty();
+    config.agents.insert("codex-cli".into(), sample_agent_binding("codex"));
+    std::fs::write(&agent_config_path, config.to_yaml().unwrap()).unwrap();
+    let manifest = MigrationManifest {
+      version: manifest::CURRENT_VERSION,
+      completed: true,
+      agent: AgentId::Opencode,
+      timestamp: "20260907T000000Z".into(),
+      profile: Some("opencode".into()),
+      target_base_url: "http://127.0.0.1:4141/opencode/v1".into(),
+      gateway_auth_path: None,
+      gateway_auth_shard_path: None,
+      agent_auth_path: None,
+      provider_routes: Vec::new(),
+      previous_manifest: None,
+      unlinked: false,
+      credentials_handoff_complete: true,
+      agent_config_change: Some(AgentConfigChange {
+        path: agent_config_path.clone(),
+        before: None,
+        after: sample_agent_binding("opencode"),
+        applied: true,
+      }),
+      imported_account_ids: Vec::new(),
+      files: Vec::new(),
+    };
+    manifest::write_manifest(&manifest_path, &manifest).unwrap();
+
+    let report = unlink(UnlinkRequest {
+      agent: AgentId::Opencode,
+      backup_id: Some(manifest_path.display().to_string()),
+    })
+    .unwrap();
+
+    assert!(report.actions.is_empty());
+    assert!(manifest::read_manifest(&manifest_path).unwrap().unlinked);
+    assert_eq!(
+      crate::config::load_agent_config_file(&agent_config_path)
+        .unwrap()
+        .unwrap(),
+      config
+    );
   }
 
   #[test]

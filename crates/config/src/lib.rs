@@ -1364,6 +1364,8 @@ fn apply_agent_fragment(
   }
   if let Some(binding) = binding {
     cfg.agents.insert(agent_name.to_string(), binding);
+  } else {
+    cfg.agents.remove(agent_name);
   }
   cfg.profiles.extend(fragment.profiles);
   Ok(())
@@ -2338,7 +2340,22 @@ providers = ["openai"]
   fn loads_profile_only_agent_fragment_without_integration_metadata() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("config.toml");
-    std::fs::write(&root, "[server]\nport = 9911\n").unwrap();
+    std::fs::write(
+      &root,
+      r#"[server]
+port = 9911
+
+[agents.opencode]
+profile = "legacy-opencode"
+sync = true
+
+[profiles.legacy-opencode]
+agent_id = "opencode"
+mode = "route"
+providers = ["openai"]
+"#,
+    )
+    .unwrap();
     let fragment = paths::agent_config_fragment_path(&root, "opencode");
     std::fs::create_dir_all(fragment.parent().unwrap()).unwrap();
     std::fs::write(
@@ -2354,6 +2371,7 @@ providers = ["openai"]
     let loaded = Config::load_with_sources(Some(&root)).unwrap();
 
     assert!(loaded.config.agents.is_empty());
+    assert!(!loaded.config.profiles.contains_key("legacy-opencode"));
     assert_eq!(loaded.config.profiles["opencode"].agent_id, Some(AgentId::Opencode));
     assert_eq!(loaded.sources.fragments, vec![fragment]);
   }

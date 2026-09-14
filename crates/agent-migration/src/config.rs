@@ -90,13 +90,17 @@ impl AgentConfigSnapshot {
     let contents = read_optional(&path)?;
     let (config, imported_legacy) = match contents.as_deref() {
       Some(contents) => (parse(contents, &path)?, false),
-      None if !legacy.agents.is_empty() => (
-        AgentIntegrationConfig {
-          schema_version: AGENT_CONFIG_SCHEMA_VERSION,
-          agents: legacy.agents.clone(),
-        },
-        true,
-      ),
+      None if !legacy.agents.is_empty() => {
+        let agents = importable_legacy_agents(legacy);
+        let imported_legacy = !agents.is_empty();
+        (
+          AgentIntegrationConfig {
+            schema_version: AGENT_CONFIG_SCHEMA_VERSION,
+            agents,
+          },
+          imported_legacy,
+        )
+      }
       None => (AgentIntegrationConfig::empty(), false),
     };
     config.validate()?;
@@ -117,6 +121,30 @@ impl AgentConfigSnapshot {
     }
     Ok(())
   }
+}
+
+fn importable_legacy_agents(legacy: &Config) -> BTreeMap<String, AgentConfig> {
+  legacy
+    .agents
+    .iter()
+    .filter_map(|(name, binding)| {
+      let reason = match tokn_core::AgentId::from_slug(name) {
+        None => Some("unknown agent"),
+        Some(agent) if agent.as_str() != name => Some("non-canonical agent name"),
+        Some(agent) if crate::adapter::adapter_for(&agent).is_none() => Some("agent has no integration adapter"),
+        Some(_) => None,
+      };
+      if let Some(reason) = reason {
+        tracing::warn!(
+          agent = name,
+          reason,
+          "skipping legacy agent binding during agent.yaml migration"
+        );
+        return None;
+      }
+      Some((name.clone(), binding.clone()))
+    })
+    .collect()
 }
 
 pub fn agent_config_path(gateway_config_path: &Path) -> PathBuf {
@@ -219,6 +247,29 @@ mod tests {
     assert!(snapshot.config.agents.contains_key("opencode"));
 
     std::fs::write(agent_config_path(&gateway), "schema_version: 1\nagents: {}\n").unwrap();
+    let snapshot = AgentConfigSnapshot::load(&gateway, &legacy).unwrap();
+    assert!(!snapshot.imported_legacy);
+    assert!(snapshot.config.agents.is_empty());
+  }
+
+  #[test]
+  fn legacy_import_skips_unknown_noncanonical_and_adapterless_bindings() {
+    let dir = tempfile::tempdir().unwrap();
+    let gateway = dir.path().join("config.toml");
+    let mut legacy = Config::default();
+    for name in ["opencode", "codex", "claude-code", "custom-tool"] {
+      legacy.agents.insert(name.into(), AgentConfig::default());
+    }
+
+    let snapshot = AgentConfigSnapshot::load(&gateway, &legacy).unwrap();
+
+    assert!(snapshot.imported_legacy);
+    assert_eq!(
+      snapshot.config.agents.keys().map(String::as_str).collect::<Vec<_>>(),
+      ["opencode"]
+    );
+
+    legacy.agents.remove("opencode");
     let snapshot = AgentConfigSnapshot::load(&gateway, &legacy).unwrap();
     assert!(!snapshot.imported_legacy);
     assert!(snapshot.config.agents.is_empty());
