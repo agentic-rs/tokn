@@ -1,12 +1,13 @@
 use crate::auth_registry::{known_providers, provider_auth_for, provider_descriptor_for};
-use crate::config::Config;
 use anyhow::{anyhow, bail, Result};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use tokn_auth::ProviderAuth;
+use tokn_config::SchemaConfig;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::official_provider_preset;
 use tokn_policy::{AccountPoolPlan, GatewayPlan, ProviderSelector, RelayDestination, RoutePlan};
+use tokn_router_legacy_config::v2::{project_v2_config, V2ProjectionOptions, V2ProjectionWarning};
 
 /// Schema-aware configuration details needed by CLI startup and account commands.
 ///
@@ -14,47 +15,33 @@ use tokn_policy::{AccountPoolPlan, GatewayPlan, ProviderSelector, RelayDestinati
 /// only need logging, the auth store location, outbound HTTP policy,
 /// configured-provider mapping, and read-only account selection views.
 pub struct ConfigContext {
-  path: PathBuf,
-  source: ConfigSource,
-}
-
-enum ConfigSource {
-  Legacy(Box<Config>),
-  V2(Box<tokn_config::v2::CompiledConfig>),
+  source: SchemaConfig,
 }
 
 impl ConfigContext {
   pub(crate) fn from_v2(path: PathBuf, config: tokn_config::v2::CompiledConfig) -> Self {
     Self {
-      path,
-      source: ConfigSource::V2(Box::new(config)),
+      source: SchemaConfig::V2 {
+        config: Box::new(config),
+        path,
+      },
     }
   }
 
   pub fn load(explicit_path: Option<&Path>) -> Result<Self> {
-    let path = explicit_path
-      .map(Path::to_path_buf)
-      .map(Ok)
-      .unwrap_or_else(tokn_config::paths::config_path)?;
-    let source = match tokn_config::detect_config_schema(&path)? {
-      tokn_config::ConfigSchema::Legacy => {
-        let (config, resolved_path) = Config::load(Some(&path))?;
-        debug_assert_eq!(resolved_path, path);
-        ConfigSource::Legacy(Box::new(config))
-      }
-      tokn_config::ConfigSchema::V2 => ConfigSource::V2(Box::new(tokn_config::v2::load_config(&path)?)),
-    };
-    Ok(Self { path, source })
+    Ok(Self {
+      source: tokn_config::load_config(explicit_path)?,
+    })
   }
 
   pub fn path(&self) -> &Path {
-    &self.path
+    self.source.path()
   }
 
   pub fn logging(&self) -> &tokn_config::LoggingConfig {
     match &self.source {
-      ConfigSource::Legacy(config) => &config.logging,
-      ConfigSource::V2(config) => config.service().logging(),
+      SchemaConfig::Legacy(loaded) => &loaded.config.logging,
+      SchemaConfig::V2 { config, .. } => config.service().logging(),
     }
   }
 
@@ -67,8 +54,8 @@ impl ConfigContext {
       tokn_core::util::http::HttpClientOptions::default()
     } else {
       match &self.source {
-        ConfigSource::Legacy(config) => config.proxy.to_http_options(),
-        ConfigSource::V2(config) => config.service().outbound().to_http_client_options(),
+        SchemaConfig::Legacy(loaded) => loaded.config.proxy.to_http_options(),
+        SchemaConfig::V2 { config, .. } => config.service().outbound().to_http_client_options(),
       }
     }
   }
@@ -76,8 +63,8 @@ impl ConfigContext {
   /// Provider ids available for onboarding. Disabled v2 presets are omitted.
   pub fn provider_ids(&self) -> Vec<String> {
     match &self.source {
-      ConfigSource::Legacy(_) => known_providers().into_iter().map(str::to_string).collect(),
-      ConfigSource::V2(config) => config
+      SchemaConfig::Legacy(_) => known_providers().into_iter().map(str::to_string).collect(),
+      SchemaConfig::V2 { config, .. } => config
         .gateway()
         .providers()
         .iter()
@@ -93,8 +80,8 @@ impl ConfigContext {
   /// Resolve an enabled provider for onboarding a new account.
   pub fn resolve_provider(&self, provider_id: &str) -> Result<ResolvedProviderAuth> {
     match &self.source {
-      ConfigSource::Legacy(_) => ResolvedProviderAuth::legacy(provider_id),
-      ConfigSource::V2(config) => {
+      SchemaConfig::Legacy(_) => ResolvedProviderAuth::legacy(provider_id),
+      SchemaConfig::V2 { config, .. } => {
         let Some((_, provider)) = config
           .gateway()
           .providers()
@@ -123,13 +110,13 @@ impl ConfigContext {
     match self.resolve_provider(&account.provider) {
       Ok(provider) => Ok(provider),
       Err(error) => match &self.source {
-        ConfigSource::V2(_) => {
+        SchemaConfig::V2 { .. } => {
           let Some(preset) = official_provider_preset(&account.provider) else {
             return Err(error);
           };
           ResolvedProviderAuth::v2(&account.provider, preset.driver, account.base_url.clone())
         }
-        ConfigSource::Legacy(_) => Err(error),
+        SchemaConfig::Legacy(_) => Err(error),
       },
     }
   }
@@ -145,10 +132,11 @@ impl ConfigContext {
 
     match (&self.source, pool, profile) {
       (_, None, None) => Ok(None),
-      (ConfigSource::Legacy(_), Some(_), None) => {
+      (SchemaConfig::Legacy(_), Some(_), None) => {
         bail!("`--pool` requires a schema_version = 2 configuration")
       }
-      (ConfigSource::Legacy(config), None, Some(profile_id)) => {
+      (SchemaConfig::Legacy(loaded), None, Some(profile_id)) => {
+        let config = &loaded.config;
         let profile = config
           .profiles
           .get(profile_id)
@@ -167,12 +155,12 @@ impl ConfigContext {
             .map(|providers| providers.into_iter().collect()),
         }))
       }
-      (ConfigSource::V2(config), Some(pool_id), None) => {
+      (SchemaConfig::V2 { config, .. }, Some(pool_id), None) => {
         let gateway = config.gateway();
         let (canonical_id, pool) = find_pool(gateway, pool_id)?;
         Ok(Some(v2_account_view(gateway, pool, format!("pool '{canonical_id}'"))))
       }
-      (ConfigSource::V2(config), None, Some(profile_id)) => {
+      (SchemaConfig::V2 { config, .. }, None, Some(profile_id)) => {
         let gateway = config.gateway();
         let (canonical_profile_id, profile) = gateway
           .profiles()
@@ -219,6 +207,43 @@ impl ConfigContext {
       }
       _ => unreachable!("pool/profile exclusivity checked above"),
     }
+  }
+}
+
+/// A native or projected configuration ready for the v2 runtime pipeline.
+pub(crate) struct EffectiveV2Config {
+  pub compiled: tokn_config::v2::CompiledConfig,
+  pub accounts: Vec<AccountConfig>,
+  pub config_path: PathBuf,
+  pub warnings: Vec<V2ProjectionWarning>,
+}
+
+/// Convert the result of the common schema loader into one effective v2
+/// runtime configuration. Native v2 accounts pass through unchanged; legacy
+/// accounts are normalized together with the in-memory projection.
+pub(crate) fn compile_effective_v2_config(
+  config: SchemaConfig,
+  accounts: Vec<AccountConfig>,
+  projection_options: V2ProjectionOptions,
+) -> Result<EffectiveV2Config> {
+  let config_path = config.path().to_path_buf();
+  match config {
+    SchemaConfig::Legacy(loaded) => {
+      let projection = project_v2_config(&loaded.config, &accounts, projection_options)?;
+      let (_, compiled, accounts, warnings) = projection.into_parts();
+      Ok(EffectiveV2Config {
+        compiled,
+        accounts,
+        config_path,
+        warnings,
+      })
+    }
+    SchemaConfig::V2 { config, .. } => Ok(EffectiveV2Config {
+      compiled: *config,
+      accounts,
+      config_path,
+      warnings: Vec::new(),
+    }),
   }
 }
 

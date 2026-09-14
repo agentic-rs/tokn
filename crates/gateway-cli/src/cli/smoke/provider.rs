@@ -23,14 +23,15 @@ pub struct ProviderArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ProviderArgs) -> Result<()> {
-  let (compiled, resolved_cfg_path) = super::load_v2_config(cfg_path.as_deref())?;
+  let runtime = super::load_effective_v2_config(cfg_path.as_deref())?;
+  let compiled = runtime.compiled;
   let plan = compiled.gateway();
   let registry = Registry::builtin();
   let (provider_id, provider, descriptor) = resolve_provider(plan, &registry, &args.provider_id)?;
 
   let static_models = tokn_catalogue::default_models_for(descriptor.id);
   let live_models: Option<Vec<String>> = if args.live {
-    Some(fetch_live_models(plan, &resolved_cfg_path, provider_id, compiled.service().outbound()).await?)
+    Some(fetch_live_models(plan, &runtime.accounts, provider_id, compiled.service().outbound()).await?)
   } else {
     None
   };
@@ -223,13 +224,12 @@ fn print_provider_json(
 
 async fn fetch_live_models(
   plan: &GatewayPlan,
-  config_path: &std::path::Path,
+  accounts: &[tokn_core::account::AccountConfig],
   provider_id: &ProviderId,
   outbound: &tokn_config::v2::OutboundPlan,
 ) -> Result<Vec<String>> {
-  let accounts = crate::server_runtime::load_accounts(Some(config_path))?;
   let registry = Registry::builtin();
-  let providers = tokn_router::accounts::link::link_provider_graph(plan, &accounts, &registry)?;
+  let providers = tokn_router::accounts::link::link_provider_graph(plan, accounts, &registry)?;
   let bindings = providers
     .bindings()
     .filter(|binding| binding.provider_id() == provider_id)

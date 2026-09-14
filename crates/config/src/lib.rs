@@ -328,6 +328,58 @@ pub struct LoadedConfig {
   pub sources: ConfigSources,
 }
 
+/// A validated configuration loaded through the common schema dispatcher.
+///
+/// Callers that only need effective settings should use this type instead of
+/// selecting [`Config::load`] or [`v2::load_config`] themselves. Operations
+/// that edit a document may still require a schema-specific API so its syntax
+/// and comments can be preserved.
+#[derive(Debug, Clone)]
+pub enum SchemaConfig {
+  Legacy(Box<LoadedConfig>),
+  V2 {
+    config: Box<v2::CompiledConfig>,
+    path: PathBuf,
+  },
+}
+
+impl SchemaConfig {
+  pub const fn schema(&self) -> ConfigSchema {
+    match self {
+      Self::Legacy(_) => ConfigSchema::Legacy,
+      Self::V2 { .. } => ConfigSchema::V2,
+    }
+  }
+
+  pub fn path(&self) -> &Path {
+    match self {
+      Self::Legacy(loaded) => &loaded.sources.root,
+      Self::V2 { path, .. } => path,
+    }
+  }
+
+  pub fn legacy(&self) -> Option<&Config> {
+    match self {
+      Self::Legacy(loaded) => Some(&loaded.config),
+      Self::V2 { .. } => None,
+    }
+  }
+
+  pub fn v2(&self) -> Option<&v2::CompiledConfig> {
+    match self {
+      Self::Legacy(_) => None,
+      Self::V2 { config, .. } => Some(config),
+    }
+  }
+
+  pub fn persistence(&self) -> PersistenceConfig<'_> {
+    match self {
+      Self::Legacy(loaded) => PersistenceConfig::Legacy(&loaded.config.db),
+      Self::V2 { config, .. } => PersistenceConfig::V2(config.service().persistence()),
+    }
+  }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteMode {
@@ -652,6 +704,50 @@ impl DbConfig {
         .map(Ok)
         .unwrap_or_else(paths::default_requests_dir)?,
     })
+  }
+}
+
+/// Schema-neutral access to effective persistence settings.
+#[derive(Clone, Copy)]
+pub enum PersistenceConfig<'a> {
+  Legacy(&'a DbConfig),
+  V2(&'a v2::PersistencePlan),
+}
+
+impl<'a> PersistenceConfig<'a> {
+  pub fn resolve_paths(self) -> Result<tokn_core::db::DbPaths> {
+    match self {
+      Self::Legacy(config) => config.resolve_paths(),
+      Self::V2(config) => {
+        let paths = config.resolve_paths()?;
+        Ok(tokn_core::db::DbPaths {
+          usage_db: paths.usage_db,
+          sessions_db: paths.sessions_db,
+          requests_dir: paths.requests_dir,
+        })
+      }
+    }
+  }
+
+  pub fn archive_extension(self) -> Option<&'a str> {
+    match self {
+      Self::Legacy(config) => config.archive_extension.as_deref(),
+      Self::V2(config) => config.archive_extension(),
+    }
+  }
+
+  pub fn archive_after_days(self) -> i64 {
+    match self {
+      Self::Legacy(_) => v2::DEFAULT_ARCHIVE_AFTER_DAYS as i64,
+      Self::V2(config) => config.archive_after_days(),
+    }
+  }
+
+  pub fn prune_after_days(self) -> i64 {
+    match self {
+      Self::Legacy(_) => v2::DEFAULT_PRUNE_AFTER_DAYS as i64,
+      Self::V2(config) => config.prune_after_days(),
+    }
   }
 }
 
@@ -1121,6 +1217,27 @@ pub fn detect_config_schema(path: &Path) -> Result<ConfigSchema> {
       path: path.to_path_buf(),
       found,
     }),
+  }
+}
+
+/// Load and validate either supported configuration schema.
+///
+/// This is the common entry point for schema-neutral consumers. Legacy
+/// documents include their sorted `config.d` overlays; version 2 documents
+/// are fully compiled before they are returned.
+pub fn load_config(explicit: Option<&Path>) -> Result<SchemaConfig> {
+  let path = resolve_config_path(explicit)?;
+  match detect_config_schema(&path)? {
+    ConfigSchema::Legacy => Config::load_with_sources(Some(&path)).map(|loaded| SchemaConfig::Legacy(Box::new(loaded))),
+    ConfigSchema::V2 => {
+      let config = v2::load_config(&path).map_err(|source| Error::V2 {
+        source: Box::new(source),
+      })?;
+      Ok(SchemaConfig::V2 {
+        config: Box::new(config),
+        path,
+      })
+    }
   }
 }
 
@@ -1655,6 +1772,56 @@ mod tests {
       detect_config_schema(&path),
       Err(Error::UnsupportedSchemaVersion { path: rejected, found: 3 }) if rejected == path
     ));
+  }
+
+  #[test]
+  fn common_loader_dispatches_legacy_and_v2_configs() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+
+    std::fs::write(&path, "[server]\nport = 4242\n").unwrap();
+    let legacy = load_config(Some(&path)).unwrap();
+    assert_eq!(legacy.schema(), ConfigSchema::Legacy);
+    assert_eq!(legacy.path(), path);
+    assert_eq!(legacy.legacy().unwrap().server.port, 4242);
+    assert!(legacy.v2().is_none());
+
+    std::fs::write(
+      &path,
+      r#"schema_version = 2
+
+[listeners.local]
+kind = "llm_api"
+bind = "127.0.0.1:4141"
+client_auth = "none"
+"#,
+    )
+    .unwrap();
+    let v2 = load_config(Some(&path)).unwrap();
+    assert_eq!(v2.schema(), ConfigSchema::V2);
+    assert_eq!(v2.path(), path);
+    assert!(v2.legacy().is_none());
+    assert!(v2.v2().is_some());
+  }
+
+  #[test]
+  fn common_persistence_view_uses_v2_retention_defaults_for_legacy() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    let requests_dir = directory.path().join("requests");
+    let serialized_requests_dir = serde_json::to_string(&requests_dir).unwrap();
+    std::fs::write(
+      &path,
+      format!("[db]\nrequests_dir = {serialized_requests_dir}\narchive_extension = \"db.zstd\"\n"),
+    )
+    .unwrap();
+
+    let config = load_config(Some(&path)).unwrap();
+    let persistence = config.persistence();
+    assert_eq!(persistence.resolve_paths().unwrap().requests_dir, requests_dir);
+    assert_eq!(persistence.archive_extension(), Some("db.zstd"));
+    assert_eq!(persistence.archive_after_days(), v2::DEFAULT_ARCHIVE_AFTER_DAYS as i64);
+    assert_eq!(persistence.prune_after_days(), v2::DEFAULT_PRUNE_AFTER_DAYS as i64);
   }
 
   #[test]

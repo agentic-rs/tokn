@@ -27,6 +27,9 @@ pub enum Error {
   ))]
   UnsupportedSchemaVersion { path: PathBuf, found: i64 },
 
+  #[snafu(display("{source}"))]
+  V2 { source: Box<crate::v2::Error> },
+
   #[snafu(display("parse config `{}` as editable document", path.display()))]
   ParseEdit {
     path: PathBuf,

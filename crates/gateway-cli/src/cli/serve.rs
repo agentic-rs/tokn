@@ -1,4 +1,6 @@
 use crate::cli::config_cmd::RouteModeArg;
+use crate::cli::config_context::{compile_effective_v2_config, EffectiveV2Config};
+#[cfg(test)]
 use crate::config::Config;
 use anyhow::{Context, Result};
 use clap::Args;
@@ -10,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokn_core::event::EventBus;
 use tokn_core::util::shutdown::ShutdownSignal;
-use tokn_router_legacy_config::v2::{project_v2_config, V2ProjectionOptions, V2ProjectionWarning};
+use tokn_router_legacy_config::v2::{V2ProjectionOptions, V2ProjectionWarning};
 
 #[derive(Args, Clone, Debug)]
 pub struct ServeArgs {
@@ -33,10 +35,11 @@ pub struct ServeArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: ServeArgs) -> Result<()> {
-  let resolved_cfg_path = cfg_path.map(Ok).unwrap_or_else(tokn_config::paths::config_path)?;
-  match tokn_config::detect_config_schema(&resolved_cfg_path)? {
-    tokn_config::ConfigSchema::Legacy => run_projected_legacy(resolved_cfg_path, args).await,
-    tokn_config::ConfigSchema::V2 => run_v2(resolved_cfg_path, args).await,
+  let config = tokn_config::load_config(cfg_path.as_deref())?;
+  let resolved_cfg_path = config.path().to_path_buf();
+  match config.schema() {
+    tokn_config::ConfigSchema::Legacy => run_projected_legacy(resolved_cfg_path, config, args).await,
+    tokn_config::ConfigSchema::V2 => run_v2(resolved_cfg_path, config, args).await,
   }
 }
 
@@ -63,56 +66,60 @@ struct LoadedRuntime {
 }
 
 impl RuntimeSource {
+  #[cfg(test)]
   fn load(&self) -> Result<LoadedRuntime> {
-    let expected_schema = self.expected_schema();
-    if tokn_config::detect_config_schema(self.config_path())? != expected_schema {
+    let config = tokn_config::load_config(Some(self.config_path()))?;
+    if config.schema() != self.expected_schema() {
       anyhow::bail!("config schema changed; restart the gateway to switch runtime sources");
     }
-    self.load_matching_schema()
+    self.load_matching_schema(config)
   }
 
   fn load_for_reload(&self) -> std::result::Result<LoadedRuntime, tokn_router::v2::ReloadError> {
-    let schema = tokn_config::detect_config_schema(self.config_path())
+    let config = tokn_config::load_config(Some(self.config_path()))
       .map_err(|error| tokn_router::v2::ReloadError::Invalid(format!("{error:#}")))?;
-    if schema != self.expected_schema() {
+    if config.schema() != self.expected_schema() {
       return Err(tokn_router::v2::ReloadError::RestartRequired(
         "config schema changed; restart the gateway to switch runtime sources".into(),
       ));
     }
     self
-      .load_matching_schema()
+      .load_matching_schema(config)
       .map_err(|error| tokn_router::v2::ReloadError::Invalid(format!("{error:#}")))
   }
 
-  fn load_matching_schema(&self) -> Result<LoadedRuntime> {
-    match self {
-      Self::NativeV2 {
-        config_path,
-        auth_path,
-        args,
-      } => Ok(LoadedRuntime {
-        compiled: tokn_config::v2::load_config(config_path)?,
-        accounts: tokn_auth::AuthStore::load(Some(auth_path), Some(config_path))?.accounts,
-        args: args.clone(),
-        warnings: Vec::new(),
-        config_path: config_path.clone(),
-      }),
-      Self::ProjectedLegacy {
-        config_path,
-        auth_path,
-        args,
-      } => {
-        let (legacy, resolved_config_path) = Config::load(Some(config_path))?;
-        let accounts = tokn_auth::AuthStore::load(Some(auth_path), Some(&resolved_config_path))?.accounts;
-        let (compiled, accounts, warnings, args) = prepare_projected_legacy_runtime(legacy, accounts, args.clone())?;
-        Ok(LoadedRuntime {
-          compiled,
-          accounts,
+  fn load_matching_schema(&self, config: tokn_config::SchemaConfig) -> Result<LoadedRuntime> {
+    match (self, config) {
+      (
+        Self::NativeV2 {
+          config_path,
+          auth_path,
           args,
-          warnings,
-          config_path: resolved_config_path,
+        },
+        config @ tokn_config::SchemaConfig::V2 { .. },
+      ) => {
+        let accounts = tokn_auth::AuthStore::load(Some(auth_path), Some(config_path))?.accounts;
+        let effective = compile_effective_v2_config(config, accounts, V2ProjectionOptions::default())?;
+        Ok(LoadedRuntime {
+          compiled: effective.compiled,
+          accounts: effective.accounts,
+          args: args.clone(),
+          warnings: effective.warnings,
+          config_path: effective.config_path,
         })
       }
+      (Self::ProjectedLegacy { auth_path, args, .. }, config @ tokn_config::SchemaConfig::Legacy(_)) => {
+        let accounts = tokn_auth::AuthStore::load(Some(auth_path), Some(config.path()))?.accounts;
+        let (effective, args) = prepare_projected_legacy_runtime(config, accounts, args.clone())?;
+        Ok(LoadedRuntime {
+          compiled: effective.compiled,
+          accounts: effective.accounts,
+          args,
+          warnings: effective.warnings,
+          config_path: effective.config_path,
+        })
+      }
+      _ => unreachable!("schema was checked before loading its runtime source"),
     }
   }
 
@@ -130,18 +137,18 @@ impl RuntimeSource {
   }
 }
 
-async fn run_projected_legacy(config_path: PathBuf, args: ServeArgs) -> Result<()> {
+async fn run_projected_legacy(config_path: PathBuf, config: tokn_config::SchemaConfig, args: ServeArgs) -> Result<()> {
   let source = RuntimeSource::ProjectedLegacy {
     config_path,
     auth_path: tokn_auth::default_auth_path()?,
     args,
   };
-  let loaded = source.load()?;
+  let loaded = source.load_matching_schema(config)?;
   log_projection_warnings(&loaded.config_path, &loaded.warnings);
   run_v2_runtime(source, loaded).await
 }
 
-async fn run_v2(config_path: PathBuf, args: ServeArgs) -> Result<()> {
+async fn run_v2(config_path: PathBuf, config: tokn_config::SchemaConfig, args: ServeArgs) -> Result<()> {
   if args.with_proxy || args.proxy_route_mode.is_some() {
     anyhow::bail!(
       "v2 listeners are declared in config; remove --with-proxy/--proxy-route-mode and configure a forward_proxy listener"
@@ -153,20 +160,19 @@ async fn run_v2(config_path: PathBuf, args: ServeArgs) -> Result<()> {
     auth_path: tokn_auth::default_auth_path()?,
     args,
   };
-  let loaded = source.load()?;
+  let loaded = source.load_matching_schema(config)?;
   run_v2_runtime(source, loaded).await
 }
 
 fn prepare_projected_legacy_runtime(
-  mut legacy: Config,
+  config: tokn_config::SchemaConfig,
   accounts: Vec<tokn_core::account::AccountConfig>,
   mut args: ServeArgs,
-) -> Result<(
-  tokn_config::v2::CompiledConfig,
-  Vec<tokn_core::account::AccountConfig>,
-  Vec<V2ProjectionWarning>,
-  ServeArgs,
-)> {
+) -> Result<(EffectiveV2Config, ServeArgs)> {
+  let tokn_config::SchemaConfig::Legacy(mut loaded) = config else {
+    unreachable!("projected legacy runtime requires a legacy config")
+  };
+  let legacy = &mut loaded.config;
   if !args.with_proxy && args.proxy_route_mode.is_some() {
     anyhow::bail!("--proxy-route-mode requires --with-proxy");
   }
@@ -194,9 +200,9 @@ fn prepare_projected_legacy_runtime(
   };
   args.with_proxy = false;
 
-  let projection = project_v2_config(
-    &legacy,
-    &accounts,
+  let effective = compile_effective_v2_config(
+    tokn_config::SchemaConfig::Legacy(loaded),
+    accounts,
     V2ProjectionOptions {
       allow_insecure_public_listener: args.insecure_allow_remote,
       forward_proxy,
@@ -204,8 +210,7 @@ fn prepare_projected_legacy_runtime(
     },
   )
   .context("project legacy config into the in-memory v2 runtime")?;
-  let (_, compiled, accounts, warnings) = projection.into_parts();
-  Ok((compiled, accounts, warnings, args))
+  Ok((effective, args))
 }
 
 fn log_projection_warnings(config_path: &std::path::Path, warnings: &[V2ProjectionWarning]) {
@@ -502,6 +507,28 @@ mod tests {
     .unwrap()
   }
 
+  fn prepare_projected_legacy_for_test(
+    config: Config,
+    accounts: Vec<tokn_core::account::AccountConfig>,
+    args: ServeArgs,
+  ) -> Result<(
+    tokn_config::v2::CompiledConfig,
+    Vec<tokn_core::account::AccountConfig>,
+    Vec<V2ProjectionWarning>,
+    ServeArgs,
+  )> {
+    let loaded = tokn_config::SchemaConfig::Legacy(Box::new(tokn_config::LoadedConfig {
+      config,
+      sources: tokn_config::ConfigSources {
+        root: "test-config.toml".into(),
+        fragment_dir: "test-config.d".into(),
+        fragments: Vec::new(),
+      },
+    }));
+    let (effective, args) = prepare_projected_legacy_runtime(loaded, accounts, args)?;
+    Ok((effective.compiled, effective.accounts, effective.warnings, args))
+  }
+
   fn v2_listener_plan(api_addr: std::net::SocketAddr, proxy_addr: std::net::SocketAddr) -> tokn_policy::GatewayPlan {
     let config = format!(
       r#"
@@ -613,7 +640,7 @@ default_connect = "{default_connect}"
     args.no_proxy = true;
 
     let (compiled, accounts, warnings, args) =
-      prepare_projected_legacy_runtime(legacy, vec![account("primary", "openai")], args).unwrap();
+      prepare_projected_legacy_for_test(legacy, vec![account("primary", "openai")], args).unwrap();
 
     assert_eq!(compiled.gateway().listeners()["api"].bind().port(), 5252);
     assert!(compiled.service().outbound().proxy_url().is_none());
@@ -644,13 +671,13 @@ default_connect = "{default_connect}"
     legacy.server.host = "0.0.0.0".into();
     let accounts = vec![account("primary", "openai")];
 
-    let error = prepare_projected_legacy_runtime(legacy.clone(), accounts.clone(), v2_serve_args()).unwrap_err();
+    let error = prepare_projected_legacy_for_test(legacy.clone(), accounts.clone(), v2_serve_args()).unwrap_err();
     assert!(format!("{error:#}").contains("requires an explicit public-listener review"));
 
     legacy.api_key.enabled = true;
     let mut args = v2_serve_args();
     args.insecure_allow_remote = true;
-    let (compiled, _, warnings, _) = prepare_projected_legacy_runtime(legacy, accounts, args).unwrap();
+    let (compiled, _, warnings, _) = prepare_projected_legacy_for_test(legacy, accounts, args).unwrap();
     assert_eq!(
       compiled.gateway().listeners()["api"].bind(),
       "0.0.0.0:4141".parse().unwrap()
@@ -669,7 +696,7 @@ default_connect = "{default_connect}"
     args.with_proxy = true;
     args.proxy_route_mode = Some(RouteModeArg::Passthrough);
     let (compiled, accounts, warnings, args) =
-      prepare_projected_legacy_runtime(legacy, vec![account("primary", "openai")], args).unwrap();
+      prepare_projected_legacy_for_test(legacy, vec![account("primary", "openai")], args).unwrap();
 
     assert_eq!(compiled.gateway().listeners().len(), 2);
     assert!(warnings.iter().any(|warning| matches!(
@@ -701,7 +728,8 @@ default_connect = "{default_connect}"
     args.with_proxy = true;
     args.insecure_allow_remote = true;
 
-    let error = prepare_projected_legacy_runtime(legacy.clone(), vec![account("primary", "openai")], args).unwrap_err();
+    let error =
+      prepare_projected_legacy_for_test(legacy.clone(), vec![account("primary", "openai")], args).unwrap_err();
     assert!(format!("{error:#}").contains("unauthenticated listeners must bind to a loopback address"));
 
     legacy.api_key.enabled = true;
@@ -709,7 +737,7 @@ default_connect = "{default_connect}"
     args.with_proxy = true;
     args.insecure_allow_remote = true;
     let (compiled, _, warnings, _) =
-      prepare_projected_legacy_runtime(legacy, vec![account("primary", "openai")], args).unwrap();
+      prepare_projected_legacy_for_test(legacy, vec![account("primary", "openai")], args).unwrap();
     assert_eq!(
       compiled.gateway().listeners()["proxy"].bind(),
       "0.0.0.0:4142".parse().unwrap()
@@ -755,7 +783,7 @@ default_connect = "{default_connect}"
     args.with_proxy = true;
     args.proxy_route_mode = Some(RouteModeArg::Passthrough);
     let (compiled, accounts, _, args) =
-      prepare_projected_legacy_runtime(legacy, vec![account("primary", "openai")], args).unwrap();
+      prepare_projected_legacy_for_test(legacy, vec![account("primary", "openai")], args).unwrap();
     let (plan, service) = compiled.into_parts();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let server = tokio::spawn(async move {
@@ -1033,7 +1061,23 @@ default_connect = "{default_connect}"
       no_proxy: false,
     };
 
-    let error = run_v2(PathBuf::from("missing.toml"), args).await.unwrap_err();
+    let path = PathBuf::from("unused.toml");
+    let compiled = tokn_config::v2::parse_config(
+      r#"schema_version = 2
+
+[listeners.local]
+kind = "llm_api"
+bind = "127.0.0.1:4141"
+client_auth = "none"
+"#,
+      &path,
+    )
+    .unwrap();
+    let config = tokn_config::SchemaConfig::V2 {
+      config: Box::new(compiled),
+      path: path.clone(),
+    };
+    let error = run_v2(path, config, args).await.unwrap_err();
     assert!(error.to_string().contains("v2 listeners are declared in config"));
   }
 
