@@ -38,10 +38,13 @@ pub async fn run_cmd(cfg_path: Option<PathBuf>, cmd: SmokeCmd) -> Result<()> {
 
 fn load_effective_v2_config(explicit: Option<&Path>) -> Result<EffectiveV2Config> {
   let config = tokn_config::load_config(explicit)?;
+  let projected_legacy = config.schema() == tokn_config::ConfigSchema::Legacy;
   let config_path = config.path().to_path_buf();
   let accounts = crate::server_runtime::load_accounts(Some(&config_path))?;
   let effective = compile_effective_v2_config(config, accounts, V2ProjectionOptions::default())?;
-  log_projection_warnings(&effective.config_path, &effective.warnings);
+  if projected_legacy {
+    log_projection_warnings(&effective.config_path, &effective.warnings);
+  }
   Ok(effective)
 }
 
