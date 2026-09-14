@@ -61,7 +61,7 @@ pub enum Cmd {
   Usage(usage::UsageArgs),
   /// Open a loopback-only viewer for persisted requests and inferred sessions
   Inspect(inspect::InspectArgs),
-  /// Manage archived per-day request databases using a v2 configuration.
+  /// Manage archived per-day request databases using the effective configuration.
   #[command(subcommand)]
   Requests(requests::RequestsCmd),
   /// Inspect and build semantic session views
@@ -73,7 +73,7 @@ pub enum Cmd {
   Update(update::UpdateArgs),
   /// Apply pending DB migrations (or restore from `.bak` with --rollback)
   Migration(migration::MigrationArgs),
-  /// Smoke-test the v2 request runtime or inspect catalogue metadata
+  /// Smoke-test the effective request runtime or inspect catalogue metadata
   #[command(subcommand)]
   Smoke(smoke::SmokeCmd),
 }
@@ -82,14 +82,13 @@ impl Cli {
   pub async fn run(self) -> Result<()> {
     let cfg_path = self.config.clone();
     let is_inspect = matches!(&self.cmd, Cmd::Inspect(_));
-    let uses_v2_config = matches!(&self.cmd, Cmd::Requests(_) | Cmd::Smoke(_));
     if matches!(&self.cmd, Cmd::Config(args) if args.requires_pristine_startup()) {
       let Cmd::Config(args) = self.cmd else {
         unreachable!("the pristine startup predicate only matches config commands")
       };
       return config_cmd::run(cfg_path, args).await.map_err(Error::from);
     }
-    if !is_inspect && !uses_v2_config {
+    if !is_inspect {
       prepare_default_config_home(cfg_path.as_deref())?;
     }
 

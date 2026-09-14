@@ -25,12 +25,8 @@ pub async fn run(cfg_path: Option<PathBuf>, cmd: RequestsCmd) -> Result<()> {
 }
 
 fn prune(explicit_config: Option<&Path>, args: PruneArgs) -> Result<()> {
-  let config_path = match explicit_config {
-    Some(path) => path.to_path_buf(),
-    None => tokn_config::paths::config_path()?,
-  };
-  let compiled = tokn_config::v2::load_config(&config_path)?;
-  let persistence = compiled.service().persistence();
+  let config = tokn_config::load_config(explicit_config)?;
+  let persistence = config.persistence();
   let paths = persistence.resolve_paths()?;
   let mut progress = PruneProgressDisplay::new(std::io::stdout().is_terminal());
   let result = tokn_persistence::archive::prune_request_dbs_with_progress(
@@ -393,15 +389,20 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn prune_rejects_legacy_config() {
+  async fn prune_loads_legacy_persistence_settings() {
     let directory = tempfile::tempdir().unwrap();
     let config_path = directory.path().join("config.toml");
-    std::fs::write(&config_path, "[db]\nenabled = true\n").unwrap();
+    let requests_dir = directory.path().join("legacy-requests");
+    std::fs::create_dir(&requests_dir).unwrap();
+    let serialized_requests_dir = serde_json::to_string(&requests_dir).unwrap();
+    std::fs::write(
+      &config_path,
+      format!("[db]\nenabled = true\nrequests_dir = {serialized_requests_dir}\narchive_extension = \"db.zstd\"\n"),
+    )
+    .unwrap();
 
-    let error = run(Some(config_path), RequestsCmd::Prune(PruneArgs { commit: false }))
+    run(Some(config_path), RequestsCmd::Prune(PruneArgs { commit: false }))
       .await
-      .unwrap_err();
-
-    assert!(error.to_string().contains("schema_version"));
+      .unwrap();
   }
 }

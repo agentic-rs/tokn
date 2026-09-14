@@ -1,6 +1,8 @@
+use crate::cli::config_context::{compile_effective_v2_config, EffectiveV2Config};
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};
 use std::path::{Path, PathBuf};
+use tokn_router_legacy_config::v2::{V2ProjectionOptions, V2ProjectionWarning};
 
 mod model;
 mod provider;
@@ -18,11 +20,11 @@ pub enum OutputFormat {
 
 #[derive(Subcommand, Debug)]
 pub enum SmokeCmd {
-  /// Send a request through a configured v2 LLM API listener.
+  /// Send a request through a configured LLM API listener.
   Send(SendArgs),
   /// Show providers that support a model.
   Model(ModelArgs),
-  /// Show configuration, driver metadata, and models for a v2 provider.
+  /// Show configuration, driver metadata, and models for a provider.
   Provider(ProviderArgs),
 }
 
@@ -34,14 +36,58 @@ pub async fn run_cmd(cfg_path: Option<PathBuf>, cmd: SmokeCmd) -> Result<()> {
   }
 }
 
-fn resolve_v2_config_path(explicit: Option<&Path>) -> Result<PathBuf> {
-  explicit
-    .map(Path::to_path_buf)
-    .map_or_else(|| tokn_config::paths::config_path().map_err(Into::into), Ok)
+fn load_effective_v2_config(explicit: Option<&Path>) -> Result<EffectiveV2Config> {
+  let config = tokn_config::load_config(explicit)?;
+  let config_path = config.path().to_path_buf();
+  let accounts = crate::server_runtime::load_accounts(Some(&config_path))?;
+  let effective = compile_effective_v2_config(config, accounts, V2ProjectionOptions::default())?;
+  log_projection_warnings(&effective.config_path, &effective.warnings);
+  Ok(effective)
 }
 
-fn load_v2_config(explicit: Option<&Path>) -> Result<(tokn_config::v2::CompiledConfig, PathBuf)> {
-  let path = resolve_v2_config_path(explicit)?;
-  let config = tokn_config::v2::load_config(&path)?;
-  Ok((config, path))
+fn log_projection_warnings(config_path: &Path, warnings: &[V2ProjectionWarning]) {
+  tracing::warn!(
+    config = %config_path.display(),
+    warning_count = warnings.len(),
+    "legacy config is running through the in-memory v2 smoke runtime"
+  );
+  for warning in warnings {
+    tracing::warn!(config = %config_path.display(), warning = %warning, "legacy-to-v2 projection warning");
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn legacy_config_is_projected_instead_of_entering_the_strict_v2_loader() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("config.toml");
+    std::fs::write(&path, "[server]\nport = 4242\n").unwrap();
+    let config = tokn_config::load_config(Some(&path)).unwrap();
+    let account = toml::from_str(
+      r#"id = "primary"
+provider = "github-copilot"
+enabled = true
+"#,
+    )
+    .unwrap();
+
+    let effective = compile_effective_v2_config(config, vec![account], V2ProjectionOptions::default()).unwrap();
+
+    assert_eq!(effective.accounts.len(), 1);
+    assert_eq!(
+      effective
+        .compiled
+        .gateway()
+        .listeners()
+        .values()
+        .next()
+        .unwrap()
+        .bind()
+        .port(),
+      4242
+    );
+  }
 }

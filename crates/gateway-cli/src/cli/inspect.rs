@@ -22,8 +22,8 @@ pub struct InspectArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: InspectArgs) -> Result<()> {
-  let (cfg, _) = crate::config::Config::load(cfg_path.as_deref())?;
-  let mut paths = cfg.db.resolve_paths()?;
+  let config = tokn_config::load_config(cfg_path.as_deref())?;
+  let mut paths = config.persistence().resolve_paths()?;
   if let Some(requests_dir) = args.requests_dir {
     paths.requests_dir = requests_dir;
   }

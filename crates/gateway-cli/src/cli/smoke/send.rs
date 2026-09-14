@@ -1,4 +1,4 @@
-//! `smoke send` executes one request through a configured v2 LLM listener.
+//! `smoke send` executes one request through a configured LLM listener.
 
 use super::OutputFormat;
 use anyhow::{anyhow, Context, Result};
@@ -37,7 +37,7 @@ impl From<EndpointArg> for Endpoint {
 
 #[derive(Args, Debug)]
 pub struct SendArgs {
-  /// V2 LLM API listener to exercise. Required when more than one is configured.
+  /// LLM API listener to exercise. Required when more than one is configured.
   #[arg(long)]
   pub listener: Option<String>,
 
@@ -82,11 +82,12 @@ pub struct SendArgs {
 }
 
 pub async fn run(cfg_path: Option<PathBuf>, args: SendArgs) -> Result<()> {
-  let (compiled, config_path) = super::load_v2_config(cfg_path.as_deref())?;
+  let runtime = super::load_effective_v2_config(cfg_path.as_deref())?;
+  let accounts = runtime.accounts;
+  let compiled = runtime.compiled;
   let (plan, service) = compiled.into_parts();
   let endpoint: Endpoint = args.endpoint.into();
   let path = request_path(&plan, args.profile.as_deref(), endpoint)?;
-  let accounts = crate::server_runtime::load_accounts(Some(&config_path))?;
   let access = Arc::new(tokn_access::AccessStore::disabled());
 
   if args.no_redact {
@@ -235,7 +236,7 @@ fn select_listener(
     return states
       .into_iter()
       .find(|state| state.listener_id().as_str() == requested)
-      .ok_or_else(|| anyhow!("unknown v2 LLM API listener '{requested}'"));
+      .ok_or_else(|| anyhow!("unknown LLM API listener '{requested}'"));
   }
   match states.len() {
     0 => anyhow::bail!("v2 config has no LLM API listener for `smoke send`"),
@@ -246,7 +247,7 @@ fn select_listener(
         .map(|state| state.listener_id().as_str())
         .collect::<Vec<_>>()
         .join(", ");
-      anyhow::bail!("multiple v2 LLM API listeners are configured ({listeners}); pass --listener")
+      anyhow::bail!("multiple LLM API listeners are configured ({listeners}); pass --listener")
     }
   }
 }
