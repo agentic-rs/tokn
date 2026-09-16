@@ -1,3 +1,6 @@
+//! Stamp only the executable with Git metadata. Shared crates receive this
+//! metadata at runtime, so Git changes do not invalidate the dependency graph.
+
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,8 +16,10 @@ fn main() {
 
   println!("cargo:rerun-if-changed={}", version_path.display());
 
-  if let Some(git_dir) = git_dir(&workspace_root) {
-    for path in [git_dir.join("HEAD"), git_dir.join("index"), git_dir.join("refs")] {
+  // Resolve each Git path separately: linked worktrees keep HEAD/index locally
+  // but share refs and packed-refs with the main repository.
+  for name in ["HEAD", "index", "refs", "packed-refs"] {
+    if let Some(path) = git_path(&workspace_root, name) {
       if path.exists() {
         println!("cargo:rerun-if-changed={}", path.display());
       }
@@ -43,8 +48,8 @@ fn main() {
   );
 }
 
-fn git_dir(workspace_root: &Path) -> Option<PathBuf> {
-  git_output(workspace_root, &["rev-parse", "--git-dir"]).map(|path| {
+fn git_path(workspace_root: &Path, name: &str) -> Option<PathBuf> {
+  git_output(workspace_root, &["rev-parse", "--git-path", name]).map(|path| {
     let path = PathBuf::from(path);
     if path.is_absolute() {
       path
@@ -56,6 +61,8 @@ fn git_dir(workspace_root: &Path) -> Option<PathBuf> {
 
 fn git_output(workspace_root: &Path, args: &[&str]) -> Option<String> {
   let output = Command::new("git")
+    // In particular, `status` must not refresh the index that this script watches.
+    .arg("--no-optional-locks")
     .args(args)
     .current_dir(workspace_root)
     .output()

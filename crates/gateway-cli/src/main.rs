@@ -14,6 +14,14 @@ mod server_runtime;
 mod util;
 
 fn main() -> ExitCode {
+  tokn_core::util::version::install(tokn_core::util::version::BuildVersion {
+    base: env!("tokn_ROUTER_BASE_VERSION"),
+    commit_id: env!("tokn_ROUTER_COMMIT_ID"),
+    full: env!("tokn_ROUTER_VERSION"),
+    dirty: env!("tokn_ROUTER_VERSION_DIRTY") == "1",
+  })
+  .expect("application version must be installed once at startup");
+
   let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
     Ok(runtime) => runtime,
     Err(error) => {
