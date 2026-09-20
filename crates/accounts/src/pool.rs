@@ -265,10 +265,12 @@ impl AccountPool {
     requested: Endpoint,
     allowed_providers: Option<&BTreeSet<String>>,
   ) -> bool {
-    route_endpoint_order(route, requested).into_iter().any(|endpoint| {
-      self.buckets.iter().any(|(provider_id, bucket)| {
-        provider_is_allowed(provider_id, allowed_providers)
-          && provider_matches_route(bucket.provider.as_ref(), route, endpoint)
+    route_match_order(route).iter().copied().any(|evidence| {
+      route_endpoint_order(route, requested).into_iter().any(|endpoint| {
+        self.buckets.iter().any(|(provider_id, bucket)| {
+          provider_is_allowed(provider_id, allowed_providers)
+            && provider_matches_route(bucket.provider.as_ref(), route, evidence, endpoint)
+        })
       })
     })
   }
@@ -413,13 +415,21 @@ impl AccountPool {
     route: &RouteResolution,
     requested: Endpoint,
   ) -> Option<Endpoint> {
-    route_endpoint_order(route, requested)
-      .into_iter()
-      .find(|endpoint| self.account_matches_route(acct, route, *endpoint))
+    route_match_order(route).iter().copied().find_map(|evidence| {
+      route_endpoint_order(route, requested)
+        .into_iter()
+        .find(|endpoint| self.account_matches_route(acct, route, evidence, *endpoint))
+    })
   }
 
-  fn account_matches_route(&self, acct: &AccountHandle, route: &RouteResolution, endpoint: Endpoint) -> bool {
-    provider_matches_route(acct.provider.as_ref(), route, endpoint)
+  fn account_matches_route(
+    &self,
+    acct: &AccountHandle,
+    route: &RouteResolution,
+    evidence: RouteModelEvidence,
+    endpoint: Endpoint,
+  ) -> bool {
+    provider_matches_route(acct.provider.as_ref(), route, evidence, endpoint)
   }
 
   fn acquire_from_route(
@@ -428,35 +438,37 @@ impl AccountPool {
     requested: Endpoint,
     allowed_providers: Option<&BTreeSet<String>>,
   ) -> Option<(Arc<AccountHandle>, Endpoint)> {
-    for endpoint in route_endpoint_order(route, requested) {
-      let candidates = self
-        .buckets
-        .iter()
-        .filter(|(provider_id, bucket)| {
-          provider_is_allowed(provider_id, allowed_providers)
-            && provider_matches_route(bucket.provider.as_ref(), route, endpoint)
-        })
-        .map(|(_, bucket)| bucket)
-        .collect::<Vec<_>>();
+    for evidence in route_match_order(route) {
+      for endpoint in route_endpoint_order(route, requested) {
+        let candidates = self
+          .buckets
+          .iter()
+          .filter(|(provider_id, bucket)| {
+            provider_is_allowed(provider_id, allowed_providers)
+              && provider_matches_route(bucket.provider.as_ref(), route, *evidence, endpoint)
+          })
+          .map(|(_, bucket)| bucket)
+          .collect::<Vec<_>>();
 
-      for bucket in &candidates {
-        if let Some(acct) = bucket.pick_healthy() {
-          return Some((acct, endpoint));
-        }
-      }
-
-      let mut best: Option<Arc<AccountHandle>> = None;
-      let mut best_t: Option<Instant> = None;
-      for bucket in candidates {
-        if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
-          if best.is_none() || t < best_t {
-            best = Some(acct);
-            best_t = t;
+        for bucket in &candidates {
+          if let Some(acct) = bucket.pick_healthy() {
+            return Some((acct, endpoint));
           }
         }
-      }
-      if let Some(acct) = best {
-        return Some((acct, endpoint));
+
+        let mut best: Option<Arc<AccountHandle>> = None;
+        let mut best_t: Option<Instant> = None;
+        for bucket in candidates {
+          if let Some((acct, t)) = bucket.pick_earliest_cooldown() {
+            if best.is_none() || t < best_t {
+              best = Some(acct);
+              best_t = t;
+            }
+          }
+        }
+        if let Some(acct) = best {
+          return Some((acct, endpoint));
+        }
       }
     }
     None
@@ -469,35 +481,46 @@ fn provider_is_allowed(provider_id: &str, allowed_providers: Option<&BTreeSet<St
     .unwrap_or(true)
 }
 
-fn provider_matches_route(provider: &dyn Provider, route: &RouteResolution, endpoint: Endpoint) -> bool {
+#[derive(Copy, Clone)]
+enum RouteModelEvidence {
+  Required,
+  Ignored,
+}
+
+fn route_match_order(route: &RouteResolution) -> &'static [RouteModelEvidence] {
   let verbatim = matches!(
     route.mode,
     tokn_config::RouteMode::Passthrough | tokn_config::RouteMode::Switch
   );
-  let supports = |model: &str| {
-    if verbatim {
-      // Raw routes deliberately accept models outside the local catalogue,
-      // but still must obey provider model-specific wire endpoint rules.
-      provider.has_endpoint(&route.upstream_model, endpoint)
-    } else {
-      provider.supports(model, endpoint)
-    }
+  if verbatim || matches!(route.selector, RouteSelector::Provider(_)) {
+    return &[RouteModelEvidence::Ignored];
+  }
+  match route.selector {
+    RouteSelector::Any | RouteSelector::Model => &[RouteModelEvidence::Required, RouteModelEvidence::Ignored],
+    RouteSelector::Fuzzy { .. } => &[RouteModelEvidence::Required],
+    RouteSelector::Provider(_) => unreachable!("explicit providers were handled above"),
+  }
+}
+
+fn provider_matches_route(
+  provider: &dyn Provider,
+  route: &RouteResolution,
+  evidence: RouteModelEvidence,
+  endpoint: Endpoint,
+) -> bool {
+  let supports = |model: &str| match evidence {
+    RouteModelEvidence::Required => provider.supports(model, endpoint),
+    // Concrete IDs outside discovery remain subject to model-specific wire
+    // endpoint rules before the upstream gets the final say.
+    RouteModelEvidence::Ignored => provider.has_endpoint(&route.upstream_model, endpoint),
   };
   match &route.selector {
     RouteSelector::Any => supports(&route.upstream_model),
     // Explicit provider/model requests supply their destination independently
     // of discovery. The upstream decides whether an unlisted model exists.
-    RouteSelector::Provider(provider_id) => {
-      provider.info().id == *provider_id && provider.has_endpoint(&route.upstream_model, endpoint)
-    }
+    RouteSelector::Provider(provider_id) => provider.info().id == *provider_id && supports(&route.upstream_model),
     RouteSelector::Model => supports(&route.upstream_model),
-    RouteSelector::Fuzzy { candidates } => {
-      if verbatim {
-        supports(&route.upstream_model)
-      } else {
-        candidates.iter().any(|candidate| supports(candidate))
-      }
-    }
+    RouteSelector::Fuzzy { candidates } => candidates.iter().any(|candidate| supports(candidate)),
   }
 }
 
@@ -816,6 +839,44 @@ mod tests {
       .unwrap();
     assert!(matches!(
       pool.acquire_for_route(Some("exact-session"), &automatic, Endpoint::Responses),
+      EndpointAcquire::Account {
+        endpoint: Endpoint::Responses,
+        ..
+      }
+    ));
+  }
+
+  #[test]
+  fn automatic_routes_prefer_discovery_then_fall_back_for_concrete_ids() {
+    let pool = pool();
+    let resolver = RouteResolver::new(tokn_config::RouteMode::Route, &[]);
+
+    let known = resolver.resolve("model-b", None).unwrap();
+    let EndpointAcquire::Account { acct, endpoint } = pool.acquire_for_route(None, &known, Endpoint::ChatCompletions)
+    else {
+      panic!("known model should select its advertising provider");
+    };
+    assert_eq!(acct.id(), "b1");
+    assert_eq!(endpoint, Endpoint::ChatCompletions);
+
+    let unknown = resolver.resolve("future-model", None).unwrap();
+    let EndpointAcquire::Account { acct, endpoint } = pool.acquire_for_route(None, &unknown, Endpoint::ChatCompletions)
+    else {
+      panic!("unknown concrete model should reach a compatible upstream");
+    };
+    assert!(acct.id().starts_with('a'));
+    assert_eq!(endpoint, Endpoint::ChatCompletions);
+
+    let fuzzy = RouteResolution {
+      mode: tokn_config::RouteMode::Fuzzy,
+      requested_model: "future-family".into(),
+      upstream_model: "future-family".into(),
+      selector: RouteSelector::Fuzzy {
+        candidates: vec!["missing-a".into(), "missing-b".into()],
+      },
+    };
+    assert!(matches!(
+      pool.acquire_for_route(None, &fuzzy, Endpoint::ChatCompletions),
       EndpointAcquire::None
     ));
   }
@@ -1048,15 +1109,15 @@ mod tests {
     };
     assert_eq!(acct.provider.info().id, "provider-a");
 
-    assert!(matches!(
-      p.acquire_for_route_with_providers(
-        Some("shared-session"),
-        &route_a,
-        Endpoint::ChatCompletions,
-        Some(&only_b),
-      ),
-      EndpointAcquire::None
-    ));
+    let EndpointAcquire::Account { acct, .. } = p.acquire_for_route_with_providers(
+      Some("shared-session"),
+      &route_a,
+      Endpoint::ChatCompletions,
+      Some(&only_b),
+    ) else {
+      panic!("allowed compatible provider should receive an unlisted concrete model");
+    };
+    assert_eq!(acct.provider.info().id, "provider-b");
 
     let EndpointAcquire::Account { acct, .. } = p.acquire_for_route_with_providers(
       Some("shared-session"),

@@ -104,24 +104,26 @@ impl V2AccountSelector {
     let mut allowed_matching_binding_exists = false;
 
     for candidate in candidates {
-      for operation in operations.iter().copied() {
-        for binding in &self.state.bindings {
-          if self.route().allows_provider(binding.provider_id())
-            && managed_binding_matches(route, &candidate, operation, binding)
-          {
-            matching_binding_exists = true;
-            allowed_matching_binding_exists |= provider_allowed(binding.provider_id().as_str(), allowed.as_ref());
+      for evidence in candidate.evidence.order().iter().copied() {
+        for operation in operations.iter().copied() {
+          for binding in &self.state.bindings {
+            if self.route().allows_provider(binding.provider_id())
+              && managed_binding_matches(route, &candidate, evidence, operation, binding)
+            {
+              matching_binding_exists = true;
+              allowed_matching_binding_exists |= provider_allowed(binding.provider_id().as_str(), allowed.as_ref());
+            }
           }
-        }
-        match self.state.pool.acquire(extracted.session_id.as_deref(), |binding| {
-          self.route().allows_provider(binding.provider_id())
-            && managed_binding_matches(route, &candidate, operation, binding)
-            && provider_allowed(binding.provider_id().as_str(), allowed.as_ref())
-        }) {
-          PoolAcquire::Selected(binding) => {
-            return Ok(selected(binding, operation, candidate.model.clone()));
+          match self.state.pool.acquire(extracted.session_id.as_deref(), |binding| {
+            self.route().allows_provider(binding.provider_id())
+              && managed_binding_matches(route, &candidate, evidence, operation, binding)
+              && provider_allowed(binding.provider_id().as_str(), allowed.as_ref())
+          }) {
+            PoolAcquire::Selected(binding) => {
+              return Ok(selected(binding, operation, candidate.model.clone()));
+            }
+            PoolAcquire::CoolingDown { .. } | PoolAcquire::NoEligible => {}
           }
-          PoolAcquire::CoolingDown { .. } | PoolAcquire::NoEligible => {}
         }
       }
     }
@@ -454,9 +456,27 @@ fn selected(binding: Arc<ProviderBinding>, operation: Endpoint, model: SmolStr) 
 struct ModelCandidate {
   model: SmolStr,
   constraint: ProviderConstraint,
-  /// Concrete IDs with an explicit destination do not need discovery evidence.
-  /// Family members still use discovery to choose among their ordered alternatives.
-  allow_unlisted: bool,
+  evidence: DiscoveryEvidence,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum DiscoveryEvidence {
+  /// Family expansion requires evidence so its configured fallback order remains meaningful.
+  Required,
+  /// Automatic concrete routing prefers evidence, then lets a compatible upstream decide.
+  Preferred,
+  /// Explicit destinations already identify where the request should go.
+  Ignored,
+}
+
+impl DiscoveryEvidence {
+  fn order(self) -> &'static [DiscoveryEvidence] {
+    match self {
+      Self::Required => &[Self::Required],
+      Self::Preferred => &[Self::Required, Self::Ignored],
+      Self::Ignored => &[Self::Ignored],
+    }
+  }
 }
 
 #[derive(Clone)]
@@ -482,7 +502,11 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
     ModelSelector::Capability => Ok(vec![ModelCandidate {
       model: SmolStr::new(requested_model),
       constraint: ProviderConstraint::Any,
-      allow_unlisted: fixed_provider,
+      evidence: if fixed_provider {
+        DiscoveryEvidence::Ignored
+      } else {
+        DiscoveryEvidence::Preferred
+      },
     }]),
     ModelSelector::Qualified { namespace } => {
       let (qualifier, model) = requested_model.split_once('/').ok_or_else(|| {
@@ -505,7 +529,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
       Ok(vec![ModelCandidate {
         model: SmolStr::new(model),
         constraint,
-        allow_unlisted: true,
+        evidence: DiscoveryEvidence::Ignored,
       }])
     }
     ModelSelector::Family(families) => {
@@ -513,7 +537,11 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
         return Ok(vec![ModelCandidate {
           model: SmolStr::new(requested_model),
           constraint: ProviderConstraint::Any,
-          allow_unlisted: fixed_provider,
+          evidence: if fixed_provider {
+            DiscoveryEvidence::Ignored
+          } else {
+            DiscoveryEvidence::Preferred
+          },
         }]);
       };
       Ok(
@@ -524,7 +552,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
           .map(|model| ModelCandidate {
             model,
             constraint: ProviderConstraint::Any,
-            allow_unlisted: false,
+            evidence: DiscoveryEvidence::Required,
           })
           .collect(),
       )
@@ -535,6 +563,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
 fn managed_binding_matches(
   route: &ManagedRoute,
   candidate: &ModelCandidate,
+  evidence: DiscoveryEvidence,
   operation: Endpoint,
   binding: &ProviderBinding,
 ) -> bool {
@@ -544,10 +573,10 @@ fn managed_binding_matches(
   };
   route_provider_matches
     && candidate.constraint.matches(binding)
-    && if candidate.allow_unlisted {
-      binding.driver().has_endpoint(candidate.model.as_str(), operation)
-    } else {
-      binding.driver().supports(candidate.model.as_str(), operation)
+    && match evidence {
+      DiscoveryEvidence::Required => binding.driver().supports(candidate.model.as_str(), operation),
+      DiscoveryEvidence::Preferred => unreachable!("preferred discovery expands into concrete matching passes"),
+      DiscoveryEvidence::Ignored => binding.driver().has_endpoint(candidate.model.as_str(), operation),
     }
 }
 
@@ -676,7 +705,7 @@ driver = "openai"
       let candidates = model_candidates(managed_route(&plan), requested).unwrap();
       assert_eq!(candidates.len(), 1);
       assert_eq!(candidates[0].model, "gpt-5");
-      assert!(candidates[0].allow_unlisted);
+      assert_eq!(candidates[0].evidence, DiscoveryEvidence::Ignored);
       match &candidates[0].constraint {
         ProviderConstraint::Driver(id) => assert_eq!(id.as_str(), expected_qualifier),
         ProviderConstraint::Provider(id) => assert_eq!(id.as_str(), expected_qualifier),
@@ -700,8 +729,8 @@ driver = "openai"
     );
     assert!(matches!(candidates[0].constraint, ProviderConstraint::Any));
     assert!(matches!(candidates[1].constraint, ProviderConstraint::Any));
-    assert!(!candidates[0].allow_unlisted);
-    assert!(!candidates[1].allow_unlisted);
+    assert_eq!(candidates[0].evidence, DiscoveryEvidence::Required);
+    assert_eq!(candidates[1].evidence, DiscoveryEvidence::Required);
 
     let concrete = model_candidates(managed_route(&plan), "gpt-4o").unwrap();
     assert_eq!(concrete.len(), 1);
@@ -710,7 +739,7 @@ driver = "openai"
     let unknown = model_candidates(managed_route(&plan), "unknown").unwrap();
     assert_eq!(unknown.len(), 1);
     assert_eq!(unknown[0].model, "unknown");
-    assert!(!unknown[0].allow_unlisted);
+    assert_eq!(unknown[0].evidence, DiscoveryEvidence::Preferred);
   }
 
   #[test]

@@ -109,6 +109,7 @@ operation = "preserve"
       "openai/organization/custom-model",
       "organization/custom-model",
     ),
+    ("automatic", "organization/custom-model", "organization/custom-model"),
     ("family", "organization/custom-model", "organization/custom-model"),
     ("family", "smart", "gpt-4o"),
   ] {
@@ -132,12 +133,6 @@ operation = "preserve"
   }
 
   for (profile, model, token, expected) in [
-    (
-      "automatic",
-      "organization/custom-model",
-      &allowed.token,
-      StatusCode::NOT_IMPLEMENTED,
-    ),
     (
       "provider",
       "other/organization/custom-model",

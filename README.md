@@ -508,12 +508,12 @@ or destination must also be in that list. Existing managed/relay, model,
 operation, credential, and retry semantics are unchanged.
 
 Model discovery is evidence for automatic routing, not a complete list of IDs
-an upstream accepts. A fixed provider or a provider/driver-qualified request
-can send a concrete model ID even when neither upstream discovery nor models.dev
-lists it. Provider access restrictions and endpoint compatibility still apply.
-Unqualified automatic routing requires a known model; name the provider when
-using an unlisted ID. Named model families continue choosing discovered members
-in their configured order.
+an upstream accepts. Automatic routing first prefers a provider that advertises
+the concrete model, then falls back to an endpoint-compatible provider and lets
+the upstream decide whether the ID exists. Fixed-provider and provider/driver-
+qualified requests go directly to their compatible destination. Provider access
+restrictions and endpoint compatibility still apply. Named model families
+continue choosing discovered members in their configured order.
 
 All API-capable profiles are visible on every `llm_api`
 listener. Named profiles default to `/{profile}/v1`; `default` uses `/v1`.
