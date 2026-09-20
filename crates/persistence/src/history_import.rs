@@ -164,6 +164,13 @@ fn require_closed(path: &Path) -> Result<()> {
   }
   Ok(())
 }
+fn verify_source_unchanged(source: &Path, sha256: &str) -> Result<()> {
+  require_closed(source)?;
+  if sha256 != digest_file(source)? {
+    return Err(invalid(format!("Source changed while reading: {}", source.display())));
+  }
+  Ok(())
+}
 fn rows(conn: &Connection, sql: &str) -> Result<Vec<Vec<Value>>> {
   let mut statement = conn.prepare(sql)?;
   let count = statement.column_count();
@@ -309,10 +316,7 @@ fn load_capture(
       rows: table_rows,
     });
   }
-  require_closed(&source)?;
-  if sha256 != digest_file(&source)? {
-    return Err(invalid(format!("Source changed while reading: {}", source.display())));
-  }
+  verify_source_unchanged(&source, &sha256)?;
   Ok(Capture {
     source,
     destination,
@@ -666,3 +670,6 @@ fn validate_imported_foreign_keys(conn: &Connection, alias: &str, table: &TableC
   }
   Ok(())
 }
+
+#[cfg(test)]
+mod tests;

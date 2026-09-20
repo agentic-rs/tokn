@@ -326,3 +326,400 @@ fn source_request_symlinks_are_rejected_regardless_of_filename() {
   assert_eq!(count(&fixture.destination.usage_db, "requests"), 0);
   assert!(!fixture.day().exists());
 }
+
+fn assert_no_imported_history(fixture: &Fixture) {
+  assert_eq!(count(&fixture.destination.usage_db, "requests"), 0);
+  assert_eq!(count(&fixture.destination.sessions_db, "sessions"), 0);
+  assert!(!fixture.day().exists());
+}
+
+#[test]
+fn unexpected_source_tables_are_rejected_before_creating_destination_files() {
+  let fixture = Fixture::new();
+  Connection::open(fixture.source.join("usage.db"))
+    .unwrap()
+    .execute_batch("CREATE TABLE unexpected_capture_data (id INTEGER PRIMARY KEY);")
+    .unwrap();
+  assert!(fixture.error(true).contains("Unexpected table set in main"));
+  assert_no_imported_history(&fixture);
+  assert!(!fixture
+    .destination
+    .requests_dir
+    .join(".tokn-requests-maintenance.lock")
+    .exists());
+}
+
+#[test]
+fn source_triggers_are_rejected_without_running_them() {
+  let fixture = Fixture::new();
+  Connection::open(fixture.source.join("usage.db"))
+    .unwrap()
+    .execute_batch("CREATE TRIGGER capture_trigger AFTER INSERT ON requests BEGIN DELETE FROM requests; END;")
+    .unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("does not support database triggers in main"));
+  assert_eq!(count(&fixture.source.join("usage.db"), "requests"), 1);
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn incompatible_source_versions_are_rejected_without_migrating_the_capture() {
+  for version_delta in [-1, 1] {
+    let fixture = Fixture::new();
+    let source = fixture.source.join("usage.db");
+    let conn = Connection::open(&source).unwrap();
+    let version = i64::from(tokn_persistence::usage::latest_version()) + version_delta;
+    conn.execute("DELETE FROM schema_migrations", []).unwrap();
+    conn
+      .execute(
+        "INSERT INTO schema_migrations (version, name, applied_ts) VALUES (?1, 'capture-version', 0)",
+        [version],
+      )
+      .unwrap();
+    drop(conn);
+    let before = fs::read(&source).unwrap();
+    let error = fixture.error(true);
+    assert!(
+      error.contains(&format!("Source schema version {version} is not current")),
+      "{error}"
+    );
+    assert_eq!(fs::read(&source).unwrap(), before);
+    assert_no_imported_history(&fixture);
+  }
+}
+
+#[test]
+fn source_usage_requires_nonnull_request_identity() {
+  let fixture = Fixture::new();
+  Connection::open(fixture.source.join("usage.db"))
+    .unwrap()
+    .execute(
+      "INSERT INTO requests (ts, model) VALUES (101, 'uncorrelated-model')",
+      [],
+    )
+    .unwrap();
+  assert!(fixture.error(false).contains("Missing stable identity"));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn source_usage_without_request_id_column_is_rejected() {
+  let fixture = Fixture::new();
+  Connection::open(fixture.source.join("usage.db"))
+    .unwrap()
+    .execute_batch("DROP INDEX idx_requests_request; ALTER TABLE requests DROP COLUMN request_id;")
+    .unwrap();
+  assert!(fixture.error(true).contains("Missing stable identity"));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn source_request_tables_require_a_primary_key_even_when_empty() {
+  let fixture = Fixture::new();
+  Connection::open(fixture.source.join("requests").join(DAY))
+    .unwrap()
+    .execute_batch(
+      "DROP VIEW requests;
+       ALTER TABLE request_upstream RENAME TO old_request_upstream;
+       CREATE TABLE request_upstream AS SELECT * FROM old_request_upstream;
+       DROP TABLE old_request_upstream;",
+    )
+    .unwrap();
+  assert!(fixture.error(true).contains("Missing stable identity"));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn source_index_corruption_fails_integrity_validation() {
+  let fixture = Fixture::new();
+  // Simulate an index whose persisted entries no longer match its schema. A
+  // read-only integrity check detects this before any destination is opened.
+  Connection::open(fixture.source.join("usage.db"))
+    .unwrap()
+    .execute_batch(
+      "PRAGMA writable_schema=ON;
+       UPDATE sqlite_master SET sql='CREATE INDEX idx_requests_ts ON requests(model)'
+         WHERE type='index' AND name='idx_requests_ts';
+       PRAGMA writable_schema=OFF;",
+    )
+    .unwrap();
+  let error = fixture.error(true);
+  assert!(error.contains("Source integrity check failed"), "{error}");
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn damaged_source_database_is_reported_without_touching_destination_history() {
+  let fixture = Fixture::new();
+  fs::write(fixture.source.join("usage.db"), b"not a SQLite database").unwrap();
+  assert!(matches!(
+    import_history(&fixture.source, &fixture.destination, true),
+    Err(tokn_persistence::history_import::ImportError::Sqlite { .. })
+  ));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn destination_column_mismatch_rolls_back_rows_from_prior_tables_and_databases() {
+  let fixture = Fixture::new();
+  Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .execute_batch("ALTER TABLE part_blobs ADD COLUMN import_extra TEXT;")
+    .unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("Column schema mismatch: target_1/part_blobs"));
+  assert_no_imported_history(&fixture);
+  assert_eq!(count(&fixture.destination.sessions_db, "part_blobs"), 0);
+}
+
+#[test]
+fn destination_foreign_key_mismatch_rolls_back_imported_graph() {
+  let fixture = Fixture::new();
+  Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .execute_batch(
+      "DROP TABLE session_relations;
+       CREATE TABLE session_relations (
+         parent_session_id TEXT NOT NULL REFERENCES sessions(id),
+         child_session_id TEXT NOT NULL,
+         relation_kind TEXT NOT NULL,
+         first_seen_ts INTEGER NOT NULL,
+         last_seen_ts INTEGER NOT NULL,
+         source TEXT NOT NULL,
+         PRIMARY KEY(parent_session_id, child_session_id, relation_kind)
+       );",
+    )
+    .unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("Foreign key schema mismatch: target_1/session_relations"));
+  assert_no_imported_history(&fixture);
+  for table in ["part_blobs", "message_tree", "message_parts", "session_nodes"] {
+    assert_eq!(count(&fixture.destination.sessions_db, table), 0);
+  }
+}
+
+#[test]
+fn destination_triggers_are_rejected_before_they_can_change_imported_rows() {
+  let fixture = Fixture::new();
+  Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .execute_batch("CREATE TRIGGER reject_session AFTER INSERT ON sessions BEGIN DELETE FROM sessions; END;")
+    .unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("does not support database triggers in target_1"));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn destination_extra_tables_are_preserved_while_import_rolls_back() {
+  let fixture = Fixture::new();
+  Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .execute_batch("CREATE TABLE local_notes (note TEXT); INSERT INTO local_notes VALUES ('keep existing note');")
+    .unwrap();
+  assert!(fixture.error(true).contains("Unexpected table set in target_1"));
+  assert_no_imported_history(&fixture);
+  let note: String = Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .query_row("SELECT note FROM local_notes", [], |row| row.get(0))
+    .unwrap();
+  assert_eq!(note, "keep existing note");
+}
+
+#[test]
+fn destination_constraint_errors_preserve_existing_rows_and_rollback_other_databases() {
+  let fixture = Fixture::new();
+  Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .execute_batch(
+      "INSERT INTO sessions (id, first_seen_ts, last_seen_ts, source) VALUES ('host-session', 99, 99, 'header');
+       CREATE UNIQUE INDEX one_session_per_source ON sessions(source);",
+    )
+    .unwrap();
+  assert!(matches!(
+    import_history(&fixture.source, &fixture.destination, true),
+    Err(tokn_persistence::history_import::ImportError::Sqlite { .. })
+  ));
+  assert_eq!(count(&fixture.destination.usage_db, "requests"), 0);
+  assert_eq!(count(&fixture.destination.sessions_db, "sessions"), 1);
+  let session_id: String = Connection::open(&fixture.destination.sessions_db)
+    .unwrap()
+    .query_row("SELECT id FROM sessions", [], |row| row.get(0))
+    .unwrap();
+  assert_eq!(session_id, "host-session");
+  assert!(!fixture.day().exists());
+}
+
+#[test]
+fn source_root_must_be_an_existing_directory() {
+  let fixture = Fixture::new();
+  let error = import_history(&fixture.source.join("usage.db"), &fixture.destination, true)
+    .unwrap_err()
+    .to_string();
+  assert!(error.contains("Expected a non-symlink directory"));
+  assert!(matches!(
+    import_history(&fixture.root.join("missing-capture"), &fixture.destination, true),
+    Err(tokn_persistence::history_import::ImportError::Io { .. })
+  ));
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn request_directories_cannot_be_regular_files() {
+  for replace_source in [true, false] {
+    let fixture = Fixture::new();
+    let requests = if replace_source {
+      fixture.source.join("requests")
+    } else {
+      fixture.destination.requests_dir.clone()
+    };
+    fs::remove_dir_all(&requests).unwrap();
+    fs::write(&requests, b"not a directory").unwrap();
+    assert!(fixture.error(true).contains("Expected a non-symlink directory"));
+    assert_no_imported_history(&fixture);
+  }
+}
+
+#[test]
+fn missing_usage_or_sessions_destination_is_not_created_by_import() {
+  for remove_usage in [true, false] {
+    let fixture = Fixture::new();
+    let missing = if remove_usage {
+      &fixture.destination.usage_db
+    } else {
+      &fixture.destination.sessions_db
+    };
+    fs::remove_file(missing).unwrap();
+    assert!(fixture.error(true).contains("Destination must already exist"));
+    assert!(!missing.exists());
+    if remove_usage {
+      assert_eq!(count(&fixture.destination.sessions_db, "sessions"), 0);
+    } else {
+      assert_eq!(count(&fixture.destination.usage_db, "requests"), 0);
+    }
+    assert!(!fixture.day().exists());
+  }
+}
+
+#[test]
+fn identical_source_and_destination_roots_are_rejected_before_lock_creation() {
+  let fixture = Fixture::new();
+  let source_paths = paths(&fixture.source);
+  let before = fs::read(&source_paths.usage_db).unwrap();
+  let error = import_history(&fixture.source, &source_paths, true)
+    .unwrap_err()
+    .to_string();
+  assert!(error.contains("Source and destination must be separate"));
+  assert_eq!(fs::read(&source_paths.usage_db).unwrap(), before);
+  assert!(!source_paths
+    .requests_dir
+    .join(".tokn-requests-maintenance.lock")
+    .exists());
+  assert_no_imported_history(&fixture);
+}
+
+#[test]
+fn destination_database_aliases_are_rejected_before_opening_them_for_writing() {
+  let fixture = Fixture::new();
+  fs::remove_file(&fixture.destination.sessions_db).unwrap();
+  fs::hard_link(&fixture.destination.usage_db, &fixture.destination.sessions_db).unwrap();
+  let before = fs::read(&fixture.destination.usage_db).unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("Destination database files alias each other"));
+  assert_eq!(fs::read(&fixture.destination.usage_db).unwrap(), before);
+  assert!(!fixture.day().exists());
+}
+
+#[test]
+fn duplicate_destination_paths_are_rejected_before_opening_them_for_writing() {
+  let mut fixture = Fixture::new();
+  fixture.destination.sessions_db = fixture.destination.usage_db.clone();
+  let before = fs::read(&fixture.destination.usage_db).unwrap();
+  assert!(fixture
+    .error(true)
+    .contains("Destination database paths must be distinct"));
+  assert_eq!(fs::read(&fixture.destination.usage_db).unwrap(), before);
+  assert!(!fixture.day().exists());
+}
+
+#[test]
+fn request_day_names_must_represent_calendar_dates() {
+  for filename in ["not-a-day.db", "2026-02-30.db", "2026-13-01.db"] {
+    let fixture = Fixture::new();
+    fs::write(fixture.source.join("requests").join(filename), []).unwrap();
+    assert!(fixture.error(true).contains("Invalid request day"));
+    assert_no_imported_history(&fixture);
+  }
+}
+
+#[test]
+fn nine_request_days_fit_atomic_import_and_ten_are_rejected_without_partial_history() {
+  let fixture = Fixture::new();
+  for day in 1..=8 {
+    drop(open_day_db(&fixture.source.join(format!("requests/2026-09-{day:02}.db"))).unwrap());
+  }
+  let report = import_history(&fixture.source, &fixture.destination, false).unwrap();
+  assert_eq!(report.databases.len(), 11);
+  assert_eq!(report.databases.iter().filter(|database| database.created).count(), 9);
+  assert_eq!(report.inserted_total, 9);
+  assert_no_imported_history(&fixture);
+  for day in 1..=8 {
+    assert!(!fixture
+      .destination
+      .requests_dir
+      .join(format!("2026-09-{day:02}.db"))
+      .exists());
+  }
+  drop(open_day_db(&fixture.source.join("requests/2026-09-09.db")).unwrap());
+  assert!(fixture.error(true).contains("at most nine request days"));
+  assert_no_imported_history(&fixture);
+  for day in 1..=9 {
+    assert!(!fixture
+      .destination
+      .requests_dir
+      .join(format!("2026-09-{day:02}.db"))
+      .exists());
+  }
+}
+
+// Linux permits invalid UTF-8 filenames; macOS filesystems reject their creation.
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_source_request_filenames_are_rejected() {
+  use std::os::unix::ffi::OsStringExt;
+  let fixture = Fixture::new();
+  let name = std::ffi::OsString::from_vec(b"2026-09-20\xff.db".to_vec());
+  fs::write(fixture.source.join("requests").join(name), []).unwrap();
+  assert!(fixture.error(true).contains("Invalid source request filename"));
+  assert_no_imported_history(&fixture);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn non_utf8_attached_destination_paths_fail_and_remove_initialized_request_days() {
+  use std::os::unix::ffi::OsStringExt;
+  let mut fixture = Fixture::new();
+  let name = std::ffi::OsString::from_vec(b"sessions-\xff.db".to_vec());
+  let destination = fixture.destination.sessions_db.parent().unwrap().join(name);
+  fs::rename(&fixture.destination.sessions_db, &destination).unwrap();
+  fixture.destination.sessions_db = destination;
+  assert!(fixture.error(true).contains("Destination path must be UTF-8"));
+  assert_no_imported_history(&fixture);
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_request_directories_are_rejected_without_following_them() {
+  let fixture = Fixture::new();
+  let actual = fixture.root.join("actual-requests");
+  fs::rename(&fixture.destination.requests_dir, &actual).unwrap();
+  std::os::unix::fs::symlink(&actual, &fixture.destination.requests_dir).unwrap();
+  assert!(fixture.error(true).contains("Expected a non-symlink directory"));
+  assert!(fs::read_dir(actual).unwrap().next().is_none());
+  assert_no_imported_history(&fixture);
+}
