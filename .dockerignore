@@ -2,3 +2,5 @@
 .github
 target
 nohup.out
+tmp
+**/node_modules

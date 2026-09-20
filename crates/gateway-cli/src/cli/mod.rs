@@ -12,6 +12,7 @@ mod config_cmd;
 mod config_context;
 mod error;
 mod headers;
+mod history;
 mod import;
 mod inspect;
 mod lan_bootstrap;
@@ -64,6 +65,9 @@ pub enum Cmd {
   /// Manage archived per-day request databases using the effective configuration.
   #[command(subcommand)]
   Requests(requests::RequestsCmd),
+  /// Import captured request, usage, and session history from private storage
+  #[command(subcommand)]
+  History(history::HistoryCmd),
   /// Inspect and build semantic session views
   #[command(subcommand)]
   Sessions(sessions::SessionsCmd),
@@ -81,6 +85,12 @@ pub enum Cmd {
 impl Cli {
   pub async fn run(self) -> Result<()> {
     let cfg_path = self.config.clone();
+    if let Cmd::History(command) = self.cmd {
+      // History previews must not migrate configuration or create log files.
+      // An explicit destination also works without a valid host configuration.
+      logging::init_basic();
+      return history::run(cfg_path, command).map_err(Error::from);
+    }
     let is_inspect = matches!(&self.cmd, Cmd::Inspect(_));
     if matches!(&self.cmd, Cmd::Config(args) if args.requires_pristine_startup()) {
       let Cmd::Config(args) = self.cmd else {
@@ -121,6 +131,7 @@ impl Cli {
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
       Cmd::Inspect(a) => inspect::run(cfg_path, a).await,
       Cmd::Requests(c) => requests::run(cfg_path, c).await,
+      Cmd::History(_) => unreachable!("history commands are dispatched before configuration startup"),
       Cmd::Sessions(c) => sessions::run(c).await,
       Cmd::Config(a) => config_cmd::run(cfg_path, a).await,
       Cmd::Update(a) => update::run(a).await,

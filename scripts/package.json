@@ -2,6 +2,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "docker": "bun docker/cli.ts"
+    "docker": "bun docker/cli.ts",
+    "test": "bun test docker/trials",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.13",
+    "typescript": "5.9.3"
   }
 }

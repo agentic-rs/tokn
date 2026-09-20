@@ -3,6 +3,9 @@
 This directory contains repo-local helper tooling that should not make the Rust
 workspace root a JavaScript package.
 
+For repeatable agent/model tests with read-only host config, private databases,
+and a native history import, use the [container trial harness](docker/trials/README.md).
+
 ## Docker PR Trial
 
 For native v2 configurations, use [the standard Docker setup](../docs/docker.md).

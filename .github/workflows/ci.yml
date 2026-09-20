@@ -15,6 +15,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  docker-trials:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install script dependencies
+        run: bun install --cwd scripts --frozen-lockfile
+      - name: Check container trial TypeScript
+        run: bun --cwd scripts check
+      - name: Test container trial harness without credentials
+        run: bun --cwd scripts test
+
   format:
     runs-on: ubuntu-latest
     timeout-minutes: 15
