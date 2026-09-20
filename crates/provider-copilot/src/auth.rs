@@ -129,6 +129,8 @@ impl ProviderAuth for CopilotAuth {
     Ok(RefreshOutcome::Refreshed {
       access_token: resp.token,
       expires_at: resp.expires_at,
+      refresh_token: None,
+      id_token: None,
       username,
       provider_account_id: None,
     })
@@ -139,7 +141,7 @@ impl ProviderAuth for CopilotAuth {
     let refreshed = self.refresh_credential(client, account).await?;
     let mut username = match refreshed {
       RefreshOutcome::Refreshed { username, .. } => username,
-      RefreshOutcome::NotApplicable => None,
+      RefreshOutcome::Unchanged | RefreshOutcome::NotApplicable => None,
     };
     if username.is_none() {
       if let Some(gh_token) = account.refresh_token.as_ref() {

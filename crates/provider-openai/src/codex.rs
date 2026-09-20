@@ -52,7 +52,7 @@ impl CodexProvider {
       id: format!("{}:{}", a.provider, a.id),
       credential,
       target,
-      provider_account_id: a.provider_account_id.clone(),
+      provider_account_id: crate::jwt::account_id(&a),
       info: ProviderInfo {
         id: a.provider.clone(),
         aliases: &[],
@@ -424,6 +424,20 @@ mod tests {
       codex.patch_headers(&mut h, &patch_ctx()).unwrap();
       assert!(h.get("chatgpt-account-id").is_none());
     }
+  }
+
+  #[test]
+  fn codex_patch_headers_recovers_imported_account_id_from_identity_token() {
+    use base64::Engine;
+    let mut account = acct(Some("atk-test"));
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+      serde_json::json!({"https://api.openai.com/auth": {"chatgpt_account_id": "imported-account"}}).to_string(),
+    );
+    account.id_token = Some(Secret::new(format!("header.{payload}.signature")));
+    let codex = CodexProvider::from_account(Arc::new(account)).unwrap();
+    let mut headers = HeaderMap::new();
+    codex.patch_headers(&mut headers, &patch_ctx()).unwrap();
+    assert_eq!(headers.get("chatgpt-account-id").unwrap().as_str(), "imported-account");
   }
 
   #[test]

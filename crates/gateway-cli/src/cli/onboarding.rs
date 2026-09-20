@@ -13,7 +13,7 @@ use crate::cli::config_context::ResolvedProviderAuth;
 use crate::config::{Account, AuthType};
 use crate::util::secret::Secret;
 use anyhow::{anyhow, Context, Result};
-use tokn_auth::{CredentialResult, ProviderAuth, RefreshOutcome};
+use tokn_auth::{CredentialResult, ProviderAuth};
 
 // Re-export so existing call sites continue to use
 // `crate::cli::onboarding::CredentialSource`. New code should import it
@@ -92,7 +92,7 @@ async fn oauth_account_from_token(
   token: String,
 ) -> Result<Account> {
   let auth = provider.auth();
-  let mut account = Account {
+  let mut account = provider.account_for_auth(&Account {
     id: id_override.clone().unwrap_or_else(|| "imported".into()),
     provider: auth.id().into(),
     enabled: true,
@@ -114,45 +114,35 @@ async fn oauth_account_from_token(
     refresh_url: auth.default_refresh_url().map(str::to_string),
     last_refresh: None,
     settings: toml::Table::new(),
-  };
-  let auth_account = provider.account_for_auth(&account);
-
-  let refresh = auth
-    .refresh_credential(client, &auth_account)
-    .await
-    .map_err(|e| anyhow!("refresh token verification failed: {e}"))?;
-  let mut username = match refresh {
-    RefreshOutcome::Refreshed {
-      access_token,
-      expires_at,
-      username,
-      provider_account_id,
-    } => {
-      account.access_token = Some(Secret::new(access_token));
-      account.access_token_expires_at = Some(expires_at);
-      account.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-      if provider_account_id.is_some() {
-        account.provider_account_id = provider_account_id;
-      }
-      username
-    }
-    RefreshOutcome::NotApplicable => None,
-  };
-  if username.is_none() {
-    username = auth
-      .verify_credential(client, &auth_account)
-      .await
-      .ok()
-      .and_then(|v| v.username);
-  }
+  });
+  refresh_and_verify_oauth_account(client, auth, &mut account).await?;
   if id_override.is_none() {
-    if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
+    if let Some(name) = account.username.as_ref().filter(|name| !name.trim().is_empty()) {
       account.id = name.trim().to_string();
     }
   }
-  account.username = username;
 
   Ok(account)
+}
+
+async fn refresh_and_verify_oauth_account(
+  client: &reqwest::Client,
+  auth: &dyn ProviderAuth,
+  account: &mut Account,
+) -> Result<()> {
+  let refresh = auth
+    .refresh_credential(client, account)
+    .await
+    .map_err(|e| anyhow!("refresh token verification failed: {e}"))?;
+  refresh.apply_to(account);
+  if account.username.is_none() {
+    account.username = auth
+      .verify_credential(client, account)
+      .await
+      .ok()
+      .and_then(|outcome| outcome.username);
+  }
+  Ok(())
 }
 
 /// Build an [`Account`] for a static-API-key provider given the raw key.
@@ -482,6 +472,70 @@ mod tests {
   use crate::cli::config_context::ConfigContext;
   use tokn_auth::CredentialFlavor;
   use tokn_mock_server::{MockAuthConfig, MockLlmConfig, MockLlmServer};
+
+  struct RotatingAuth;
+
+  #[async_trait::async_trait]
+  impl ProviderAuth for RotatingAuth {
+    fn id(&self) -> &'static str {
+      "codex"
+    }
+
+    async fn refresh_credential(
+      &self,
+      _client: &reqwest::Client,
+      account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::RefreshOutcome> {
+      assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "imported-refresh");
+      Ok(tokn_auth::RefreshOutcome::Refreshed {
+        access_token: "new-access".into(),
+        expires_at: 200,
+        refresh_token: Some("rotated-refresh".into()),
+        id_token: Some("new-id".into()),
+        username: None,
+        provider_account_id: Some("new-account".into()),
+      })
+    }
+
+    async fn verify_credential(
+      &self,
+      _client: &reqwest::Client,
+      account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::VerifyOutcome> {
+      assert_eq!(account.access_token.as_ref().unwrap().expose(), "new-access");
+      assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "rotated-refresh");
+      assert_eq!(account.provider_account_id.as_deref(), Some("new-account"));
+      Ok(tokn_auth::VerifyOutcome {
+        username: Some("verified-user".into()),
+      })
+    }
+
+    async fn probe_quota(
+      &self,
+      _client: &reqwest::Client,
+      _account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::QuotaSnapshot> {
+      panic!("imports do not probe quota");
+    }
+  }
+
+  #[tokio::test]
+  async fn oauth_import_verification_uses_and_retains_rotated_credentials() {
+    let mut account: Account = serde_json::from_value(serde_json::json!({
+      "id": "imported",
+      "provider": "codex",
+      "refresh_token": "imported-refresh"
+    }))
+    .unwrap();
+    refresh_and_verify_oauth_account(&reqwest::Client::new(), &RotatingAuth, &mut account)
+      .await
+      .unwrap();
+    assert_eq!(account.access_token.as_ref().unwrap().expose(), "new-access");
+    assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "rotated-refresh");
+    assert_eq!(account.id_token.as_ref().unwrap().expose(), "new-id");
+    assert_eq!(account.username.as_deref(), Some("verified-user"));
+    assert!(account.last_refresh.is_some());
+  }
 
   fn write_v2_openai_config(path: &std::path::Path, base_url: &str) {
     std::fs::write(

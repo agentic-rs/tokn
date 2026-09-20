@@ -142,10 +142,10 @@ async fn exchange_authorization_code(
   decode_token_response(resp, "authorization_code exchange").await
 }
 
-async fn refresh_with_token(client: &reqwest::Client, refresh_token: &str) -> Result<TokenResponse> {
+async fn refresh_with_token(client: &reqwest::Client, url: &str, refresh_token: &str) -> Result<TokenResponse> {
   let resp = http_form(
     client,
-    CODEX_OAUTH_TOKEN_URL,
+    url,
     vec![
       ("grant_type", "refresh_token".into()),
       ("refresh_token", refresh_token.into()),
@@ -264,26 +264,62 @@ impl ProviderAuth for CodexAuth {
   }
 
   async fn refresh_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<RefreshOutcome> {
-    // API-key accounts have no refresh path.
-    if account.refresh_token.is_none() {
-      return Ok(RefreshOutcome::NotApplicable);
-    }
-    let refresh = account.refresh_token.as_ref().unwrap();
-    let needs_refresh = match account.access_token_expires_at {
-      Some(exp) => exp - REFRESH_SKEW_SECS <= now_unix(),
-      None => true,
+    let refresh = match account
+      .refresh_token
+      .as_ref()
+      .filter(|token| !token.expose().trim().is_empty())
+    {
+      Some(refresh) => refresh,
+      None if account.access_token.is_none() && account.api_key.is_some() => {
+        return Ok(RefreshOutcome::NotApplicable);
+      }
+      None => {
+        return Err(AuthError::MissingCredential {
+          account: account.id.clone(),
+          field: "refresh_token",
+        })
+      }
     };
-    if !needs_refresh && account.access_token.is_some() {
-      return Ok(RefreshOutcome::NotApplicable);
-    }
-    let tokens = refresh_with_token(client, refresh.expose()).await?;
+    let url = account.refresh_url.as_deref().unwrap_or(CODEX_OAUTH_TOKEN_URL);
+    let tokens = refresh_with_token(client, url, refresh.expose()).await?;
+    let refresh_token = tokens.refresh_token.clone();
+    let id_token = tokens.id_token.clone();
     let outcome = make_outcome(tokens);
     Ok(RefreshOutcome::Refreshed {
       access_token: outcome.access_token,
       expires_at: outcome.access_token_expires_at,
+      refresh_token,
+      id_token,
       username: outcome.username,
       provider_account_id: outcome.provider_account_id,
     })
+  }
+
+  async fn refresh_credential_if_needed(
+    &self,
+    client: &reqwest::Client,
+    account: &AccountConfig,
+  ) -> Result<RefreshOutcome> {
+    let access_token = account
+      .access_token
+      .as_ref()
+      .filter(|token| !token.expose().trim().is_empty());
+    let expires_at = account.access_token_expires_at.or_else(|| {
+      access_token
+        .and_then(|token| jwt::parse_jwt_claims(token.expose()))
+        .and_then(|claims| claims.exp)
+    });
+    let refresh_available = account
+      .refresh_token
+      .as_ref()
+      .is_some_and(|token| !token.expose().trim().is_empty());
+    let fresh = expires_at.map_or(!refresh_available, |exp| {
+      exp > now_unix().saturating_add(REFRESH_SKEW_SECS)
+    });
+    if access_token.is_some() && fresh {
+      return Ok(RefreshOutcome::Unchanged);
+    }
+    self.refresh_credential(client, account).await
   }
 
   async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome> {
@@ -306,7 +342,7 @@ impl ProviderAuth for CodexAuth {
       .header("content-type", "application/json")
       .header("accept", "application/json")
       .json(&serde_json::json!({}));
-    if let Some(pid) = account.provider_account_id.as_deref().filter(|s| !s.is_empty()) {
+    if let Some(pid) = jwt::account_id(account) {
       req = req.header("chatgpt-account-id", pid);
     }
     let resp = req.send().await.map_err(|e| AuthError::Network(e.to_string()))?;
@@ -324,8 +360,8 @@ impl ProviderAuth for CodexAuth {
     Ok(VerifyOutcome::default())
   }
 
-  async fn probe_quota(&self, _client: &reqwest::Client, _account: &AccountConfig) -> Result<QuotaSnapshot> {
-    Ok(QuotaSnapshot::default())
+  async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {
+    crate::quota_codex::fetch(client, account).await
   }
 }
 
@@ -336,19 +372,22 @@ fn make_outcome(tokens: TokenResponse) -> DeviceFlowOutcome {
     id_token,
     expires_in,
   } = tokens;
-  let provider_account_id = id_token
-    .as_deref()
-    .and_then(jwt::parse_jwt_claims)
+  let id_claims = id_token.as_deref().and_then(jwt::parse_jwt_claims);
+  let access_claims = jwt::parse_jwt_claims(&access_token);
+  let provider_account_id = id_claims
     .as_ref()
-    .and_then(jwt::extract_account_id);
-  let username = id_token
-    .as_deref()
-    .and_then(jwt::parse_jwt_claims)
-    .and_then(|c| c.email);
+    .and_then(jwt::extract_account_id)
+    .or_else(|| access_claims.as_ref().and_then(jwt::extract_account_id));
+  let username = id_claims.and_then(|claims| claims.email);
+  let access_token_expires_at = expires_in
+    .and_then(|seconds| i64::try_from(seconds).ok())
+    .map(|seconds| now_unix().saturating_add(seconds))
+    .or_else(|| access_claims.and_then(|claims| claims.exp))
+    .unwrap_or_else(|| now_unix() + DEFAULT_EXPIRES_IN_SECS as i64);
   DeviceFlowOutcome {
     refresh_token: refresh_token.unwrap_or_default(),
     access_token,
-    access_token_expires_at: now_unix() + expires_in.unwrap_or(DEFAULT_EXPIRES_IN_SECS) as i64,
+    access_token_expires_at,
     username,
     provider_account_id,
   }
@@ -358,6 +397,182 @@ fn make_outcome(tokens: TokenResponse) -> DeviceFlowOutcome {
 mod tests {
   use super::*;
   use base64::Engine;
+  use tokn_mock_server::{MockEndpoint, MockLlmConfig, MockLlmServer, MockResponse, MockRoute};
+
+  fn account() -> AccountConfig {
+    serde_json::from_value(serde_json::json!({
+      "id": "codex-test",
+      "provider": crate::ID_CODEX,
+      "access_token": "old-access",
+      "refresh_token": "old-refresh",
+      "access_token_expires_at": now_unix() + 3600,
+    }))
+    .unwrap()
+  }
+
+  async fn token_server(response: MockResponse) -> MockLlmServer {
+    MockLlmServer::start(MockLlmConfig::default().with_route(MockRoute::new(
+      MockEndpoint::Custom {
+        method: reqwest::Method::POST,
+        path: "/oauth/token".into(),
+      },
+      response,
+    )))
+    .await
+  }
+
+  #[tokio::test]
+  async fn explicit_refresh_exchanges_fresh_token_and_returns_rotated_credentials() {
+    let id_token = jwt_with(serde_json::json!({"chatgpt_account_id": "acc-new", "email": "user@example.com"}));
+    let server = token_server(MockResponse::json(serde_json::json!({
+      "access_token": "new-access",
+      "refresh_token": "new-refresh",
+      "id_token": id_token,
+      "expires_in": 7200,
+    })))
+    .await;
+    let mut account = account();
+    account.refresh_url = Some(server.url("/oauth/token"));
+
+    let result = CodexAuth
+      .refresh_credential(&reqwest::Client::new(), &account)
+      .await
+      .unwrap();
+
+    let RefreshOutcome::Refreshed {
+      access_token,
+      expires_at,
+      refresh_token,
+      id_token: refreshed_id,
+      username,
+      provider_account_id,
+    } = result
+    else {
+      panic!("explicit refresh must exchange even a fresh cached access token");
+    };
+    assert_eq!(access_token, "new-access");
+    assert_eq!(refresh_token.as_deref(), Some("new-refresh"));
+    assert_eq!(refreshed_id.as_deref(), Some(id_token.as_str()));
+    assert_eq!(provider_account_id.as_deref(), Some("acc-new"));
+    assert_eq!(username.as_deref(), Some("user@example.com"));
+    assert!((7190..=7200).contains(&(expires_at - now_unix())));
+    let request = server.last_request().unwrap();
+    assert_eq!(
+      request.header("content-type"),
+      Some("application/x-www-form-urlencoded")
+    );
+    let form = reqwest::Url::parse(&format!("http://localhost/?{}", String::from_utf8_lossy(&request.body))).unwrap();
+    let fields: std::collections::BTreeMap<_, _> = form.query_pairs().into_owned().collect();
+    assert_eq!(fields.get("grant_type").map(String::as_str), Some("refresh_token"));
+    assert_eq!(fields.get("refresh_token").map(String::as_str), Some("old-refresh"));
+    assert_eq!(fields.get("client_id").map(String::as_str), Some(CLIENT_ID));
+  }
+
+  #[tokio::test]
+  async fn conditional_refresh_skips_fresh_access_tokens() {
+    let server = token_server(MockResponse::json(serde_json::json!({"access_token": "unexpected"}))).await;
+    let mut account = account();
+    account.refresh_url = Some(server.url("/oauth/token"));
+
+    let result = CodexAuth
+      .refresh_credential_if_needed(&reqwest::Client::new(), &account)
+      .await
+      .unwrap();
+
+    assert!(matches!(result, RefreshOutcome::Unchanged));
+    assert!(server.requests().is_empty());
+  }
+
+  #[tokio::test]
+  async fn conditional_refresh_exchanges_missing_expired_or_unknown_expiry_tokens() {
+    let server = token_server(MockResponse::json(
+      serde_json::json!({"access_token": "new-access", "expires_in": 3600}),
+    ))
+    .await;
+    let client = reqwest::Client::new();
+    for (access, expiry) in [
+      (None, Some(now_unix() + 3600)),
+      (Some(""), Some(now_unix() + 3600)),
+      (Some("old-access"), Some(now_unix() - 10)),
+      (Some("old-access"), Some(now_unix() + 30)),
+      (Some("old-access"), None),
+    ] {
+      let mut account = account();
+      account.access_token = access.map(|token| tokn_core::account::Secret::new(token.into()));
+      account.access_token_expires_at = expiry;
+      account.refresh_url = Some(server.url("/oauth/token"));
+
+      let result = CodexAuth.refresh_credential_if_needed(&client, &account).await.unwrap();
+
+      assert!(matches!(
+        result,
+        RefreshOutcome::Refreshed {
+          refresh_token: None,
+          id_token: None,
+          ..
+        }
+      ));
+    }
+    assert_eq!(server.requests().len(), 5);
+  }
+
+  #[tokio::test]
+  async fn access_token_without_refresh_token_is_not_a_static_api_key() {
+    let mut account = account();
+    account.refresh_token = None;
+    let client = reqwest::Client::new();
+    let err = CodexAuth.refresh_credential(&client, &account).await.unwrap_err();
+    assert!(matches!(
+      err,
+      AuthError::MissingCredential {
+        field: "refresh_token",
+        ..
+      }
+    ));
+    assert!(matches!(
+      CodexAuth.refresh_credential_if_needed(&client, &account).await.unwrap(),
+      RefreshOutcome::Unchanged
+    ));
+
+    account.access_token = None;
+    account.api_key = Some(tokn_core::account::Secret::new("static-key".into()));
+    assert!(matches!(
+      CodexAuth.refresh_credential(&client, &account).await.unwrap(),
+      RefreshOutcome::NotApplicable
+    ));
+  }
+
+  #[tokio::test]
+  async fn conditional_refresh_uses_jwt_expiry_when_imported_expiry_is_missing() {
+    let mut account = account();
+    account.access_token_expires_at = None;
+    account.access_token = Some(tokn_core::account::Secret::new(jwt_with(
+      serde_json::json!({"exp": now_unix() + 3600}),
+    )));
+    // A network request here would fail; the JWT is still valid.
+    account.refresh_url = Some("http://127.0.0.1:1/oauth/token".into());
+    assert!(matches!(
+      CodexAuth
+        .refresh_credential_if_needed(&reqwest::Client::new(), &account)
+        .await
+        .unwrap(),
+      RefreshOutcome::Unchanged
+    ));
+  }
+
+  #[tokio::test]
+  async fn refresh_surfaces_upstream_failures() {
+    let mut response = MockResponse::json(serde_json::json!({"error": "invalid_grant"}));
+    response.status = reqwest::StatusCode::UNAUTHORIZED;
+    let server = token_server(response).await;
+    let mut account = account();
+    account.refresh_url = Some(server.url("/oauth/token"));
+    let err = CodexAuth
+      .refresh_credential(&reqwest::Client::new(), &account)
+      .await
+      .unwrap_err();
+    assert!(matches!(err, AuthError::Upstream(_)));
+  }
 
   fn jwt_with(payload: serde_json::Value) -> String {
     let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{\"alg\":\"none\"}");
@@ -392,6 +607,33 @@ mod tests {
     });
     assert!(out.provider_account_id.is_none());
     assert!(out.username.is_none());
+  }
+
+  #[test]
+  fn make_outcome_recovers_account_id_from_access_token_when_identity_token_omits_it() {
+    for id_token in [None, Some(jwt_with(serde_json::json!({"email": "user@example.test"})))] {
+      let out = make_outcome(TokenResponse {
+        access_token: jwt_with(serde_json::json!({
+          "https://api.openai.com/auth": {"chatgpt_account_id": "access-account"}
+        })),
+        refresh_token: None,
+        id_token,
+        expires_in: None,
+      });
+      assert_eq!(out.provider_account_id.as_deref(), Some("access-account"));
+    }
+  }
+
+  #[test]
+  fn make_outcome_uses_access_token_expiry_when_expires_in_is_omitted() {
+    let expires_at = now_unix() + 7200;
+    let out = make_outcome(TokenResponse {
+      access_token: jwt_with(serde_json::json!({"exp": expires_at})),
+      refresh_token: None,
+      id_token: None,
+      expires_in: None,
+    });
+    assert_eq!(out.access_token_expires_at, expires_at);
   }
 
   #[test]

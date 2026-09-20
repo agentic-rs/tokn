@@ -2,7 +2,6 @@ use crate::cli::config_context::{AccountView, ConfigContext, ResolvedProviderAut
 use crate::cli::import::ImportArgs;
 use crate::cli::login::LoginArgs;
 use crate::config::{Account, AccountState, AccountTier};
-use crate::util::secret::Secret;
 use crate::util::timefmt::{relative_from_now, relative_from_now_ms};
 use anyhow::{anyhow, bail, Result};
 use clap::{Args, Subcommand};
@@ -220,12 +219,23 @@ enum QuotaResult {
   Skipped,
   Ok {
     snap: tokn_auth::QuotaSnapshot,
-    /// Fresh access token returned by a piggy-backed `refresh_credential`
-    /// call (Copilot only). Persisted to auth.yaml so the daemon — which
-    /// never writes at runtime — starts up with a non-expired cache.
+    /// Completed exchange, including any rotated refresh token. Persisted
+    /// even if the subsequent quota request fails.
     refreshed: Option<tokn_auth::RefreshOutcome>,
   },
-  Err(String),
+  Err {
+    message: String,
+    refreshed: Option<tokn_auth::RefreshOutcome>,
+  },
+}
+
+impl QuotaResult {
+  fn refreshed(&self) -> Option<&tokn_auth::RefreshOutcome> {
+    match self {
+      Self::Skipped => None,
+      Self::Ok { refreshed, .. } | Self::Err { refreshed, .. } => refreshed.as_ref(),
+    }
+  }
 }
 
 async fn probe_accounts(
@@ -254,51 +264,21 @@ async fn probe_accounts(
   };
   let quotas: BTreeMap<usize, QuotaResult> = indices.iter().copied().zip(results).collect();
 
-  // Persist refreshed credentials produced by the quota probe instead of
-  // issuing a second refresh request.
+  persist_refreshed_accounts(store, &quotas)?;
+  Ok(quotas)
+}
+
+fn persist_refreshed_accounts(store: &mut AuthStore, quotas: &BTreeMap<usize, QuotaResult>) -> Result<()> {
   let mut dirty = false;
-  for (&index, quota) in &quotas {
-    let QuotaResult::Ok {
-      refreshed:
-        Some(tokn_auth::RefreshOutcome::Refreshed {
-          access_token,
-          expires_at,
-          username,
-          provider_account_id,
-        }),
-      ..
-    } = quota
-    else {
-      continue;
-    };
-    let account = &mut store.accounts[index];
-    let same_token = account
-      .access_token
-      .as_ref()
-      .is_some_and(|secret| secret.expose().as_str() == access_token.as_str());
-    if !same_token || account.access_token_expires_at != Some(*expires_at) {
-      account.access_token = Some(Secret::new(access_token.clone()));
-      account.access_token_expires_at = Some(*expires_at);
-      account.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
-      dirty = true;
-    }
-    if let Some(name) = username.as_ref().filter(|name| !name.trim().is_empty()) {
-      if account.username.as_deref() != Some(name.as_str()) {
-        account.username = Some(name.clone());
-        dirty = true;
-      }
-    }
-    if let Some(provider_account_id) = provider_account_id.as_ref().filter(|id| !id.trim().is_empty()) {
-      if account.provider_account_id.as_deref() != Some(provider_account_id.as_str()) {
-        account.provider_account_id = Some(provider_account_id.clone());
-        dirty = true;
-      }
+  for (&index, quota) in quotas {
+    if let Some(refreshed) = quota.refreshed() {
+      dirty |= refreshed.apply_to(&mut store.accounts[index]);
     }
   }
   if dirty {
     store.save()?;
   }
-  Ok(quotas)
+  Ok(())
 }
 
 async fn fetch_quota(
@@ -309,38 +289,54 @@ async fn fetch_quota(
 ) -> QuotaResult {
   let provider = match provider {
     Ok(provider) => provider,
-    Err(error) => return QuotaResult::Err(short_err(&error)),
+    Err(error) => {
+      return QuotaResult::Err {
+        message: short_err(&error),
+        refreshed: None,
+      };
+    }
   };
   let provider_auth = provider.auth();
-  // Two parallel calls so the operator gets a single round-trip latency:
-  //   * refresh_credential — for Copilot also doubles as a "token still
-  //     valid?" check; for Z.ai it's a NotApplicable no-op.
-  //   * probe_quota       — the actual quota snapshot.
-  // We bound the *combined* future by the caller-supplied timeout so a
-  // single hung upstream cannot freeze the entire CLI invocation.
-  let acct = provider.account_for_auth(&account);
-  let acct2 = acct.clone();
-  let http2 = http.clone();
-  let fut = async move {
-    let (refresh_res, quota_res) = tokio::join!(
-      provider_auth.refresh_credential(&http, &acct),
-      provider_auth.probe_quota(&http2, &acct2),
-    );
-    (refresh_res, quota_res)
-  };
-  match tokio::time::timeout(timeout, fut).await {
-    Err(_) => QuotaResult::Err("timeout".into()),
-    Ok((Err(e), _)) => QuotaResult::Err(short_err(&e)),
-    Ok((Ok(refresh), quota_res)) => {
-      let refreshed = match refresh {
-        tokn_auth::RefreshOutcome::Refreshed { .. } => Some(refresh),
-        tokn_auth::RefreshOutcome::NotApplicable => None,
-      };
-      match quota_res {
-        Err(e) => QuotaResult::Err(short_err(&e)),
-        Ok(snap) => QuotaResult::Ok { snap, refreshed },
+  fetch_provider_quota(&http, provider.account_for_auth(&account), provider_auth, timeout).await
+}
+
+async fn fetch_provider_quota(
+  http: &reqwest::Client,
+  mut account: Account,
+  provider_auth: &dyn tokn_auth::ProviderAuth,
+  timeout: Duration,
+) -> QuotaResult {
+  // A quota request must see the access token and account id issued by
+  // refresh. Keep the completed exchange outside the quota timeout so a
+  // later failure cannot lose a rotated refresh token.
+  let deadline = tokio::time::Instant::now() + timeout;
+  let refresh =
+    match tokio::time::timeout_at(deadline, provider_auth.refresh_credential_if_needed(http, &account)).await {
+      Err(_) => {
+        return QuotaResult::Err {
+          message: "timeout".into(),
+          refreshed: None,
+        };
       }
-    }
+      Ok(Err(error)) => {
+        return QuotaResult::Err {
+          message: short_err(&error),
+          refreshed: None,
+        };
+      }
+      Ok(Ok(refresh)) => refresh,
+    };
+  let refreshed = refresh.apply_to(&mut account).then_some(refresh);
+  match tokio::time::timeout_at(deadline, provider_auth.probe_quota(http, &account)).await {
+    Err(_) => QuotaResult::Err {
+      message: "timeout".into(),
+      refreshed,
+    },
+    Ok(Err(error)) => QuotaResult::Err {
+      message: short_err(&error),
+      refreshed,
+    },
+    Ok(Ok(snap)) => QuotaResult::Ok { snap, refreshed },
   }
 }
 
@@ -368,7 +364,7 @@ fn render_account(a: &Account, q: &QuotaResult) {
 
   match q {
     QuotaResult::Skipped => {}
-    QuotaResult::Err(e) => println!("  quota       : unavailable ({e})"),
+    QuotaResult::Err { message, .. } => println!("  quota       : unavailable ({message})"),
     QuotaResult::Ok { snap, .. } => render_snapshot(snap),
   }
 }
@@ -560,7 +556,7 @@ async fn add(context: &ConfigContext, store: &mut AuthStore, args: AddArgs) -> R
 }
 
 // ---------------------------------------------------------------------------
-// refresh (force token re-exchange for github-copilot)
+// refresh (force OAuth token exchange)
 // ---------------------------------------------------------------------------
 
 async fn refresh(context: &ConfigContext, store: &mut AuthStore, id: &str) -> Result<()> {
@@ -573,39 +569,27 @@ async fn refresh(context: &ConfigContext, store: &mut AuthStore, id: &str) -> Re
   let provider_auth = provider.auth();
   let auth_account = provider.account_for_auth(&account);
   let http = context.build_http_client(false)?;
-  match provider_auth
+  let outcome = provider_auth
     .refresh_credential(&http, &auth_account)
     .await
-    .map_err(|e| anyhow!("refresh failed: {e}"))?
-  {
+    .map_err(|e| anyhow!("refresh failed: {e}"))?;
+  match &outcome {
     tokn_auth::RefreshOutcome::NotApplicable => {
-      println!(
-        "nothing to refresh: provider '{}' uses a static credential",
-        account.provider
-      );
+      println!("nothing to refresh: account '{id}' uses a static credential");
       Ok(())
     }
-    tokn_auth::RefreshOutcome::Refreshed {
-      access_token,
-      expires_at,
-      username,
-      provider_account_id,
-    } => {
+    tokn_auth::RefreshOutcome::Unchanged => {
+      println!("Credential for '{id}' is already current");
+      Ok(())
+    }
+    tokn_auth::RefreshOutcome::Refreshed { expires_at, .. } => {
       let acct = store.get_mut(id).expect("checked above");
-      acct.access_token = Some(Secret::new(access_token));
-      acct.access_token_expires_at = Some(expires_at);
-      if let Some(name) = username.filter(|name| !name.trim().is_empty()) {
-        acct.username = Some(name);
-      }
-      if let Some(pid) = provider_account_id.filter(|s| !s.trim().is_empty()) {
-        acct.provider_account_id = Some(pid);
-      }
-      acct.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+      outcome.apply_to(acct);
       store.save()?;
       tracing::info!(account = %id, "access token refreshed");
       println!(
         "Refreshed '{id}': access_token expires {}",
-        relative_from_now(expires_at)
+        relative_from_now(*expires_at)
       );
       Ok(())
     }
@@ -651,17 +635,28 @@ fn print_status_line(a: &Account, q: &QuotaResult) {
     None if a.api_key.is_some() => "static".into(),
     None => "-".into(),
   };
-  let extra = match q {
-    QuotaResult::Ok { snap, .. } => snap.plan.clone().unwrap_or_default(),
-    QuotaResult::Err(e) => format!("quota: {e}"),
-    _ => String::new(),
-  };
+  let extra = quota_status_summary(q);
   let extra = if extra.is_empty() {
     String::new()
   } else {
     format!(" · {extra}")
   };
   println!("{} ({}) [{state}] · expires {expiry}{extra}", a.id, a.provider);
+}
+
+fn quota_status_summary(quota: &QuotaResult) -> String {
+  match quota {
+    QuotaResult::Ok { snap, .. } => snap
+      .plan
+      .iter()
+      .chain(snap.headline.iter())
+      .map(String::as_str)
+      .filter(|value| !value.trim().is_empty())
+      .collect::<Vec<_>>()
+      .join(" · "),
+    QuotaResult::Err { message, .. } => format!("quota: {message}"),
+    QuotaResult::Skipped => String::new(),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -794,8 +789,132 @@ fn lookup_provider(accounts: &[Account], id: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::util::secret::Secret;
   use clap::Parser;
   use tokn_core::account::AccountTier;
+
+  #[derive(Clone, Copy)]
+  enum QuotaBehavior {
+    Success,
+    Failure,
+    Timeout,
+  }
+
+  struct RefreshingAuth(QuotaBehavior);
+
+  #[test]
+  fn compact_status_includes_plan_and_usage_headline() {
+    let quota = QuotaResult::Ok {
+      snap: tokn_auth::QuotaSnapshot {
+        plan: Some("plus".into()),
+        headline: Some("5h: 23% used, weekly: 41% used".into()),
+        ..Default::default()
+      },
+      refreshed: None,
+    };
+    assert_eq!(quota_status_summary(&quota), "plus · 5h: 23% used, weekly: 41% used");
+    let quota = QuotaResult::Ok {
+      snap: tokn_auth::QuotaSnapshot {
+        headline: Some("5h: 23% used".into()),
+        ..Default::default()
+      },
+      refreshed: None,
+    };
+    assert_eq!(quota_status_summary(&quota), "5h: 23% used");
+    assert!(quota_status_summary(&QuotaResult::Skipped).is_empty());
+  }
+
+  #[async_trait::async_trait]
+  impl tokn_auth::ProviderAuth for RefreshingAuth {
+    fn id(&self) -> &'static str {
+      "codex"
+    }
+
+    async fn refresh_credential(
+      &self,
+      _client: &reqwest::Client,
+      _account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::RefreshOutcome> {
+      panic!("quota probes must use conditional refresh");
+    }
+
+    async fn refresh_credential_if_needed(
+      &self,
+      _client: &reqwest::Client,
+      _account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::RefreshOutcome> {
+      Ok(tokn_auth::RefreshOutcome::Refreshed {
+        access_token: "new-access".into(),
+        expires_at: 200,
+        refresh_token: Some("new-refresh".into()),
+        id_token: Some("new-id".into()),
+        username: Some("new-user".into()),
+        provider_account_id: Some("new-account".into()),
+      })
+    }
+
+    async fn verify_credential(
+      &self,
+      _client: &reqwest::Client,
+      _account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::VerifyOutcome> {
+      panic!("quota probes do not need another credential verification");
+    }
+
+    async fn probe_quota(
+      &self,
+      _client: &reqwest::Client,
+      account: &Account,
+    ) -> tokn_auth::Result<tokn_auth::QuotaSnapshot> {
+      assert_eq!(account.access_token.as_ref().unwrap().expose(), "new-access");
+      assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "new-refresh");
+      assert_eq!(account.provider_account_id.as_deref(), Some("new-account"));
+      match self.0 {
+        QuotaBehavior::Success => Ok(tokn_auth::QuotaSnapshot::default()),
+        QuotaBehavior::Failure => Err(tokn_auth::AuthError::Upstream("quota failed".into())),
+        QuotaBehavior::Timeout => std::future::pending().await,
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn quota_probes_use_and_persist_rotated_credentials_even_when_quota_fails() {
+    for behavior in [QuotaBehavior::Success, QuotaBehavior::Failure, QuotaBehavior::Timeout] {
+      let directory = tempfile::tempdir().unwrap();
+      let auth_path = directory.path().join("auth.yaml");
+      let mut store = AuthStore::load(Some(&auth_path), None).unwrap();
+      let mut account = acct("primary", "codex", true, AccountTier::Active);
+      account.access_token = Some(Secret::new("old-access".into()));
+      account.refresh_token = Some(Secret::new("old-refresh".into()));
+      store.upsert_in_main(account.clone()).unwrap();
+      let result = fetch_provider_quota(
+        &reqwest::Client::new(),
+        account,
+        &RefreshingAuth(behavior),
+        Duration::from_millis(100),
+      )
+      .await;
+
+      match behavior {
+        QuotaBehavior::Success => assert!(matches!(&result, QuotaResult::Ok { .. })),
+        QuotaBehavior::Failure => {
+          assert!(matches!(&result, QuotaResult::Err { message, .. } if message.contains("quota failed")));
+        }
+        QuotaBehavior::Timeout => {
+          assert!(matches!(&result, QuotaResult::Err { message, .. } if message == "timeout"));
+        }
+      }
+      persist_refreshed_accounts(&mut store, &BTreeMap::from([(0, result)])).unwrap();
+      let saved = AuthStore::load(Some(&auth_path), None).unwrap();
+      let account = saved.get("primary").unwrap();
+      assert_eq!(account.access_token.as_ref().unwrap().expose(), "new-access");
+      assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "new-refresh");
+      assert_eq!(account.id_token.as_ref().unwrap().expose(), "new-id");
+      assert_eq!(account.access_token_expires_at, Some(200));
+      assert_eq!(account.username.as_deref(), Some("new-user"));
+      assert_eq!(account.provider_account_id.as_deref(), Some("new-account"));
+    }
+  }
 
   fn write_v2_openai_config(path: &std::path::Path) {
     std::fs::write(
@@ -1069,7 +1188,7 @@ base_url = "https://llm.example.test/v1"
       Duration::from_secs(1),
     )
     .await;
-    assert!(matches!(failed, QuotaResult::Err(message) if message == "provider resolution failed"));
+    assert!(matches!(failed, QuotaResult::Err { message, .. } if message == "provider resolution failed"));
   }
 
   #[tokio::test]

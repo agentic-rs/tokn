@@ -12,7 +12,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tokn_core::account::AccountConfig;
+use tokn_core::account::{AccountConfig, Secret};
 
 /// Outcome of a successful device-flow login (currently only used by
 /// github-copilot). The caller is responsible for assembling these fields
@@ -177,6 +177,10 @@ pub enum RefreshOutcome {
   Refreshed {
     access_token: String,
     expires_at: i64,
+    /// Rotated refresh token, when issued. Omission preserves the stored token.
+    refresh_token: Option<String>,
+    /// Updated identity token, when issued. Omission preserves the stored token.
+    id_token: Option<String>,
     /// Optional upstream username/account handle discovered during refresh.
     username: Option<String>,
     /// Optional provider-specific account identifier (e.g. ChatGPT account
@@ -184,8 +188,44 @@ pub enum RefreshOutcome {
     /// overwrite [`AccountConfig::provider_account_id`].
     provider_account_id: Option<String>,
   },
+  /// The cached OAuth credential is still current; no exchange was needed.
+  Unchanged,
   /// The provider uses a static credential; nothing to refresh.
   NotApplicable,
+}
+
+impl RefreshOutcome {
+  /// Apply a completed exchange, preserving optional fields the upstream did
+  /// not return. Returns whether the account needs to be persisted.
+  pub fn apply_to(&self, account: &mut AccountConfig) -> bool {
+    let Self::Refreshed {
+      access_token,
+      expires_at,
+      refresh_token,
+      id_token,
+      username,
+      provider_account_id,
+    } = self
+    else {
+      return false;
+    };
+    account.access_token = Some(Secret::new(access_token.clone()));
+    account.access_token_expires_at = Some(*expires_at);
+    if let Some(token) = refresh_token.as_ref().filter(|token| !token.trim().is_empty()) {
+      account.refresh_token = Some(Secret::new(token.clone()));
+    }
+    if let Some(token) = id_token.as_ref().filter(|token| !token.trim().is_empty()) {
+      account.id_token = Some(Secret::new(token.clone()));
+    }
+    if let Some(username) = username.as_ref().filter(|name| !name.trim().is_empty()) {
+      account.username = Some(username.clone());
+    }
+    if let Some(id) = provider_account_id.as_ref().filter(|id| !id.trim().is_empty()) {
+      account.provider_account_id = Some(id.clone());
+    }
+    account.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+    true
+  }
 }
 
 /// Outcome of a successful credential verification.
@@ -439,10 +479,21 @@ pub trait ProviderAuth: Send + Sync {
     self.poll_device_code(client, handle).await
   }
 
-  /// Refresh the account's short-lived credential (e.g. exchange a refresh
-  /// token for a new access token). Static-key providers return
+  /// Force an exchange of the account's short-lived credential, even when
+  /// its cached access token is still current. Static-key providers return
   /// [`RefreshOutcome::NotApplicable`].
   async fn refresh_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<RefreshOutcome>;
+
+  /// Refresh before another authenticated operation. OAuth providers may
+  /// return [`RefreshOutcome::Unchanged`] when their cached token is current.
+  /// The default preserves providers that use an exchange to verify credentials.
+  async fn refresh_credential_if_needed(
+    &self,
+    client: &reqwest::Client,
+    account: &AccountConfig,
+  ) -> Result<RefreshOutcome> {
+    self.refresh_credential(client, account).await
+  }
 
   /// Verify the account's stored credential is currently usable, without
   /// mutating it. Used by `account status` and the CLI smoke test.
@@ -503,5 +554,72 @@ pub fn default_import_from(provider_id: &str, source: &CredentialSource) -> Resu
     CredentialSource::Login => Err(AuthError::Unsupported(
       "Login is dispatched via request_device_code / poll_device_code".into(),
     )),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn account() -> AccountConfig {
+    serde_json::from_value(serde_json::json!({
+      "id": "primary",
+      "provider": "codex",
+      "access_token": "old-access",
+      "refresh_token": "old-refresh",
+      "id_token": "old-id",
+      "username": "old-user",
+      "provider_account_id": "old-account",
+      "last_refresh": 1
+    }))
+    .unwrap()
+  }
+
+  #[test]
+  fn refreshed_credentials_preserve_omitted_fields() {
+    let mut account = account();
+    let refresh = RefreshOutcome::Refreshed {
+      access_token: "new-access".into(),
+      expires_at: 200,
+      refresh_token: None,
+      id_token: None,
+      username: None,
+      provider_account_id: None,
+    };
+    assert!(refresh.apply_to(&mut account));
+    assert_eq!(account.access_token.as_ref().unwrap().expose(), "new-access");
+    assert_eq!(account.access_token_expires_at, Some(200));
+    assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "old-refresh");
+    assert_eq!(account.id_token.as_ref().unwrap().expose(), "old-id");
+    assert_eq!(account.username.as_deref(), Some("old-user"));
+    assert_eq!(account.provider_account_id.as_deref(), Some("old-account"));
+    assert!(account.last_refresh.unwrap() > 1);
+  }
+
+  #[test]
+  fn refreshed_credentials_apply_rotated_tokens_and_identity() {
+    let mut account = account();
+    let refresh = RefreshOutcome::Refreshed {
+      access_token: "new-access".into(),
+      expires_at: 200,
+      refresh_token: Some("new-refresh".into()),
+      id_token: Some("new-id".into()),
+      username: Some("new-user".into()),
+      provider_account_id: Some("new-account".into()),
+    };
+    assert!(refresh.apply_to(&mut account));
+    assert_eq!(account.refresh_token.as_ref().unwrap().expose(), "new-refresh");
+    assert_eq!(account.id_token.as_ref().unwrap().expose(), "new-id");
+    assert_eq!(account.username.as_deref(), Some("new-user"));
+    assert_eq!(account.provider_account_id.as_deref(), Some("new-account"));
+  }
+
+  #[test]
+  fn unchanged_and_static_credentials_do_not_mutate_the_account() {
+    let mut account = account();
+    let before = serde_json::to_value(&account).unwrap();
+    assert!(!RefreshOutcome::Unchanged.apply_to(&mut account));
+    assert!(!RefreshOutcome::NotApplicable.apply_to(&mut account));
+    assert_eq!(serde_json::to_value(account).unwrap(), before);
   }
 }

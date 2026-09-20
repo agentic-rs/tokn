@@ -5,6 +5,7 @@ pub mod codex;
 mod common;
 pub mod jwt;
 pub mod openai;
+mod quota_codex;
 
 pub use tokn_catalogue as catalogue;
 pub use tokn_core::provider::{
