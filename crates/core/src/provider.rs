@@ -175,20 +175,21 @@ pub struct ProviderInfo {
   /// answer. Should mirror the `endpoints` slice on the corresponding
   /// `ProviderDescriptor` (a registry-time test enforces this).
   pub default_endpoints: &'static [Endpoint],
-  /// Cache of model ids learned from the upstream `/models` call. Empty
-  /// until the first successful `Provider::list_models` warms it. Used
-  /// by the default `has_model` impl as the source of truth, with
-  /// `default_models` as the cold-start fallback.
+  /// Model knowledge from the upstream `/models` call and refreshed catalogue.
+  /// Each source contributes known ids; an omitted id does not prove that the
+  /// upstream cannot accept it. `default_models` supplies catalogue knowledge
+  /// until the first catalogue refresh.
   #[serde(skip)]
   pub model_cache: Arc<ModelCache>,
 }
 
-/// In-memory cache of model ids advertised by a provider's upstream
-/// `/models` endpoint. Warmed lazily by the routing layer the first time
-/// it sees the provider. Identity and effort metadata are replaced together.
+/// Independently refreshed model knowledge from the upstream `/models`
+/// endpoint and the provider catalogue. A live refresh replaces upstream
+/// identity and effort metadata together without erasing catalogue knowledge.
 #[derive(Debug, Default)]
 pub struct ModelCache {
   inner: RwLock<Option<CachedModels>>,
+  catalogue: RwLock<Option<Vec<ModelInfo>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -198,6 +199,39 @@ struct CachedModels {
 }
 
 impl ModelCache {
+  /// Replace the provider's catalogue snapshot, including a successful empty
+  /// result. An empty snapshot differs from a catalogue not yet refreshed.
+  pub fn set_catalogue(&self, models: Vec<ModelInfo>) {
+    if let Ok(mut guard) = self.catalogue.write() {
+      *guard = Some(models);
+    }
+  }
+
+  /// The latest catalogue snapshot, or `None` before the first refresh.
+  pub fn catalogue_models(&self) -> Option<Vec<ModelInfo>> {
+    self.catalogue.read().ok()?.clone()
+  }
+
+  /// Catalogue membership, or `None` before the first refresh.
+  pub fn catalogue_contains(&self, id: &str) -> Option<bool> {
+    Some(self.catalogue.read().ok()?.as_ref()?.iter().any(|model| model.id == id))
+  }
+
+  /// The outer option distinguishes an absent model in a refreshed catalogue
+  /// from a catalogue that has not been refreshed yet.
+  pub fn catalogue_model(&self, id: &str) -> Option<Option<ModelInfo>> {
+    Some(
+      self
+        .catalogue
+        .read()
+        .ok()?
+        .as_ref()?
+        .iter()
+        .find(|model| model.id == id)
+        .cloned(),
+    )
+  }
+
   pub fn set(&self, ids: HashSet<String>) {
     if let Ok(mut g) = self.inner.write() {
       *g = Some(CachedModels {
@@ -490,34 +524,45 @@ pub trait Provider: Send + Sync {
     None
   }
 
-  fn model_info(&self, model: &str) -> Option<&ModelInfo> {
-    self.info().default_models.iter().find(|m| m.id == model)
-  }
-
-  /// Upstream effort metadata wins over the provider-specific catalogue.
-  fn reasoning_efforts(&self, model: &str) -> Option<Vec<ReasoningEffort>> {
-    self
-      .info()
+  /// Read current catalogue metadata, falling back to the construction-time
+  /// snapshot only until the first catalogue refresh.
+  fn model_info(&self, model: &str) -> Option<ModelInfo> {
+    let info = self.info();
+    info
       .model_cache
-      .reasoning_efforts(model)
-      .or_else(|| self.model_info(model)?.capabilities.reasoning_efforts.clone())
+      .catalogue_model(model)
+      .unwrap_or_else(|| info.default_models.iter().find(|entry| entry.id == model).cloned())
   }
 
-  /// Does this provider serve `model`?
+  /// Explicit upstream effort metadata wins over the current catalogue.
+  /// The construction-time catalogue is used only until a refresh is available;
+  /// unknown metadata in a refreshed snapshot must not restore stale values.
+  fn reasoning_efforts(&self, model: &str) -> Option<Vec<ReasoningEffort>> {
+    let cache = &self.info().model_cache;
+    if let Some(efforts) = cache.reasoning_efforts(model) {
+      return Some(efforts);
+    }
+    self
+      .model_info(model)
+      .and_then(|model| model.capabilities.reasoning_efforts)
+  }
+
+  /// Is `model` known from either the upstream model list or the catalogue?
   ///
-  /// Source-of-truth precedence:
-  /// 1. Warm upstream `/models` cache (`ProviderInfo::model_cache`).
-  /// 2. Catalogue snapshot (`ProviderInfo::default_models`) as cold-start
-  ///    fallback.
+  /// Neither source is exhaustive: omission from a live list does not erase
+  /// catalogue knowledge, and an unknown id may still be accepted upstream.
+  /// Catalogue refreshes replace the initial `ProviderInfo::default_models`
+  /// snapshot, while live knowledge remains independent.
   fn has_model(&self, model: &str) -> bool {
     if model.is_empty() {
       return true;
     }
     let info = self.info();
-    if info.model_cache.is_warm() {
-      return info.model_cache.contains(model);
-    }
-    info.default_models.iter().any(|m| m.id == model)
+    info.model_cache.contains(model)
+      || info
+        .model_cache
+        .catalogue_contains(model)
+        .unwrap_or_else(|| info.default_models.iter().any(|m| m.id == model))
   }
 
   /// Per-model endpoint rules declared by the provider.
@@ -769,6 +814,101 @@ mod tests {
       rules,
       rebuild_headers: false,
     }
+  }
+
+  fn model(id: &str, efforts: Option<Vec<ReasoningEffort>>) -> ModelInfo {
+    ModelInfo {
+      id: id.into(),
+      name: id.into(),
+      capabilities: Capabilities {
+        temperature: true,
+        reasoning: true,
+        reasoning_efforts: efforts,
+        attachment: false,
+        toolcall: true,
+        input: Modalities::TEXT_ONLY,
+        output: Modalities::TEXT_ONLY,
+        interleaved: Interleaved::Disabled(false),
+      },
+      cost: None,
+      limit: Limits { context: 0, output: 0 },
+      release_date: None,
+    }
+  }
+
+  #[test]
+  fn model_knowledge_unions_live_and_catalogue_ids() {
+    let mut provider = stub(None, &[Endpoint::Responses]);
+    provider.info.default_models = vec![model("catalogue-only", None)];
+    let cache = &provider.info.model_cache;
+
+    assert_eq!(cache.catalogue_contains("catalogue-only"), None);
+    cache.set(HashSet::from(["live-only".into()]));
+    assert!(provider.has_model("live-only"));
+    assert!(provider.has_model("catalogue-only"));
+    assert!(!provider.has_model("unknown"));
+
+    // A successful empty live list cannot invalidate independent knowledge.
+    cache.set(HashSet::new());
+    assert!(cache.is_warm());
+    assert!(provider.has_model("catalogue-only"));
+    assert!(!provider.has_model("live-only"));
+  }
+
+  #[test]
+  fn catalogue_refresh_replaces_old_ids_without_erasing_live_models() {
+    let mut provider = stub(None, &[Endpoint::Responses]);
+    provider.info.default_models = vec![model("removed", None), model("shared", None)];
+    let cache = &provider.info.model_cache;
+    cache.set(HashSet::from(["shared".into()]));
+    cache.set_catalogue(vec![model("added", None)]);
+
+    assert_eq!(cache.catalogue_contains("added"), Some(true));
+    assert_eq!(cache.catalogue_contains("removed"), Some(false));
+    assert_eq!(cache.catalogue_models().unwrap()[0].id, "added");
+    assert!(provider.has_model("added"));
+    assert!(provider.has_model("shared"));
+    assert!(!provider.has_model("removed"));
+    assert!(provider.model_info("removed").is_none());
+    assert_eq!(provider.model_info("added").unwrap().id, "added");
+
+    cache.set_catalogue(vec![]);
+    assert!(cache.catalogue_models().unwrap().is_empty());
+    assert!(!provider.has_model("added"));
+    assert!(!provider.has_model("removed"));
+    assert!(provider.has_model("shared"));
+  }
+
+  #[test]
+  fn refreshed_effort_metadata_supersedes_initial_values_without_resurrection() {
+    let mut provider = stub(None, &[Endpoint::Responses]);
+    provider.info.default_models = vec![model("test", Some(vec![ReasoningEffort::Low]))];
+    let cache = &provider.info.model_cache;
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![ReasoningEffort::Low]));
+
+    cache.set_catalogue(vec![model("test", Some(vec![ReasoningEffort::High]))]);
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![ReasoningEffort::High]));
+
+    // Both absent and explicitly empty effort metadata supersede old values.
+    cache.set_catalogue(vec![model("test", None)]);
+    assert_eq!(provider.reasoning_efforts("test"), None);
+    cache.set_catalogue(vec![model("test", Some(vec![]))]);
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![]));
+    cache.set_catalogue(vec![]);
+    assert_eq!(provider.reasoning_efforts("test"), None);
+  }
+
+  #[test]
+  fn live_explicit_efforts_override_catalogue_but_unknown_efforts_do_not() {
+    let provider = stub(None, &[Endpoint::Responses]);
+    let cache = &provider.info.model_cache;
+    cache.set_catalogue(vec![model("test", Some(vec![ReasoningEffort::Low]))]);
+    cache.set_models(&[serde_json::json!({"id": "test"})]);
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![ReasoningEffort::Low]));
+    cache.set_models(&[serde_json::json!({"id": "test", "supported_reasoning_levels": [{"effort": "high"}]})]);
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![ReasoningEffort::High]));
+    cache.set_models(&[serde_json::json!({"id": "test", "supported_reasoning_levels": []})]);
+    assert_eq!(provider.reasoning_efforts("test"), Some(vec![]));
   }
 
   #[test]

@@ -245,8 +245,11 @@ async fn run_v2_runtime(source: RuntimeSource, loaded: LoadedRuntime) -> Result<
     let states =
       tokn_router::v2::build_runtime_states_with_service(plan, service, &accounts, access.clone(), events.clone())?;
     let live = tokn_router::v2::LiveRuntime::new(states, accounts.len());
+    let model_refresh = live.start_model_refresh(initial_service.models());
     install_admin_reloader(&live, source, initial_service, access, events.clone())?;
-    serve_live_v2_runtime(live, args, async { shutdown.wait().await.map_err(Into::into) }).await
+    let result = serve_live_v2_runtime(live, args, async { shutdown.wait().await.map_err(Into::into) }).await;
+    model_refresh.shutdown().await;
+    result
   }
   .await;
   let cleanup = crate::server_runtime::finish_events(&events, archive_runtime).await;
@@ -318,10 +321,26 @@ fn ensure_service_reload_compatible(
     "persistence settings changed"
   } else if current.logging() != replacement.logging() {
     "logging settings changed"
+  } else if current.models() != replacement.models() {
+    "model refresh settings changed"
   } else {
     return Ok(());
   };
   Err(tokn_router::v2::ReloadError::RestartRequired(changed.into()))
+}
+
+#[cfg(test)]
+#[test]
+fn model_refresh_changes_require_restart() {
+  let replacement = tokn_config::v2::parse_config(
+    "schema_version = 2\n[defaults]\n[listeners.api]\nkind = 'llm_api'\nbind = '127.0.0.1:4141'\nclient_auth = 'none'\n[service.models]\nupstream_refresh_seconds = 60",
+    std::path::Path::new("refresh.toml"),
+  )
+  .unwrap();
+  assert!(matches!(
+    ensure_service_reload_compatible(&tokn_config::v2::ServicePlan::default(), replacement.service()),
+    Err(tokn_router::v2::ReloadError::RestartRequired(message)) if message == "model refresh settings changed"
+  ));
 }
 
 #[cfg(test)]

@@ -454,6 +454,9 @@ fn selected(binding: Arc<ProviderBinding>, operation: Endpoint, model: SmolStr) 
 struct ModelCandidate {
   model: SmolStr,
   constraint: ProviderConstraint,
+  /// Concrete IDs with an explicit destination do not need discovery evidence.
+  /// Family members still use discovery to choose among their ordered alternatives.
+  allow_unlisted: bool,
 }
 
 #[derive(Clone)]
@@ -474,10 +477,12 @@ impl ProviderConstraint {
 }
 
 fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<ModelCandidate>, PipelineError> {
+  let fixed_provider = matches!(route.target().provider(), ProviderSelector::Fixed(_));
   match route.target().model() {
     ModelSelector::Capability => Ok(vec![ModelCandidate {
       model: SmolStr::new(requested_model),
       constraint: ProviderConstraint::Any,
+      allow_unlisted: fixed_provider,
     }]),
     ModelSelector::Qualified { namespace } => {
       let (qualifier, model) = requested_model.split_once('/').ok_or_else(|| {
@@ -500,6 +505,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
       Ok(vec![ModelCandidate {
         model: SmolStr::new(model),
         constraint,
+        allow_unlisted: true,
       }])
     }
     ModelSelector::Family(families) => {
@@ -507,6 +513,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
         return Ok(vec![ModelCandidate {
           model: SmolStr::new(requested_model),
           constraint: ProviderConstraint::Any,
+          allow_unlisted: fixed_provider,
         }]);
       };
       Ok(
@@ -517,6 +524,7 @@ fn model_candidates(route: &ManagedRoute, requested_model: &str) -> Result<Vec<M
           .map(|model| ModelCandidate {
             model,
             constraint: ProviderConstraint::Any,
+            allow_unlisted: false,
           })
           .collect(),
       )
@@ -536,7 +544,11 @@ fn managed_binding_matches(
   };
   route_provider_matches
     && candidate.constraint.matches(binding)
-    && binding.driver().supports(candidate.model.as_str(), operation)
+    && if candidate.allow_unlisted {
+      binding.driver().has_endpoint(candidate.model.as_str(), operation)
+    } else {
+      binding.driver().supports(candidate.model.as_str(), operation)
+    }
 }
 
 fn managed_unavailable_outcome(
@@ -664,6 +676,7 @@ driver = "openai"
       let candidates = model_candidates(managed_route(&plan), requested).unwrap();
       assert_eq!(candidates.len(), 1);
       assert_eq!(candidates[0].model, "gpt-5");
+      assert!(candidates[0].allow_unlisted);
       match &candidates[0].constraint {
         ProviderConstraint::Driver(id) => assert_eq!(id.as_str(), expected_qualifier),
         ProviderConstraint::Provider(id) => assert_eq!(id.as_str(), expected_qualifier),
@@ -687,6 +700,8 @@ driver = "openai"
     );
     assert!(matches!(candidates[0].constraint, ProviderConstraint::Any));
     assert!(matches!(candidates[1].constraint, ProviderConstraint::Any));
+    assert!(!candidates[0].allow_unlisted);
+    assert!(!candidates[1].allow_unlisted);
 
     let concrete = model_candidates(managed_route(&plan), "gpt-4o").unwrap();
     assert_eq!(concrete.len(), 1);
@@ -695,6 +710,7 @@ driver = "openai"
     let unknown = model_candidates(managed_route(&plan), "unknown").unwrap();
     assert_eq!(unknown.len(), 1);
     assert_eq!(unknown[0].model, "unknown");
+    assert!(!unknown[0].allow_unlisted);
   }
 
   #[test]

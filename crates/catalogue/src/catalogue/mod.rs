@@ -1,7 +1,7 @@
 //! models.dev catalogue.
 //!
 //! At build time we embed `https://models.dev/api.json`; at runtime we
-//! prefer a disk cache produced by the `update` subcommand. See
+//! prefer a disk cache and publish validated refreshes without restarting. See
 //! [`loader::global`] for resolution order. See [`mapping::to_model_info`]
 //! for the conversion to our internal [`crate::provider::ModelInfo`].
 
@@ -25,8 +25,8 @@ pub fn default_models_for(provider_id: &str) -> Vec<ModelInfo> {
 }
 
 /// Look up one model by `(provider_id, model_id)` and convert. None if either
-/// key is absent. Useful when a provider's `list_models` upstream is the
-/// source of truth for *identity* and we just want to overlay our metadata.
+/// key is absent. Useful for enriching upstream model listings with catalogue
+/// metadata. Neither source guarantees that a particular account can use a model.
 #[allow(dead_code)]
 pub fn model_info_for(provider_id: &str, model_id: &str) -> Option<ModelInfo> {
   loader::global()

@@ -29,7 +29,7 @@ use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
 
 use crate::{
-  error, AuthKind, HeaderPatchCtx, ModelInfo, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result, ID_ZAI,
+  error, AuthKind, HeaderPatchCtx, Provider, ProviderInfo, ProviderRequestKind, RequestCtx, Result, ID_ZAI,
   ID_ZAI_CODING_PLAN, ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN, ZAI_PROVIDERS,
 };
 
@@ -175,10 +175,6 @@ impl Provider for ZaiProvider {
 
   fn input_transformer(&self) -> Option<&dyn InputTransformer> {
     Some(self)
-  }
-
-  fn model_info(&self, model: &str) -> Option<&ModelInfo> {
-    self.info.default_models.iter().find(|m| m.id == model)
   }
 
   fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {

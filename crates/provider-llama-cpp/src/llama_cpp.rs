@@ -100,10 +100,13 @@ impl Provider for LlamaCppProvider {
     if model.is_empty() {
       return true;
     }
-    if self.info.model_cache.is_warm() {
-      return self.info.model_cache.contains(model);
-    }
-    self.info.default_models.is_empty() || self.info.default_models.iter().any(|m| m.id == model)
+    let cache = &self.info.model_cache;
+    let catalogue = cache
+      .catalogue_models()
+      .unwrap_or_else(|| self.info.default_models.clone());
+    cache.contains(model)
+      || catalogue.iter().any(|entry| entry.id == model)
+      || (!cache.is_warm() && catalogue.is_empty())
   }
 
   fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
@@ -254,6 +257,29 @@ mod tests {
     assert_eq!(provider.info().upstream_url, format!("{DEFAULT_BASE_URL}/"));
     assert_eq!(provider.info().auth_kind, AuthKind::None);
     assert!(provider.supports("local-model", Endpoint::ChatCompletions));
+  }
+
+  #[test]
+  fn discovery_and_catalogue_union_preserves_only_cold_unknown_model_fallback() {
+    let provider = LlamaCppProvider::from_account(Arc::new(acct(None))).unwrap();
+    let cache = &provider.info().model_cache;
+    cache.set_catalogue(vec![]);
+    assert!(provider.has_model("unknown-local-model"));
+
+    let model = crate::catalogue::mapping::to_model_info(
+      &serde_json::from_value(serde_json::json!({"id": "catalogue-model"})).unwrap(),
+    );
+    cache.set_catalogue(vec![model]);
+    cache.set(std::collections::HashSet::from(["live-model".into()]));
+    assert!(provider.has_model("catalogue-model"));
+    assert!(provider.has_model("live-model"));
+    assert!(!provider.has_model("unknown-local-model"));
+
+    cache.set(std::collections::HashSet::new());
+    assert!(provider.has_model("catalogue-model"));
+    cache.set_catalogue(vec![]);
+    assert!(!provider.has_model("catalogue-model"));
+    assert!(!provider.has_model("unknown-local-model"));
   }
 
   #[test]

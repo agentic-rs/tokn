@@ -95,12 +95,15 @@ impl ModelFamily {
 /// How a managed route interprets the requested model.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ModelSelector {
-  /// Select an account whose provider advertises the requested model.
+  /// Use discovered model membership to select among providers. With a fixed
+  /// provider, forward the concrete model ID even when discovery omits it.
   Capability,
   /// Parse a qualified model and constrain selection to its namespace.
+  /// The concrete model ID may be absent from discovery.
   Qualified { namespace: QualificationNamespace },
-  /// Expand a named family into concrete upstream models in fallback order.
-  /// Requests for names not present in this route remain exact model requests.
+  /// Expand a named family into discovered upstream models in fallback order.
+  /// Requests for names not present in this route remain concrete model requests,
+  /// including unlisted IDs when the provider is fixed.
   Family(Box<[ModelFamily]>),
 }
 

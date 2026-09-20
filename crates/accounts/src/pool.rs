@@ -485,7 +485,11 @@ fn provider_matches_route(provider: &dyn Provider, route: &RouteResolution, endp
   };
   match &route.selector {
     RouteSelector::Any => supports(&route.upstream_model),
-    RouteSelector::Provider(provider_id) => provider.info().id == *provider_id && supports(&route.upstream_model),
+    // Explicit provider/model requests supply their destination independently
+    // of discovery. The upstream decides whether an unlisted model exists.
+    RouteSelector::Provider(provider_id) => {
+      provider.info().id == *provider_id && provider.has_endpoint(&route.upstream_model, endpoint)
+    }
     RouteSelector::Model => supports(&route.upstream_model),
     RouteSelector::Fuzzy { candidates } => {
       if verbatim {
@@ -761,6 +765,58 @@ mod tests {
     assert!(matches!(
       p.acquire_for_session(None, Some("unknown"), Endpoint::ChatCompletions),
       SessionAcquire::None
+    ));
+  }
+
+  #[test]
+  fn exact_routes_accept_unlisted_models_without_weakening_provider_or_endpoint_constraints() {
+    static RULES: &[EndpointRule] = &[EndpointRule {
+      pattern: "future-*",
+      endpoints: &[Endpoint::Responses],
+    }];
+    let provider = MockProvider::with_endpoints(
+      "provider-a",
+      &["provider-a"],
+      &["known"],
+      &[Endpoint::ChatCompletions],
+      RULES,
+    );
+    provider
+      .info
+      .model_cache
+      .set(["known".to_string()].into_iter().collect());
+    let pool = pool_for_provider(provider);
+    let resolver = RouteResolver::new(tokn_config::RouteMode::Exact, &[]);
+    let route = resolver.resolve("provider-a/future-model", None).unwrap();
+
+    for _ in 0..2 {
+      let EndpointAcquire::Account { acct, endpoint } =
+        pool.acquire_for_route(Some("exact-session"), &route, Endpoint::ChatCompletions)
+      else {
+        panic!("explicit unlisted model should select its provider");
+      };
+      assert_eq!(acct.id(), "only");
+      assert_eq!(endpoint, Endpoint::Responses);
+    }
+
+    let wrong_provider = resolver.resolve("provider-b/future-model", None).unwrap();
+    assert!(matches!(
+      pool.acquire_for_route(Some("exact-session"), &wrong_provider, Endpoint::Responses),
+      EndpointAcquire::None
+    ));
+    let allowed = BTreeSet::from(["provider-b".to_string()]);
+    assert!(!pool.has_route_for_providers(&route, Endpoint::Responses, Some(&allowed)));
+    assert!(matches!(
+      pool.acquire_for_route_with_providers(Some("exact-session"), &route, Endpoint::Responses, Some(&allowed)),
+      EndpointAcquire::None
+    ));
+
+    let automatic = RouteResolver::new(tokn_config::RouteMode::Route, &[])
+      .resolve("future-model", None)
+      .unwrap();
+    assert!(matches!(
+      pool.acquire_for_route(Some("exact-session"), &automatic, Endpoint::Responses),
+      EndpointAcquire::None
     ));
   }
 

@@ -19,6 +19,176 @@ struct CapturedRequest {
 }
 
 #[tokio::test]
+async fn explicit_managed_destinations_forward_unlisted_ids_and_keep_access_constraints() {
+  let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel(8);
+  let upstream = Router::new()
+    .route(
+      "/v1/chat/completions",
+      any(
+        |State(capture_tx): State<tokio::sync::mpsc::Sender<serde_json::Value>>, body: Bytes| async move {
+          capture_tx.send(serde_json::from_slice(&body).unwrap()).await.unwrap();
+          axum::Json(serde_json::json!({
+            "id": "unlisted-model",
+            "choices": [{"message": {"role": "assistant", "content": "ok"}}],
+          }))
+        },
+      ),
+    )
+    .with_state(capture_tx);
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let upstream_addr = listener.local_addr().unwrap();
+  let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+  let mut config = format!(
+    r#"
+schema_version = 2
+
+[listeners.api]
+kind = "llm_api"
+bind = "127.0.0.1:4141"
+client_auth = "local_keys"
+
+[providers.local]
+driver = "openai"
+base_url = "http://{upstream_addr}/v1"
+"#
+  );
+  for (name, provider, model) in [
+    (
+      "fixed",
+      r#"{ kind = "fixed", provider = "local" }"#,
+      r#"{ kind = "capability" }"#,
+    ),
+    (
+      "provider",
+      r#"{ kind = "any" }"#,
+      r#"{ kind = "qualified", namespace = "provider" }"#,
+    ),
+    (
+      "driver",
+      r#"{ kind = "any" }"#,
+      r#"{ kind = "qualified", namespace = "driver" }"#,
+    ),
+    ("automatic", r#"{ kind = "any" }"#, r#"{ kind = "capability" }"#),
+    (
+      "family",
+      r#"{ kind = "fixed", provider = "local" }"#,
+      r#"{ kind = "family", families = { smart = ["unlisted-first", "gpt-4o"] } }"#,
+    ),
+  ] {
+    config.push_str(&format!(
+      r#"
+[profiles.{name}]
+route = "{name}"
+account_pool = {{ accounts = ["acct"] }}
+
+[routes.{name}]
+kind = "managed"
+providers = ["local"]
+provider = {provider}
+model = {model}
+operation = "preserve"
+"#
+    ));
+  }
+  let plan = tokn_config::v2::parse(&config, Path::new("unlisted-model-test.toml")).unwrap();
+  let access = Arc::new(AccessStore::disabled());
+  let allowed = access.create_key("local", vec!["local".into()]).unwrap();
+  let denied = access.create_key("other provider", vec!["openai".into()]).unwrap();
+  let states = tokn_router::v2::build_states(plan, &[account()], access, Arc::new(EventBus::noop())).unwrap();
+  let app = tokn_router::v2::router(states.into_iter().next().unwrap());
+
+  for (profile, model, upstream_model) in [
+    ("fixed", "organization/custom-model", "organization/custom-model"),
+    (
+      "provider",
+      "local/organization/custom-model",
+      "organization/custom-model",
+    ),
+    (
+      "driver",
+      "openai/organization/custom-model",
+      "organization/custom-model",
+    ),
+    ("family", "organization/custom-model", "organization/custom-model"),
+    ("family", "smart", "gpt-4o"),
+  ] {
+    let response = app
+      .clone()
+      .oneshot(
+        Request::post(format!("/{profile}/v1/chat/completions"))
+          .header("authorization", format!("Bearer {}", allowed.token))
+          .header("content-type", "application/json")
+          .body(Body::from(
+            serde_json::json!({"model": model, "messages": []}).to_string(),
+          ))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{profile}: {}", String::from_utf8_lossy(&body));
+    assert_eq!(capture_rx.recv().await.unwrap()["model"], upstream_model);
+  }
+
+  for (profile, model, token, expected) in [
+    (
+      "automatic",
+      "organization/custom-model",
+      &allowed.token,
+      StatusCode::NOT_IMPLEMENTED,
+    ),
+    (
+      "provider",
+      "other/organization/custom-model",
+      &allowed.token,
+      StatusCode::NOT_IMPLEMENTED,
+    ),
+    (
+      "driver",
+      "deepseek/organization/custom-model",
+      &allowed.token,
+      StatusCode::NOT_IMPLEMENTED,
+    ),
+    (
+      "fixed",
+      "organization/custom-model",
+      &denied.token,
+      StatusCode::FORBIDDEN,
+    ),
+    (
+      "provider",
+      "local/organization/custom-model",
+      &denied.token,
+      StatusCode::FORBIDDEN,
+    ),
+    (
+      "driver",
+      "openai/organization/custom-model",
+      &denied.token,
+      StatusCode::FORBIDDEN,
+    ),
+  ] {
+    let response = app
+      .clone()
+      .oneshot(
+        Request::post(format!("/{profile}/v1/chat/completions"))
+          .header("authorization", format!("Bearer {token}"))
+          .header("content-type", "application/json")
+          .body(Body::from(
+            serde_json::json!({"model": model, "messages": []}).to_string(),
+          ))
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+    assert_eq!(response.status(), expected, "{profile}: {model}");
+  }
+  assert!(capture_rx.try_recv().is_err());
+  server.abort();
+}
+
+#[tokio::test]
 async fn fixed_provider_client_relay_preserves_client_credentials_without_accounts() {
   let (capture_tx, mut capture_rx) = tokio::sync::mpsc::channel(1);
   let upstream = Router::new()

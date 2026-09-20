@@ -378,6 +378,7 @@ fn parse_rejects_unknown_fields() {
     "service.outbound",
     "service.request_limits",
     "service.persistence",
+    "service.models",
   ] {
     let config = MINIMAL_MANAGED.replacen(
       "[listeners.api]",
