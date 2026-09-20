@@ -312,6 +312,12 @@ tokn-gateway account switch --only personal
 tokn-gateway account remove personal
 ```
 
+For Codex OAuth accounts, `account refresh` forces a token exchange and saves
+rotated credentials. `account list` reports live usage percentages and reset
+times for the available quota windows; `account status` includes a compact
+usage summary. Both refresh expired access tokens before checking usage.
+Use `account list --no-quota` to skip network requests.
+
 Non-interactive imports support `env`, `string`, `file`, `stdin`, and
 provider-specific sources:
 
