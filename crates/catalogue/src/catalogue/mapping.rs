@@ -78,6 +78,7 @@ mod tests {
     schema::Model {
       id: "claude-3-sonnet-20240229".into(),
       name: "Claude Sonnet 3".into(),
+      provider: None,
       attachment: true,
       reasoning: false,
       reasoning_options: None,

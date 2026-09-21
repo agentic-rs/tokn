@@ -16,6 +16,7 @@ pub mod provider {
   pub use tokn_provider_copilot as copilot;
   pub use tokn_provider_deepseek as deepseek;
   pub use tokn_provider_openai as openai;
+  pub use tokn_provider_opencode as opencode;
   pub use tokn_provider_zai as zai;
 }
 pub use tokn_router as router;

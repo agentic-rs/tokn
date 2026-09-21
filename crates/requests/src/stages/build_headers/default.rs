@@ -85,10 +85,11 @@ impl BuildHeadersStage for DefaultBuildHeaders {
     resolved: &Resolved,
   ) -> Result<BuiltHeaders, PipelineError> {
     let inbound = &extracted.headers;
-    let vars = build_template_vars(inbound);
+    let mut vars = build_template_vars(inbound);
     let agent_id = self.effective_agent_id(extracted, resolved);
 
     let mut headers = build_wire_identity_headers(resolved.provider_id.as_str(), agent_id.as_str(), &vars, inbound);
+    vars.request_id.get_or_insert_with(|| ctx.request_id.to_string().into());
     headers.insert(
       &keys::X_REQUEST_ID,
       HeaderValue::from_string(ctx.request_id.to_string()),
@@ -265,5 +266,17 @@ mod tests {
       out.headers.get(&keys::X_REQUEST_ID).map(HeaderValue::as_str),
       Some("req-bh")
     );
+    assert_eq!(out.vars.request_id.as_deref(), Some("inbound-request"));
+  }
+
+  #[tokio::test]
+  async fn template_request_id_falls_back_to_pipeline_request_id() {
+    let stage = DefaultBuildHeaders::with_provider_defaults();
+    let out = stage
+      .build_headers(&ctx(), &extracted(HeaderMap::new(), None), &resolved("opencode-go"))
+      .await
+      .unwrap();
+
+    assert_eq!(out.vars.request_id.as_deref(), Some("req-bh"));
   }
 }

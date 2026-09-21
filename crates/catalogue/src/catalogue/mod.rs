@@ -9,7 +9,7 @@ pub mod loader;
 pub mod mapping;
 pub mod schema;
 
-use tokn_core::provider::ModelInfo;
+use tokn_core::provider::{Endpoint, ModelInfo};
 
 /// Build our internal model list for a given models.dev provider id.
 ///
@@ -34,6 +34,13 @@ pub fn model_info_for(provider_id: &str, model_id: &str) -> Option<ModelInfo> {
     .models
     .get(model_id)
     .map(mapping::to_model_info)
+}
+
+/// Return the endpoint implied by models.dev's provider adapter metadata.
+/// This reads the current in-process snapshot, so a periodic catalogue refresh
+/// can change routing without restarting the gateway.
+pub fn endpoint_for_model(provider_id: &str, model_id: &str) -> Option<Endpoint> {
+  loader::global().get(provider_id)?.endpoint_for_model(model_id)
 }
 
 #[cfg(test)]

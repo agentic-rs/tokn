@@ -2176,6 +2176,7 @@ mod tests {
   fn accounts_from_auth_json_imports_registry_api_key_providers() {
     let json = serde_json::json!({
       "deepseek": {"type": "api", "key": "sk-deepseek"},
+      "opencode-go": {"type": "api", "key": "sk-opencode-go"},
       "zai": {"type": "api", "key": "sk-zai"}
     });
     let accounts = accounts_from_auth_json(
@@ -2184,7 +2185,7 @@ mod tests {
       "20260604T153012Z",
     );
 
-    assert_eq!(accounts.len(), 2);
+    assert_eq!(accounts.len(), 3);
     let deepseek = accounts
       .iter()
       .find(|account| account.provider == tokn_core::provider::ID_DEEPSEEK)
@@ -2193,6 +2194,15 @@ mod tests {
     assert_eq!(deepseek.api_key.as_ref().unwrap().expose(), "sk-deepseek");
     assert_eq!(deepseek.base_url.as_deref(), Some("https://api.deepseek.com"));
     assert_eq!(source_provider_id(deepseek), Some("deepseek"));
+
+    let opencode_go = accounts
+      .iter()
+      .find(|account| account.provider == tokn_core::provider::ID_OPENCODE_GO)
+      .unwrap();
+    assert_eq!(opencode_go.id, "opencode-opencode-go");
+    assert_eq!(opencode_go.api_key.as_ref().unwrap().expose(), "sk-opencode-go");
+    assert_eq!(opencode_go.base_url.as_deref(), Some("https://opencode.ai/zen/go/v1"));
+    assert_eq!(source_provider_id(opencode_go), Some("opencode-go"));
 
     let zai = accounts
       .iter()

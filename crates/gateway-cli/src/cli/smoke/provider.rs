@@ -93,10 +93,25 @@ pub(super) fn endpoints_for_model(
   descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
   model_id: &str,
 ) -> Vec<Endpoint> {
+  if descriptor.id == tokn_core::provider::ID_OPENCODE_GO {
+    if let Some(endpoints) = endpoints_from_rules(descriptor, model_id) {
+      return endpoints;
+    }
+    if let Some(endpoint) = tokn_catalogue::endpoint_for_model(descriptor.id, model_id) {
+      return vec![endpoint];
+    }
+    return vec![Endpoint::ChatCompletions];
+  }
+  endpoints_from_rules(descriptor, model_id)
+    .unwrap_or_else(|| descriptor.endpoints.iter().map(|endpoint| endpoint.endpoint).collect())
+}
+
+fn endpoints_from_rules(
+  descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
+  model_id: &str,
+) -> Option<Vec<Endpoint>> {
   let all: Vec<Endpoint> = descriptor.endpoints.iter().map(|e| e.endpoint).collect();
-  let Some(rules) = descriptor.model_endpoint_rules else {
-    return all;
-  };
+  let rules = descriptor.model_endpoint_rules?;
   let mut allowed: Vec<Endpoint> = Vec::new();
   let mut matched = false;
   for endpoint in &all {
@@ -108,9 +123,9 @@ pub(super) fn endpoints_for_model(
     }
   }
   if matched {
-    allowed
+    Some(allowed)
   } else {
-    all
+    None
   }
 }
 
@@ -307,5 +322,19 @@ base_url = "https://gateway.example/v1"
     assert_eq!(provider.driver().as_str(), "zai");
     assert_eq!(descriptor.id, "zhipuai");
     assert_eq!(descriptor.base_url, "https://open.bigmodel.cn/api/paas/v4");
+  }
+
+  #[test]
+  fn opencode_go_uses_documented_bindings_before_catalogue_metadata() {
+    let registry = Registry::builtin();
+    let descriptor = registry
+      .resolve_provider_descriptor(tokn_core::provider::ID_OPENCODE_GO, tokn_core::provider::ID_OPENCODE_GO)
+      .unwrap();
+    assert_eq!(endpoints_for_model(descriptor, "gpt-5.6-luna"), [Endpoint::Responses]);
+    assert_eq!(endpoints_for_model(descriptor, "qwen3.7-max"), [Endpoint::Messages]);
+    assert_eq!(
+      endpoints_for_model(descriptor, "deepseek-v4-flash"),
+      [Endpoint::ChatCompletions]
+    );
   }
 }

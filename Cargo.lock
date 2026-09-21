@@ -2767,6 +2767,7 @@ dependencies = [
  "tokn-provider-deepseek",
  "tokn-provider-llama-cpp",
  "tokn-provider-openai",
+ "tokn-provider-opencode",
  "tokn-provider-zai",
  "tokn-router",
  "tokn-router-config",
@@ -2809,6 +2810,7 @@ dependencies = [
  "tokn-provider-deepseek",
  "tokn-provider-llama-cpp",
  "tokn-provider-openai",
+ "tokn-provider-opencode",
  "tokn-provider-zai",
  "tokn-router-config",
  "toml",
@@ -3160,6 +3162,25 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu",
+ "time",
+ "tokio",
+ "tokn-auth",
+ "tokn-catalogue",
+ "tokn-core",
+ "tokn-headers",
+ "tokn-mock-server",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "tokn-provider-opencode"
+version = "0.2.2"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
  "time",
  "tokio",
  "tokn-auth",
