@@ -3,7 +3,7 @@
 - Content-Type: application/json
 - OpenAI-Beta: responses=experimental
 - originator: codex_exec
-- version: 0.125.0
+- version: 0.155.1
 - User-Agent: codex_exec/0.130.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.130.0)
 - chatgpt-account-id: acct-from-provider
 - session_id: 019e271b-4023-7081-be3e-7a69d97138a2

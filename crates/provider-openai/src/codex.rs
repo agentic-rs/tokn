@@ -16,7 +16,7 @@ use crate::{
 };
 
 pub const CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-pub const CODEX_CLIENT_VERSION: &str = "0.130.0";
+pub const CODEX_CLIENT_VERSION: &str = common::CODEX_CLI_VERSION;
 
 pub struct CodexProvider {
   pub id: String,

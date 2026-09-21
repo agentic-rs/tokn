@@ -6,8 +6,7 @@ use tokn_headers::keys::{
 };
 use tokn_headers::{AgentId, HeaderMap, HeaderName, HeaderNormalizeCtx, HeaderNormalizer, HeaderValue};
 
-pub const CODEX_CLI_USER_AGENT: &str = "codex_cli_rs/0.125.0";
-pub const CODEX_CLI_VERSION: &str = "0.125.0";
+pub const CODEX_CLI_VERSION: &str = "0.155.1";
 pub const CODEX_RESPONSES_BETA: &str = "responses=experimental";
 pub const OPENCODE_USER_AGENT: &str = "opencode/1.14.28 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.13";
 
@@ -77,8 +76,8 @@ impl HeaderNormalizer for CodexCliNormalizer {
       .to_string();
     let user_agent = first_non_empty(headers, &[USER_AGENT.as_str()])
       .filter(|value| is_codex_user_agent(value))
-      .unwrap_or(CODEX_CLI_USER_AGENT)
-      .to_string();
+      .map(str::to_string)
+      .unwrap_or_else(|| format!("codex_cli_rs/{CODEX_CLI_VERSION}"));
     let session_id = session_id(headers, ctx);
     let turn_metadata = first_non_empty(headers, &[X_CODEX_TURN_METADATA.as_str()]).map(str::to_string);
 
@@ -265,7 +264,10 @@ mod tests {
 
     let out = CodexCliNormalizer.normalize(&headers, &ctx);
 
-    assert_eq!(out.get(&USER_AGENT).unwrap().as_str(), CODEX_CLI_USER_AGENT);
+    assert_eq!(
+      out.get(&USER_AGENT).unwrap().as_str(),
+      format!("codex_cli_rs/{CODEX_CLI_VERSION}")
+    );
   }
 
   #[test]
