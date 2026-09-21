@@ -131,6 +131,17 @@ impl AccountPoolRuntime {
   where
     F: Fn(&ProviderBinding) -> bool,
   {
+    self.acquire_ranked(session_id, eligible, |_| 0)
+  }
+
+  /// Select the highest-ranked healthy binding within each account tier.
+  /// Equal ranks retain the pool's round-robin behavior, and established
+  /// healthy session affinity remains sticky regardless of later score changes.
+  pub fn acquire_ranked<F, R>(&self, session_id: Option<&str>, eligible: F, rank: R) -> PoolAcquire
+  where
+    F: Fn(&ProviderBinding) -> bool,
+    R: Fn(&ProviderBinding) -> i32,
+  {
     let now = Instant::now();
     let cooling_bindings = self.cooling_bindings(now);
 
@@ -149,6 +160,7 @@ impl AccountPoolRuntime {
       self.pool.active(),
       &self.active_cursor,
       &eligible,
+      &rank,
       &cooling_bindings,
       &mut earliest_retry,
     ) {
@@ -158,6 +170,7 @@ impl AccountPoolRuntime {
       self.pool.fallback(),
       &self.fallback_cursor,
       &eligible,
+      &rank,
       &cooling_bindings,
       &mut earliest_retry,
     ) {
@@ -200,22 +213,25 @@ impl AccountPoolRuntime {
     Ok(retry_at)
   }
 
-  fn select_tier<F>(
+  fn select_tier<F, R>(
     &self,
     accounts: &[LinkedPoolAccount],
     cursor: &AtomicUsize,
     eligible: &F,
+    rank: &R,
     cooling_bindings: &BTreeMap<ProviderBindingKey, Instant>,
     earliest_retry: &mut Option<Instant>,
   ) -> Option<Arc<ProviderBinding>>
   where
     F: Fn(&ProviderBinding) -> bool,
+    R: Fn(&ProviderBinding) -> i32,
   {
     if accounts.is_empty() {
       return None;
     }
 
     let mut candidates = Vec::new();
+    let mut best_rank = None;
     for account in accounts {
       let binding = account.binding();
       if !eligible(binding) {
@@ -223,7 +239,18 @@ impl AccountPoolRuntime {
       }
       match cooling_bindings.get(binding.key()).copied() {
         Some(retry_at) => retain_earliest(earliest_retry, retry_at),
-        None => candidates.push(binding.clone()),
+        None => {
+          let candidate_rank = rank(binding);
+          match best_rank {
+            Some(current) if candidate_rank < current => {}
+            Some(current) if candidate_rank == current => candidates.push(binding.clone()),
+            _ => {
+              best_rank = Some(candidate_rank);
+              candidates.clear();
+              candidates.push(binding.clone());
+            }
+          }
+        }
       }
     }
 
@@ -442,6 +469,73 @@ mod tests {
       .collect::<Vec<_>>();
 
     assert_eq!(account_ids, ["first", "fourth", "first", "fourth", "first", "fourth"]);
+  }
+
+  #[test]
+  fn ranked_selection_prefers_high_scores_and_round_robins_ties() {
+    let runtimes = runtimes(
+      BTreeMap::from([(pool_id("default"), pool(None, None))]),
+      BTreeMap::from([
+        (provider_id("preferred"), provider()),
+        (provider_id("peer"), provider()),
+        (provider_id("neutral"), provider()),
+      ]),
+      &[
+        account_at("preferred-account", "preferred", AccountTier::Active),
+        account_at("peer-account", "peer", AccountTier::Active),
+        account_at("neutral-account", "neutral", AccountTier::Active),
+      ],
+    );
+    let runtime = runtimes.runtime(&pool_id("default")).unwrap();
+    let score = |binding: &ProviderBinding| match binding.provider_id().as_str() {
+      "preferred" | "peer" => 100,
+      _ => 0,
+    };
+
+    let selected_ids = (0..4)
+      .map(|_| selected(runtime.acquire_ranked(None, |_| true, score)))
+      .map(|binding| binding.account_id().to_string())
+      .collect::<Vec<_>>();
+    assert_eq!(
+      selected_ids,
+      ["preferred-account", "peer-account", "preferred-account", "peer-account"]
+    );
+
+    runtime
+      .record_failure(&ProviderBindingKey::new(provider_id("preferred"), "preferred-account"))
+      .unwrap();
+    runtime
+      .record_failure(&ProviderBindingKey::new(provider_id("peer"), "peer-account"))
+      .unwrap();
+    assert_eq!(
+      selected(runtime.acquire_ranked(None, |_| true, score)).account_id(),
+      "neutral-account"
+    );
+  }
+
+  #[test]
+  fn account_tier_and_session_affinity_take_precedence_over_scores() {
+    let affinity = SessionAffinityPlan::new(Duration::from_secs(300), Duration::from_secs(60));
+    let runtimes = runtimes(
+      BTreeMap::from([(pool_id("default"), pool(None, Some(affinity)))]),
+      BTreeMap::from([
+        (provider_id("active"), provider()),
+        (provider_id("fallback"), provider()),
+      ]),
+      &[
+        account_at("active-account", "active", AccountTier::Active),
+        account_at("fallback-account", "fallback", AccountTier::Fallback),
+      ],
+    );
+    let runtime = runtimes.runtime(&pool_id("default")).unwrap();
+    let prefer_fallback = |binding: &ProviderBinding| i32::from(binding.provider_id().as_str() == "fallback") * 100;
+
+    let active = selected(runtime.acquire_ranked(Some("session"), |_| true, prefer_fallback));
+    assert_eq!(active.account_id(), "active-account");
+    runtime.record_success(Some("session"), active.key()).unwrap();
+
+    let affinity_hit = selected(runtime.acquire_ranked(Some("session"), |_| true, |_| i32::MAX));
+    assert_eq!(affinity_hit.account_id(), "active-account");
   }
 
   #[test]

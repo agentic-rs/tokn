@@ -3,7 +3,7 @@ use tokn_config::v2::{
   compile, decode, load, parse, parse_config, CompileError, Error, DEFAULT_ARCHIVE_AFTER_DAYS, DEFAULT_BODY_MAX_BYTES,
   DEFAULT_MAX_DECODED_BYTES, DEFAULT_MAX_WIRE_BYTES, DEFAULT_PRUNE_AFTER_DAYS, DEFAULT_WRITE_QUEUE_CAPACITY,
 };
-use tokn_policy::{ConnectAction, ListenerPlan, ManagedRetry, RetryPolicyId, RouteKind, RoutePlan};
+use tokn_policy::{ConnectAction, ListenerPlan, ManagedRetry, ProviderId, RetryPolicyId, RouteKind, RoutePlan};
 
 const MINIMAL_MANAGED: &str = r#"
 schema_version = 2
@@ -46,6 +46,49 @@ fn minimal_managed_llm_listener_compiles() {
   assert_eq!(plan.profiles()["default"].api_binding().unwrap().path(), "/v1");
   assert_eq!(plan.routes().get("default").unwrap().kind(), RouteKind::Managed);
   assert_eq!(plan.account_pools().len(), 1);
+}
+
+#[test]
+fn sparse_model_scores_compile_with_neutral_defaults() {
+  let config = format!(
+    r#"{MINIMAL_MANAGED}
+[model_scores."gpt-5.6-luna"]
+opencode-go = 100
+codex = -10
+"#
+  );
+  let plan = parse(&config, Path::new("config.toml")).unwrap();
+  let RoutePlan::Managed(route) = &plan.routes()["default"] else {
+    panic!("expected managed route");
+  };
+
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("opencode-go").unwrap()),
+    100
+  );
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("codex").unwrap()),
+    -10
+  );
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("openai").unwrap()),
+    0
+  );
+  assert_eq!(
+    route.provider_score("another-model", &ProviderId::new("opencode-go").unwrap()),
+    0
+  );
+}
+
+#[test]
+fn model_scores_reject_unknown_providers_and_empty_maps() {
+  for extra in [
+    "[model_scores.\"gpt-5.6-luna\"]\nunknown = 1\n",
+    "[model_scores.\"gpt-5.6-luna\"]\n",
+  ] {
+    let error = parse(&format!("{MINIMAL_MANAGED}\n{extra}"), Path::new("config.toml")).unwrap_err();
+    assert!(matches!(error, Error::Compile { .. }));
+  }
 }
 
 #[test]
