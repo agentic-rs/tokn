@@ -1,0 +1,8 @@
+FROM docker.io/oven/bun:1.3.13-alpine
+
+RUN apk add --no-cache ca-certificates git ripgrep \
+  && bun install --global opencode-ai@1.18.10 \
+  && test "$(opencode --version)" = "1.18.10"
+
+WORKDIR /workspace
+ENTRYPOINT ["opencode"]
