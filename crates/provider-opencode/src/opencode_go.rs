@@ -7,7 +7,7 @@ use tokn_core::account::AccountConfig;
 use tokn_core::provider::{match_endpoint_rule, ProviderTarget};
 use tokn_core::upstream_url::{CanonicalUpstreamUrl, CleartextHttpPolicy};
 use tokn_headers::keys::{
-  ACCEPT, ANTHROPIC_VERSION, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT, X_OPENCODE_SESSION,
+  ACCEPT, ANTHROPIC_VERSION, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT, X_API_KEY, X_OPENCODE_SESSION,
 };
 use tokn_headers::{HeaderMap, HeaderValue};
 use tracing::{debug, instrument, warn};
@@ -142,16 +142,21 @@ impl Provider for OpenCodeGoProvider {
     endpoint == Endpoint::ChatCompletions
   }
 
-  fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
-    headers.insert(
-      &AUTHORIZATION,
-      HeaderValue::from_string(format!("Bearer {}", self.api_key.expose())),
-    );
+  fn inject_credentials(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<()> {
+    if ctx.endpoint() == Some(Endpoint::Messages) {
+      headers.insert(&X_API_KEY, HeaderValue::from_string(self.api_key.expose().to_string()));
+    } else {
+      headers.insert(
+        &AUTHORIZATION,
+        HeaderValue::from_string(format!("Bearer {}", self.api_key.expose())),
+      );
+    }
     Ok(())
   }
 
   fn normalize_headers(&self, headers: &mut HeaderMap, ctx: &HeaderPatchCtx<'_>) -> Result<Option<HeaderMap>> {
     let authorization = headers.get(&AUTHORIZATION).cloned();
+    let api_key = headers.get(&X_API_KEY).cloned();
     let session = ctx
       .vars
       .session_id
@@ -160,7 +165,11 @@ impl Provider for OpenCodeGoProvider {
       .or(ctx.vars.request_id.as_deref())
       .map(str::to_string);
     let mut normalized = HeaderMap::new();
-    if let Some(authorization) = authorization {
+    if ctx.endpoint() == Some(Endpoint::Messages) {
+      if let Some(api_key) = api_key {
+        normalized.insert(&X_API_KEY, api_key);
+      }
+    } else if let Some(authorization) = authorization {
       normalized.insert(&AUTHORIZATION, authorization);
     }
     normalized.insert(
@@ -367,13 +376,9 @@ mod tests {
 
   #[tokio::test]
   async fn sends_all_protocols_with_required_identity_headers() {
-    let server = MockLlmServer::start(
+    let openai_server = MockLlmServer::start(
       MockLlmConfig {
-        routes: vec![
-          MockRoute::chat_completions(),
-          MockRoute::responses(),
-          MockRoute::messages(),
-        ],
+        routes: vec![MockRoute::chat_completions(), MockRoute::responses()],
         ..Default::default()
       }
       .with_auth(MockAuthConfig::bearer(["sk-test"]))
@@ -382,7 +387,7 @@ mod tests {
     )
     .await;
     let mut configured = account(Some("sk-test"));
-    configured.base_url = Some(server.base_url().to_string());
+    configured.base_url = Some(openai_server.base_url().to_string());
     let provider = OpenCodeGoProvider::from_account(Arc::new(configured)).unwrap();
     let http = reqwest::Client::new();
     let body = serde_json::json!({"model": "fixture"});
@@ -398,6 +403,21 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(responses.status(), reqwest::StatusCode::OK);
+
+    let messages_server = MockLlmServer::start(
+      MockLlmConfig {
+        routes: vec![MockRoute::messages()],
+        ..Default::default()
+      }
+      .with_auth(MockAuthConfig::header("x-api-key", ["sk-test"]))
+      .require_header(HeaderExpectation::equals("x-opencode-session", "session-42"))
+      .require_header(HeaderExpectation::present("user-agent"))
+      .forbid_header("authorization"),
+    )
+    .await;
+    let mut configured = account(Some("sk-test"));
+    configured.base_url = Some(messages_server.base_url().to_string());
+    let provider = OpenCodeGoProvider::from_account(Arc::new(configured)).unwrap();
     let messages = provider
       .messages(request_ctx(Endpoint::Messages, &http, &body, &inbound))
       .await
