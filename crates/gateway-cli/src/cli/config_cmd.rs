@@ -339,7 +339,7 @@ fn print_fragment_editor_note(path: &std::path::Path) {
   let agent_config = tokn_agent_migration::agent_config_path(path);
   if has_fragments || agent_config.is_file() {
     eprintln!(
-      "note: agent integration intent is managed in {}; derived profiles are under {}; this editor changes only {}",
+      "note: agent integration intent is managed in {}; runtime overlays are under {}; this editor changes only {}",
       agent_config.display(),
       fragment_dir.display(),
       path.display()
@@ -687,9 +687,9 @@ fn reject_v2_account_selector(schema: ConfigSchema, account: Option<&str>) -> Re
   Ok(())
 }
 
-/// The generic config editor operates on the primary TOML source. Agent intent
-/// and derived profile overlays are deliberately separate; silently editing
-/// their shadowed root keys would report a change that has no runtime effect.
+/// The generic config editor operates on the primary TOML source. Runtime
+/// overlays are deliberately separate; silently editing their shadowed root
+/// keys would report a change that has no runtime effect.
 fn ensure_root_key_is_not_fragment_managed(
   path: &std::path::Path,
   schema: ConfigSchema,
@@ -701,7 +701,7 @@ fn ensure_root_key_is_not_fragment_managed(
   let [section, name, ..] = segments else {
     return Ok(());
   };
-  if section != "agents" && section != "profiles" {
+  if section != "agents" && section != "profiles" && section != "model_scores" {
     return Ok(());
   }
   if section == "agents" {
@@ -723,6 +723,13 @@ fn ensure_root_key_is_not_fragment_managed(
       .and_then(|items| items.get(name))
       .is_some();
     if managed {
+      if section == "model_scores" {
+        bail!(
+          "{} is managed by {}; edit that fragment instead",
+          segments.join("."),
+          fragment_path.display()
+        );
+      }
       bail!(
         "{} is managed by {}; use `agent link`, `agent sync`, or `agent unlink` instead",
         segments.join("."),
@@ -1068,7 +1075,7 @@ client_auth = "none"
   }
 
   #[test]
-  fn rejects_edits_to_fragment_managed_agent_or_profile_keys() {
+  fn rejects_edits_to_fragment_managed_keys() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("config.toml");
     std::fs::write(&root, "[server]\nport = 9911\n").unwrap();
@@ -1110,6 +1117,23 @@ agents:
       &["profiles".into(), "other".into(), "mode".into()],
     )
     .is_ok());
+    let scores_fragment = paths::config_fragment_dir(&root).join("model_scores.toml");
+    std::fs::write(
+      &scores_fragment,
+      r#"[model_scores."gpt-5.6-luna"]
+opencode-go = 100
+"#,
+    )
+    .unwrap();
+    let err = ensure_root_key_is_not_fragment_managed(
+      &root,
+      ConfigSchema::Legacy,
+      &["model_scores".into(), "gpt-5.6-luna".into(), "opencode-go".into()],
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("managed by"));
+    assert!(err.contains("edit that fragment instead"));
     print_fragment_editor_note(&root);
   }
 

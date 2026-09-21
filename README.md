@@ -162,7 +162,7 @@ Default files live under `~/.tokn/router/`:
 
 - `config.toml`: runtime config.
 - `agent.yaml`: non-secret agent integration intent used by link/sync tooling.
-- `config.d/`: derived, non-secret runtime profile overlays generated for linked agents.
+- `config.d/`: non-secret runtime overlays for linked-agent profiles and legacy `model_scores` fragments.
 - `auth.yaml`: user-managed and shared account credentials.
 - `auth.d/`: credential-only fragments owned by linked agents.
 - `access.db`: hashed client API keys and provider permissions.
@@ -257,6 +257,11 @@ continue to use round-robin selection. Active accounts are considered before
 fallback accounts, and an existing healthy session affinity remains sticky.
 Cooling providers are skipped so a lower-scored eligible provider can serve the
 request. Provider-qualified requests bypass this ranking.
+
+For an unversioned legacy configuration, the same table may live in
+`config.d/model_scores.toml`; entries merge with scores in `config.toml` by
+model and provider. Native v2 configuration remains a single compiled document
+and keeps `model_scores` in `config.toml`.
 
 ## Database
 
