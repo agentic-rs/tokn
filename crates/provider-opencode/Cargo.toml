@@ -15,7 +15,9 @@ tokn-catalogue = { workspace = true }
 tokn-headers = { workspace = true }
 async-trait = { workspace = true }
 reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+time = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
 

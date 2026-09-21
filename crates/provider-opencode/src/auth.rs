@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tokn_auth::{AuthError, ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
+use tokn_auth::{ProviderAuth, QuotaSnapshot, RefreshOutcome, Result, VerifyOutcome};
 use tokn_core::account::AccountConfig;
 
 pub struct OpenCodeGoAuth;
@@ -27,35 +27,11 @@ impl ProviderAuth for OpenCodeGoAuth {
   }
 
   async fn verify_credential(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<VerifyOutcome> {
-    let key = account.api_key.as_ref().ok_or(AuthError::MissingCredential {
-      account: account.id.clone(),
-      field: "api_key",
-    })?;
-    let base = account
-      .base_url
-      .as_deref()
-      .unwrap_or(crate::OPENCODE_GO_BASE_URL)
-      .trim_end_matches('/');
-    let response = client
-      .get(format!("{base}/models"))
-      .header("authorization", format!("Bearer {}", key.expose()))
-      .header("accept", "application/json")
-      .header("user-agent", tokn_core::util::version::tokn_router_user_agent())
-      .send()
-      .await
-      .map_err(|error| AuthError::Network(error.to_string()))?;
-    if response.status().is_success() {
-      return Ok(VerifyOutcome::default());
-    }
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    Err(AuthError::Upstream(format!(
-      "OpenCode Go rejected the key (HTTP {status}): {}",
-      body.chars().take(200).collect::<String>()
-    )))
+    crate::quota::verify(client, account).await?;
+    Ok(VerifyOutcome::default())
   }
 
-  async fn probe_quota(&self, _client: &reqwest::Client, _account: &AccountConfig) -> Result<QuotaSnapshot> {
-    Ok(QuotaSnapshot::default())
+  async fn probe_quota(&self, client: &reqwest::Client, account: &AccountConfig) -> Result<QuotaSnapshot> {
+    crate::quota::fetch(client, account).await
   }
 }

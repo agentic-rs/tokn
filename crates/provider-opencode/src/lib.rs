@@ -1,5 +1,6 @@
 pub mod auth;
 mod opencode_go;
+mod quota;
 
 pub use opencode_go::*;
 pub use tokn_catalogue as catalogue;
