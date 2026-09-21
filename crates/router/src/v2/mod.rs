@@ -1,8 +1,11 @@
 #[cfg(test)]
 mod cors_tests;
 mod discovery;
+mod model_refresh;
 mod mounts;
 mod selector;
+
+pub use model_refresh::ModelRefreshGuard;
 
 use crate::api::error::ApiError;
 use crate::api::identity::AccountIdentityResolver;
@@ -179,6 +182,7 @@ pub struct ForwardProxyState {
   listener_id: ListenerId,
   listener: ForwardProxyListenerPlan,
   profiles: Arc<BTreeMap<ProfileId, ProfileRuntime>>,
+  discovery: Arc<discovery::DiscoveryRuntime>,
   access: Arc<tokn_access::AccessStore>,
   events: Arc<EventBus>,
   identity: Arc<AccountIdentityResolver>,
@@ -548,6 +552,7 @@ pub struct LiveRuntime {
   current: Arc<ArcSwap<RuntimeGeneration>>,
   replace_lock: Arc<Mutex<()>>,
   admin_reloader: Arc<OnceLock<AdminReloader>>,
+  refresh_changed: tokio::sync::watch::Sender<u64>,
 }
 
 impl LiveRuntime {
@@ -556,6 +561,7 @@ impl LiveRuntime {
       current: Arc::new(ArcSwap::from_pointee(RuntimeGeneration::new(1, accounts, states))),
       replace_lock: Arc::new(Mutex::new(())),
       admin_reloader: Arc::new(OnceLock::new()),
+      refresh_changed: tokio::sync::watch::channel(1).0,
     }
   }
 
@@ -606,6 +612,7 @@ impl LiveRuntime {
       accounts: replacement.accounts,
     };
     self.current.store(Arc::new(replacement));
+    self.refresh_changed.send_replace(report.generation);
     Ok(report)
   }
 
@@ -855,6 +862,7 @@ pub fn build_runtime_states_with_service(
           listener_id: listener_id.clone(),
           listener: listener.clone(),
           profiles: linked.profiles.clone(),
+          discovery: linked.discovery.clone(),
           access: access.clone(),
           events: events.clone(),
           identity: identity.clone(),

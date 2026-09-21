@@ -1,20 +1,35 @@
 use crate::api::error::ApiError;
+use futures_util::{stream, StreamExt};
+use parking_lot::RwLock;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
 use tokn_access::AccessContext;
 use tokn_accounts::link::{LinkedAccountPools, ProviderBinding, ProviderBindingKey, ProviderGraph};
 use tokn_accounts::registry::Registry;
 use tokn_core::provider::{ModelCache, ModelInfo, Provider};
 use tokn_policy::{
-  GatewayPlan, ModelSelector, ProfileId, ProviderId, ProviderSelector, RelayCredentials, RelayDestination, RoutePlan,
+  GatewayPlan, ModelSelector, ProfileId, ProviderId, ProviderSelector, QualificationNamespace, RelayCredentials,
+  RelayDestination, RoutePlan,
 };
 use tracing::{debug, warn};
+
+const MODEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const REFRESH_CONCURRENCY: usize = 4;
+const CATALOGUE_URL: &str = "https://models.dev/api.json";
+
+type BindingModels = BTreeMap<ProviderBindingKey, Vec<Value>>;
 
 pub(super) struct DiscoveryRuntime {
   http: reqwest::Client,
   metadata: BTreeMap<ProviderId, ProviderMetadata>,
   profiles: BTreeMap<ProfileId, ProfileDiscovery>,
+  // Only refreshers serialize; readers can use last-good snapshots while
+  // network work is pending. Retain account records before merging targets.
+  refresh_gate: Mutex<()>,
+  upstream: RwLock<BindingModels>,
 }
 
 struct ProviderMetadata {
@@ -36,7 +51,7 @@ struct ProfileDiscovery {
 struct ProfileProvider {
   bindings: BTreeMap<ProviderBindingKey, Arc<ProviderBinding>>,
   plain_model_ids: bool,
-  qualified_model_ids: bool,
+  qualified_model_ids: Option<QualificationNamespace>,
 }
 
 impl DiscoveryRuntime {
@@ -120,7 +135,10 @@ impl DiscoveryRuntime {
           let pool = pools
             .pool(pool_id)
             .ok_or_else(|| anyhow::anyhow!("profile '{profile_id}' references missing account pool '{}'", pool_id))?;
-          let qualified = matches!(managed.target().model(), ModelSelector::Qualified { .. });
+          let qualified = match managed.target().model() {
+            ModelSelector::Qualified { namespace } => Some(*namespace),
+            _ => None,
+          };
           for account in pool.active().iter().chain(pool.fallback()) {
             let binding = account.binding();
             if !route.allows_provider(binding.provider_id()) {
@@ -130,7 +148,12 @@ impl DiscoveryRuntime {
             {
               continue;
             }
-            add_binding(&mut discovery.providers, binding.clone(), !qualified, qualified);
+            add_binding(
+              &mut discovery.providers,
+              binding.clone(),
+              qualified.is_none(),
+              qualified,
+            );
           }
         }
         RoutePlan::Relay(route) => {
@@ -156,7 +179,7 @@ impl DiscoveryRuntime {
               for account in pool.active().iter().chain(pool.fallback()) {
                 let binding = account.binding();
                 if binding.provider_id() == provider_id {
-                  add_binding(&mut discovery.providers, binding.clone(), true, false);
+                  add_binding(&mut discovery.providers, binding.clone(), true, None);
                 }
               }
             }
@@ -166,11 +189,15 @@ impl DiscoveryRuntime {
       profiles.insert(profile_id.clone(), discovery);
     }
 
-    Ok(Self {
+    let runtime = Self {
       http,
       metadata,
       profiles,
-    })
+      refresh_gate: Mutex::new(()),
+      upstream: RwLock::new(BTreeMap::new()),
+    };
+    runtime.apply_catalogue();
+    Ok(runtime)
   }
 
   pub(super) fn providers(&self, profile_id: &ProfileId, access: &AccessContext) -> Result<Value, ApiError> {
@@ -195,52 +222,79 @@ impl DiscoveryRuntime {
     Ok(list_response(profile.mode, data))
   }
 
+  /// Refresh each reachable account once, even when several profiles use it.
+  pub(super) async fn refresh_upstream(&self, timeout: Duration) {
+    let bindings = self
+      .profiles
+      .values()
+      .flat_map(|profile| profile.providers.values())
+      .flat_map(|provider| provider.bindings.iter())
+      .map(|(key, binding)| (key.clone(), binding.clone()))
+      .collect::<BTreeMap<_, _>>();
+    let _guard = self.refresh_gate.lock().await;
+    self.refresh_bindings(bindings.into_values().collect(), timeout).await;
+  }
+
+  /// Publish a validated catalogue to every destination in this generation.
+  pub(super) async fn refresh_catalogue(&self, timeout: Duration) {
+    match tokio::time::timeout(
+      timeout,
+      tokn_catalogue::loader::fetch_and_persist(&self.http, CATALOGUE_URL),
+    )
+    .await
+    {
+      Ok(Ok(_)) => self.apply_catalogue(),
+      Ok(Err(error)) => warn!(%error, "model catalogue refresh failed; retaining previous metadata"),
+      Err(error) => warn!(%error, "model catalogue refresh timed out; retaining previous metadata"),
+    }
+  }
+
+  pub(super) fn apply_catalogue(&self) {
+    for (provider_id, metadata) in &self.metadata {
+      metadata
+        .model_cache
+        .set_catalogue(catalogue_models(provider_id, &metadata.driver_id));
+    }
+  }
+
   pub(super) async fn models(&self, profile_id: &ProfileId, access: &AccessContext) -> Result<Value, ApiError> {
     let profile = self.profile(profile_id)?;
-    let providers = profile.allowed_providers(access);
+    let bindings = profile
+      .allowed_providers(access)
+      .flat_map(|(_, provider)| provider.bindings.values().cloned())
+      .collect::<Vec<_>>();
+    let queried_account = !bindings.is_empty();
+    let last_error = if let Ok(_guard) = self.refresh_gate.try_lock() {
+      match tokio::time::timeout(
+        MODEL_REQUEST_TIMEOUT,
+        self.refresh_bindings(bindings, MODEL_REQUEST_TIMEOUT),
+      )
+      .await
+      {
+        Ok(error) => error,
+        Err(error) => Some(error.to_string()),
+      }
+    } else {
+      None
+    };
+    let cached = self.upstream.read();
     let mut data = Vec::new();
     let mut seen = HashSet::new();
-    let mut queried_account = false;
-    let mut last_error = None;
 
-    for (provider_id, provider) in providers {
+    for (provider_id, provider) in profile.allowed_providers(access) {
       let Some(metadata) = self.metadata.get(provider_id) else {
         continue;
       };
-      let mut provider_models = Vec::new();
-      if provider.bindings.is_empty() {
-        provider_models.extend(local_models(&metadata.models));
-      } else {
-        queried_account = true;
-        for binding in provider.bindings.values() {
-          let driver = binding.driver();
-          debug!(
-            account = binding.account_id(),
-            provider = %provider_id,
-            driver = %metadata.driver_id,
-            "v2 model discovery: querying account"
-          );
-          match remote_models(driver.as_ref(), &self.http).await {
-            Ok(models) if !models.is_empty() => {
-              warm_model_cache(driver.as_ref(), &models);
-              provider_models.extend(models);
-            }
-            Ok(_) => provider_models.extend(local_models(&metadata.models)),
-            Err(error) => {
-              warn!(
-                account = binding.account_id(),
-                provider = %provider_id,
-                driver = %metadata.driver_id,
-                %error,
-                "v2 model discovery: remote list failed; using local catalogue"
-              );
-              last_error = Some(error.to_string());
-              provider_models.extend(local_models(&metadata.models));
-            }
-          }
-        }
-      }
-
+      // Both sources are advisory. Keep upstream records first so advertised
+      // metadata wins for duplicate IDs, then add catalogue-only suggestions.
+      let mut provider_models = provider
+        .bindings
+        .keys()
+        .filter_map(|key| cached.get(key))
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+      provider_models.extend(metadata.local_models());
       merge_models(
         &mut data,
         &mut seen,
@@ -261,11 +315,77 @@ impl DiscoveryRuntime {
     Ok(list_response(profile.mode, data))
   }
 
+  async fn refresh_bindings(&self, bindings: Vec<Arc<ProviderBinding>>, timeout: Duration) -> Option<String> {
+    let requests = bindings.into_iter().map(|binding| async move {
+      debug!(
+        account = binding.account_id(),
+        provider = %binding.provider_id(),
+        "v2 model discovery: querying account"
+      );
+      let result = match tokio::time::timeout(timeout, remote_models(binding.driver().as_ref(), &self.http)).await {
+        Ok(Ok(models)) if !models.is_empty() => Ok(models),
+        Ok(Ok(_)) => Err("upstream returned no model IDs".to_string()),
+        Ok(Err(error)) => Err(error.to_string()),
+        Err(error) => Err(error.to_string()),
+      };
+      (binding, result)
+    });
+    let mut requests = stream::iter(requests).buffer_unordered(REFRESH_CONCURRENCY);
+    let mut last_error = None;
+    while let Some((binding, result)) = requests.next().await {
+      match result {
+        Ok(models) => {
+          let mut cached = self.upstream.write();
+          cached.insert(binding.key().clone(), models);
+          self.publish_upstream(&cached);
+        }
+        Err(error) => {
+          warn!(
+            account = binding.account_id(),
+            provider = %binding.provider_id(),
+            %error,
+            "v2 model discovery failed; retaining previous models"
+          );
+          last_error = Some(error);
+        }
+      }
+    }
+    last_error
+  }
+
+  fn publish_upstream(&self, cached: &BindingModels) {
+    // Account bindings under one provider share a target. Every successful
+    // refresh publishes the union, including retained data for other accounts.
+    for (provider_id, metadata) in &self.metadata {
+      let models = cached
+        .iter()
+        .filter(|(key, _)| key.provider_id() == provider_id)
+        .flat_map(|(_, models)| models.iter().cloned())
+        .collect::<Vec<_>>();
+      if !models.is_empty() {
+        metadata.model_cache.set_models(&models);
+      }
+    }
+  }
+
   fn profile(&self, id: &ProfileId) -> Result<&ProfileDiscovery, ApiError> {
     self
       .profiles
       .get(id)
       .ok_or_else(|| ApiError::internal("API mount references a missing discovery profile"))
+  }
+}
+
+impl ProviderMetadata {
+  fn catalogue_models(&self) -> Vec<ModelInfo> {
+    self
+      .model_cache
+      .catalogue_models()
+      .unwrap_or_else(|| self.models.clone())
+  }
+
+  fn local_models(&self) -> Vec<Value> {
+    local_models(&self.catalogue_models())
   }
 }
 
@@ -285,16 +405,16 @@ fn add_binding(
   providers: &mut BTreeMap<ProviderId, ProfileProvider>,
   binding: Arc<ProviderBinding>,
   plain_model_ids: bool,
-  qualified_model_ids: bool,
+  qualified_model_ids: Option<QualificationNamespace>,
 ) {
   let provider = providers.entry(binding.provider_id().clone()).or_default();
   provider.plain_model_ids |= plain_model_ids;
-  provider.qualified_model_ids |= qualified_model_ids;
+  provider.qualified_model_ids = qualified_model_ids;
   provider.bindings.insert(binding.key().clone(), binding);
 }
 
 fn catalogue_models(provider_id: &ProviderId, driver_id: &str) -> Vec<ModelInfo> {
-  let models = tokn_catalogue::catalogue::default_models_for(provider_id.as_str());
+  let models = catalogue_for(provider_id.as_str());
   if !models.is_empty() {
     return models;
   }
@@ -303,7 +423,15 @@ fn catalogue_models(provider_id: &ProviderId, driver_id: &str) -> Vec<ModelInfo>
   } else {
     driver_id
   };
-  tokn_catalogue::catalogue::default_models_for(catalogue_driver)
+  catalogue_for(catalogue_driver)
+}
+
+fn catalogue_for(provider_id: &str) -> Vec<ModelInfo> {
+  if tokn_core::provider::ZAI_PROVIDERS.contains(&provider_id) {
+    tokn_provider_zai::models::catalogue_for(provider_id)
+  } else {
+    tokn_catalogue::catalogue::default_models_for(provider_id)
+  }
 }
 
 async fn remote_models(provider: &dyn Provider, http: &reqwest::Client) -> tokn_core::provider::Result<Vec<Value>> {
@@ -312,8 +440,11 @@ async fn remote_models(provider: &dyn Provider, http: &reqwest::Client) -> tokn_
     response
       .get("data")
       .and_then(Value::as_array)
+      .into_iter()
+      .flatten()
+      .filter(|model| model.get("id").and_then(Value::as_str).is_some_and(|id| !id.is_empty()))
       .cloned()
-      .unwrap_or_default(),
+      .collect(),
   )
 }
 
@@ -329,10 +460,6 @@ fn local_models(models: &[ModelInfo]) -> Vec<Value> {
     .collect()
 }
 
-fn warm_model_cache(provider: &dyn Provider, models: &[Value]) {
-  provider.info().model_cache.set_models(models);
-}
-
 #[allow(clippy::too_many_arguments)]
 fn merge_models(
   output: &mut Vec<Value>,
@@ -341,7 +468,7 @@ fn merge_models(
   provider_id: &ProviderId,
   metadata: &ProviderMetadata,
   plain_model_ids: bool,
-  qualified_model_ids: bool,
+  qualified_model_ids: Option<QualificationNamespace>,
 ) {
   for model in models {
     let upstream_id = model.get("id").and_then(Value::as_str).unwrap_or("");
@@ -351,7 +478,13 @@ fn merge_models(
     let rendered_ids = plain_model_ids
       .then(|| upstream_id.to_string())
       .into_iter()
-      .chain(qualified_model_ids.then(|| format!("{provider_id}/{upstream_id}")));
+      .chain(qualified_model_ids.map(|namespace| {
+        let qualifier = match namespace {
+          QualificationNamespace::Provider => provider_id.as_str(),
+          QualificationNamespace::Driver => metadata.driver_id.as_str(),
+        };
+        format!("{qualifier}/{upstream_id}")
+      }));
     for rendered_id in rendered_ids {
       if !seen.insert(rendered_id.clone()) {
         continue;
@@ -381,7 +514,11 @@ fn enrich(
   extension.insert("model_id".into(), json!(rendered_id));
   extension.insert("auth_kind".into(), metadata.auth_kind.clone());
 
-  if let Some(model) = metadata.models.iter().find(|model| model.id == upstream_id) {
+  let model = metadata
+    .model_cache
+    .catalogue_model(upstream_id)
+    .unwrap_or_else(|| metadata.models.iter().find(|model| model.id == upstream_id).cloned());
+  if let Some(model) = &model {
     extension.insert("name".into(), json!(model.name));
     extension.insert(
       "capabilities".into(),
@@ -401,15 +538,7 @@ fn enrich(
 
   let efforts = tokn_core::provider::upstream_reasoning_efforts(entry)
     .or_else(|| metadata.model_cache.reasoning_efforts(upstream_id))
-    .or_else(|| {
-      metadata
-        .models
-        .iter()
-        .find(|model| model.id == upstream_id)?
-        .capabilities
-        .reasoning_efforts
-        .clone()
-    });
+    .or_else(|| model.as_ref()?.capabilities.reasoning_efforts.clone());
   let capabilities = extension.entry("capabilities").or_insert_with(|| json!({}));
   capabilities["reasoning_efforts"] = json!(efforts);
 
@@ -428,60 +557,4 @@ fn list_response(mode: &str, data: Vec<Value>) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn discovery_efforts_follow_live_metadata_catalogue_and_unknown_precedence() {
-    let provider_id = ProviderId::new("deepseek").unwrap();
-    let metadata = ProviderMetadata {
-      driver_id: "deepseek".into(),
-      display_name: "DeepSeek",
-      upstream_url: "https://api.deepseek.com/".into(),
-      auth_kind: Value::Null,
-      endpoints: vec!["chat_completions"],
-      models: tokn_catalogue::catalogue::default_models_for("deepseek"),
-      model_cache: Arc::new(ModelCache::default()),
-    };
-    let mut entry = json!({"id": "deepseek-v4-flash"});
-    enrich(
-      &mut entry,
-      "deepseek-v4-flash",
-      "deepseek-v4-flash",
-      &provider_id,
-      &metadata,
-    );
-    assert_eq!(
-      entry["x_tokn_router"]["capabilities"]["reasoning_efforts"],
-      json!(["low", "high", "max"])
-    );
-
-    let mut live = json!({"id": "deepseek-v4-flash", "capabilities": {"supports": {"reasoning_effort": []}}});
-    metadata.model_cache.set_models(&[live.clone()]);
-    enrich(
-      &mut live,
-      "deepseek-v4-flash",
-      "deepseek-v4-flash",
-      &provider_id,
-      &metadata,
-    );
-    assert_eq!(live["x_tokn_router"]["capabilities"]["reasoning_efforts"], json!([]));
-    assert_eq!(live["capabilities"]["supports"]["reasoning_effort"], json!([]));
-    // A subsequent local fallback still reports the cached support used by validation.
-    enrich(
-      &mut entry,
-      "deepseek-v4-flash",
-      "deepseek-v4-flash",
-      &provider_id,
-      &metadata,
-    );
-    assert_eq!(entry["x_tokn_router"]["capabilities"]["reasoning_efforts"], json!([]));
-
-    let mut unknown = json!({"id": "future"});
-    enrich(&mut unknown, "future", "future", &provider_id, &metadata);
-    assert_eq!(
-      unknown["x_tokn_router"]["capabilities"]["reasoning_efforts"],
-      Value::Null
-    );
-  }
-}
+mod tests;

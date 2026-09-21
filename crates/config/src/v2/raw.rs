@@ -69,6 +69,8 @@ pub struct RawService {
   pub request_limits: RawRequestLimits,
   #[serde(default)]
   pub persistence: RawPersistence,
+  #[serde(default)]
+  pub models: super::RawModelRefresh,
 }
 
 /// Shared outbound proxy settings for managed, opaque, and tunnel clients.

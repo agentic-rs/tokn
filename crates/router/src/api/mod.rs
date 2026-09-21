@@ -1783,18 +1783,31 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn route_mode_not_implemented_returns_json_error_body() {
-    let cfg = Config::default();
+  async fn unavailable_fuzzy_family_returns_json_error_body() {
+    let mut cfg = Config::default();
+    cfg.defaults.model_families = vec![crate::config::ModelFamily {
+      name: "unavailable-family".into(),
+      members: vec!["missing-a".into(), "missing-b".into()],
+    }];
+    cfg.profiles.insert(
+      "openai-only".into(),
+      ProfileConfig {
+        providers: Some(vec!["openai".into()]),
+        ..Default::default()
+      },
+    );
     let accounts = vec![zai_account()];
     let state = build_state(&cfg, &accounts, Arc::new(EventBus::noop())).unwrap();
     let app = router(state);
 
     let req = Request::builder()
       .method("POST")
-      .uri("/v1/responses")
+      .uri("/openai-only/v1/responses")
       .header("content-type", "application/json")
-      .header("x-route-mode", "route")
-      .body(Body::from(Bytes::from_static(br#"{"model":"unknown","input":"hi"}"#)))
+      .header("x-route-mode", "fuzzy")
+      .body(Body::from(Bytes::from_static(
+        br#"{"model":"unavailable-family","input":"hi"}"#,
+      )))
       .unwrap();
     let resp = app.oneshot(req).await.unwrap();
 
@@ -1812,7 +1825,7 @@ mod tests {
     let message = json["error"]["message"].as_str().unwrap();
     assert!(!message.is_empty());
     assert!(message.contains("responses"));
-    assert!(message.contains("unknown"));
+    assert!(message.contains("unavailable-family"));
     assert_eq!(json["error"]["type"], "not_implemented_error");
     assert_eq!(json["error"]["code"], 501);
   }

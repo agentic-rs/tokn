@@ -180,6 +180,7 @@ pub fn project_v2_config(
       logging: legacy.logging.clone().into(),
       outbound: projected_outbound(legacy, &mut warnings)?,
       request_limits: RawRequestLimits::default(),
+      models: Default::default(),
       persistence: RawPersistence {
         enabled: legacy.db.enabled,
         usage_db_path: legacy.db.usage_db_path.clone(),

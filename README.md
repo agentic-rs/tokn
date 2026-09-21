@@ -507,6 +507,14 @@ optional `providers` list restricts configured provider IDs; a fixed provider
 or destination must also be in that list. Existing managed/relay, model,
 operation, credential, and retry semantics are unchanged.
 
+Model discovery is evidence for automatic routing, not a complete list of IDs
+an upstream accepts. Automatic routing first prefers a provider that advertises
+the concrete model, then falls back to an endpoint-compatible provider and lets
+the upstream decide whether the ID exists. Fixed-provider and provider/driver-
+qualified requests go directly to their compatible destination. Provider access
+restrictions and endpoint compatibility still apply. Named model families
+continue choosing discovered members in their configured order.
+
 All API-capable profiles are visible on every `llm_api`
 listener. Named profiles default to `/{profile}/v1`; `default` uses `/v1`.
 `binding.path` replaces this mount, without keeping an implicit alias.
@@ -647,12 +655,33 @@ legacy forward-proxy passthrough and switch routes remain non-retrying.
 Every mounted profile serves `GET <mount>/providers` and `GET <mount>/models`
 alongside its enabled inference endpoints. Discovery is derived from the
 profile's accounts and route restrictions, filtered by the authenticated
-key's provider allowlist. Model discovery queries eligible
-upstream accounts and falls back to the local catalogue. When the selected
+key's provider allowlist. Model discovery combines eligible upstream account
+listings with models.dev metadata; live records take precedence for duplicate
+IDs. When the selected
 profiles use different routing policies, the response reports
 `"route_mode": "mixed"` and lists the individual values in `route_modes`.
 Legacy explicit API bindings retain their listener-scoped discovery behavior;
 new profile mounts do not need separate discovery bindings.
+
+While `serve` is running, model discovery refreshes at startup and periodically
+using the configured outbound transport. Upstream model lists refresh every five
+minutes, and models.dev refreshes daily. Successful downloads update the running
+gateway without a restart. Failed, empty, or timed-out refreshes retain the last
+usable data. Upstream paths belong to each driver: OpenAI uses `/v1/models`,
+while Codex uses its own model endpoint.
+
+```toml
+[service.models]
+enabled = true
+upstream_refresh_seconds = 300
+catalogue_refresh_seconds = 86400
+request_timeout_seconds = 30
+```
+
+These settings require a restart to change. Background refresh stops with the
+server; one-shot commands such as `smoke send` do not start a refresh worker.
+Embedded users can retain the guard returned by `LiveRuntime::start_model_refresh`
+for their server lifetime and call `shutdown` when serving ends.
 
 The remaining legacy-to-v2 behavior differences are intentional and reported
 at startup: per-request route-mode overrides, agent binding metadata,

@@ -169,6 +169,8 @@ fn service_customizations_and_disabled_features_remain_explicit() {
   .unwrap();
   raw.service.outbound = toml::from_str("proxy_url = 'http://127.0.0.1:7890'\nno_proxy = ['localhost']").unwrap();
   raw.service.request_limits.max_wire_bytes = 12345;
+  raw.service.models.enabled = false;
+  raw.service.models.upstream_refresh_seconds = 600;
   raw.service.persistence = toml::from_str(
     r#"
 enabled = false
@@ -196,11 +198,13 @@ prune_after_days = 3
     "body_max_bytes = 12345",
     "write_queue_capacity = 512",
     "max_wire_bytes = 12345",
+    "upstream_refresh_seconds = 600",
   ] {
     assert!(compact.contains(expected), "{expected}");
   }
   assert!(!compact.contains("max_decoded_bytes"));
   assert!(!compact.contains("use_system_proxy = false"));
+  assert!(!compact.contains("catalogue_refresh_seconds"));
 }
 
 #[test]

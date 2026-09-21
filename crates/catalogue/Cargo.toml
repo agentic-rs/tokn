@@ -15,4 +15,9 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu = { workspace = true }
+tempfile = "3"
 tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokn-mock-server = { workspace = true }

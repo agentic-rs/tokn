@@ -340,7 +340,9 @@ pub struct SentResponse {
   pub status: u16,
   pub headers: HeaderMap,
   /// Whether the request *asked* for SSE streaming (mirrors `Extracted.stream`).
-  /// ConvertResponse uses this to pick the buffered vs. stream branch.
+  /// ConvertResponse normally uses this to pick the buffered vs. stream branch.
+  /// Providers that require SSE upstream may still return a buffered response
+  /// to a caller when this is `false`.
   pub stream: bool,
   /// Endpoint the upstream provider was actually called with — may differ
   /// from the inbound `request_endpoint` when a request-shape translation

@@ -2,6 +2,7 @@ use super::super::error::{ConvertError, Result};
 use super::super::ir::{IrDelta, IrResponse};
 use super::event::SseEvent;
 use crate::provider::Endpoint;
+use bytes::Bytes;
 use eventsource_stream::Eventsource;
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -75,6 +76,12 @@ impl SseAccumulator {
 
   pub fn finish(self) -> IrResponse {
     let mut response = self.response;
+    if response.id.is_none() {
+      response.id = self.responses.response_id.clone();
+    }
+    if response.model.is_none() {
+      response.model = self.responses.model.clone();
+    }
     if matches!(self.endpoint, Endpoint::Responses)
       && response.finish_reason.is_none()
       && self.responses.has_tool_call()
@@ -339,6 +346,29 @@ impl ResponsesState {
 pub async fn accumulate(endpoint: Endpoint, resp: reqwest::Response) -> Result<IrResponse> {
   let mut acc = SseAccumulator::new(endpoint);
   let mut stream = resp.bytes_stream().eventsource();
+  while let Some(item) = stream.next().await {
+    let ev = item.map_err(|e| ConvertError::sse(e.to_string()))?;
+    let event = SseEvent::from(ev);
+    if event.is_done() {
+      break;
+    }
+    let value = event
+      .json
+      .as_ref()
+      .ok_or_else(|| ConvertError::sse("expected JSON SSE payload"))?;
+    acc.push_value(value);
+  }
+  Ok(acc.finish())
+}
+
+/// Accumulate a complete SSE body into the endpoint-neutral response IR.
+///
+/// This is useful when an upstream requires streaming but the downstream
+/// caller requested a buffered response.
+pub async fn accumulate_bytes(endpoint: Endpoint, body: Bytes) -> Result<IrResponse> {
+  let mut acc = SseAccumulator::new(endpoint);
+  let source = futures_util::stream::once(async move { Ok::<Bytes, std::io::Error>(body) });
+  let mut stream = Box::pin(source.eventsource());
   while let Some(item) = stream.next().await {
     let ev = item.map_err(|e| ConvertError::sse(e.to_string()))?;
     let event = SseEvent::from(ev);

@@ -281,7 +281,8 @@ fn compile_shared_publication(
         source_model_match: ModelReferenceMatch::Any,
         target_provider_id: SHARED_PROVIDER_ID.to_string(),
         target_model_prefix: (mode == RouteMode::Exact).then(|| route.gateway_provider_id.clone()),
-        allow_missing_model: catalogue_allows_unknown_models(catalogues, &route.gateway_provider_id),
+        allow_missing_model: mode == RouteMode::Exact
+          || catalogue_allows_unknown_models(catalogues, &route.gateway_provider_id),
       },
     )?;
   }
@@ -319,7 +320,7 @@ fn compile_shared_publication(
           target_provider_id: SHARED_PROVIDER_ID.to_string(),
           target_model_prefix: (mode == RouteMode::Exact).then(|| provider_id.to_string()),
           allow_missing_model: current_provider_ids.contains(provider_id.as_str())
-            && catalogue_allows_unknown_models(catalogues, provider_id),
+            && (mode == RouteMode::Exact || catalogue_allows_unknown_models(catalogues, provider_id)),
         },
       )?;
     }
@@ -562,7 +563,9 @@ fn add_shared_prefix_rules(
         source_model_match: ModelReferenceMatch::Prefix(provider_id.to_string()),
         target_provider_id: target_provider_id.to_string(),
         target_model_prefix: retain_prefix.then(|| provider_id.to_string()),
-        allow_missing_model: catalogue_allows_unknown_models(catalogues, provider_id),
+        // A retained qualifier identifies the upstream independently of the
+        // advertised model list. Removing it resumes discovery-based routing.
+        allow_missing_model: retain_prefix || catalogue_allows_unknown_models(catalogues, provider_id),
       },
     )?;
   }
@@ -1440,7 +1443,7 @@ mod tests {
   }
 
   #[test]
-  fn raw_to_normalized_relink_rejects_unknown_models_for_static_providers() {
+  fn raw_to_normalized_relink_accepts_unlisted_models_only_for_retained_exact_providers() {
     let accounts = [account("openai", ID_OPENAI)];
     let routes = [route(ID_OPENAI, ID_OPENAI, "opencode")];
 
@@ -1460,9 +1463,11 @@ mod tests {
         let retained = plan
           .model_reference_rules
           .iter()
-          .find(|rule| rule.source_provider_id == "tokn-router-openai")
+          .find(|rule| {
+            rule.source_provider_id == "tokn-router-openai" && rule.source_model_match == ModelReferenceMatch::Any
+          })
           .expect("retained provider has a transition rule");
-        assert!(!retained.allow_missing_model);
+        assert_eq!(retained.allow_missing_model, mode == RouteMode::Exact);
         assert_eq!(
           retained.target_model_prefix.as_deref(),
           (mode == RouteMode::Exact).then_some(ID_OPENAI)
@@ -1471,7 +1476,9 @@ mod tests {
         let removed = plan
           .model_reference_rules
           .iter()
-          .find(|rule| rule.source_provider_id == "tokn-router-deepseek")
+          .find(|rule| {
+            rule.source_provider_id == "tokn-router-deepseek" && rule.source_model_match == ModelReferenceMatch::Any
+          })
           .expect("removed provider has a rejecting transition rule");
         assert!(!removed.allow_missing_model);
         assert_eq!(

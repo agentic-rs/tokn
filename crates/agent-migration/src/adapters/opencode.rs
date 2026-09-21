@@ -1293,6 +1293,67 @@ mod tests {
   }
 
   #[test]
+  fn compiled_exact_routes_preserve_unlisted_models_only_with_a_retained_provider() {
+    let provider_id = tokn_core::provider::ID_OPENAI;
+    let routes = [route(provider_id, provider_id, "", BASE_URL)];
+    for (previous_mode, selected) in [
+      (RouteMode::Exact, "openai/organization/custom-model"),
+      (RouteMode::Exact, "tokn-router/openai/organization/custom-model"),
+      (RouteMode::Switch, "tokn-router-openai/organization/custom-model"),
+      (RouteMode::Passthrough, "tokn-router-openai/organization/custom-model"),
+    ] {
+      let plan = compile_opencode_publications(
+        RouteMode::Exact,
+        Some(previous_mode),
+        Some(&[provider_id.to_string(), tokn_core::provider::ID_DEEPSEEK.to_string()]),
+        BASE_URL,
+        &[],
+        &routes,
+        Endpoint::ChatCompletions,
+      )
+      .unwrap();
+      let (_, json) = rewrite_transition(
+        &format!(r#"{{"model": "{selected}"}}"#),
+        Some(previous_mode),
+        RouteMode::Exact,
+        &plan.publications,
+        &plan.model_reference_rules,
+      )
+      .unwrap();
+      assert_eq!(json["model"], "tokn-router/openai/organization/custom-model");
+      assert_eq!(
+        json["provider"][SHARED_PROVIDER_ID]["models"]["openai/organization/custom-model"]["name"],
+        "organization/custom-model"
+      );
+
+      let removed = if previous_mode.is_verbatim() {
+        "tokn-router-deepseek/organization/custom-model"
+      } else {
+        "tokn-router/deepseek/organization/custom-model"
+      };
+      assert!(rewrite_transition(
+        &format!(r#"{{"model": "{removed}"}}"#),
+        Some(previous_mode),
+        RouteMode::Exact,
+        &plan.publications,
+        &plan.model_reference_rules,
+      )
+      .is_err());
+
+      for known_non_generation in ["text-embedding-3-large", "gpt-image-1"] {
+        assert!(rewrite_transition(
+          &format!(r#"{{"model": "openai/{known_non_generation}"}}"#),
+          Some(previous_mode),
+          RouteMode::Exact,
+          &plan.publications,
+          &plan.model_reference_rules,
+        )
+        .is_err());
+      }
+    }
+  }
+
+  #[test]
   fn compiled_catalogue_rejects_known_embedding_and_image_models() {
     let routes = [route(
       tokn_core::provider::ID_OPENAI,

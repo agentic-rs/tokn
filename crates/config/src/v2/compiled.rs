@@ -33,6 +33,7 @@ pub struct ServicePlan {
   outbound: OutboundPlan,
   request_limits: RequestLimitsPlan,
   persistence: PersistencePlan,
+  models: super::ModelRefreshPlan,
 }
 
 impl ServicePlan {
@@ -41,12 +42,14 @@ impl ServicePlan {
     outbound: OutboundPlan,
     request_limits: RequestLimitsPlan,
     persistence: PersistencePlan,
+    models: super::ModelRefreshPlan,
   ) -> Self {
     Self {
       logging,
       outbound,
       request_limits,
       persistence,
+      models,
     }
   }
 
@@ -64,6 +67,10 @@ impl ServicePlan {
 
   pub const fn persistence(&self) -> &PersistencePlan {
     &self.persistence
+  }
+
+  pub const fn models(&self) -> super::ModelRefreshPlan {
+    self.models
   }
 }
 

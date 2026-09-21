@@ -10,6 +10,7 @@ mod cors;
 mod defaults;
 mod error;
 mod logging;
+mod models;
 mod raw;
 
 use std::path::Path;
@@ -22,6 +23,7 @@ pub use cors::RawCors;
 pub use defaults::RawDefaultPolicy;
 pub use error::{CompileError, Error, Result};
 pub use logging::RawLogging;
+pub use models::{ModelRefreshPlan, RawModelRefresh};
 pub use raw::{
   RawAccountPool, RawBinding, RawBindingAction, RawClientAuth, RawConfig, RawConnectAction, RawConnectRule,
   RawListener, RawModelSelector, RawOperationPolicy, RawOutbound, RawPersistence, RawPoolStrategy, RawProfile,

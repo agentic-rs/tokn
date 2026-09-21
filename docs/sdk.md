@@ -86,9 +86,12 @@ Unknown effort support does not reject a request; a known list rejects values
 outside that list, including custom strings. Raw endpoint clients preserve
 provider wire controls without this SDK validation.
 
-The bundled catalogue includes effort metadata. `tokn-router update` refreshes
-the runtime catalogue cache; restart to load the updated data. Upstream metadata
-is cached when model discovery successfully fetches the provider's model list.
+The bundled catalogue includes effort metadata. The serving gateway refreshes
+upstream discovery every five minutes and models.dev daily by default, updating
+model IDs and metadata in memory while retaining the last successful data on
+refresh failure. `tokn-router update` also refreshes the disk cache for subsequent
+processes. Embedded servers can opt into the same lifecycle with
+`LiveRuntime::start_model_refresh` and keep its guard until shutdown.
 
 DeepSeek V4 Flash advertises `low`, `high`, and `max`; V4 Pro advertises `high`
 and `max`. Typed requests follow those model-specific lists. DeepSeek thinking

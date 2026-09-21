@@ -5,7 +5,7 @@ pub mod pipeline;
 pub mod responses_emit;
 pub mod translate;
 
-pub use accumulate::{accumulate, SseAccumulator};
+pub use accumulate::{accumulate, accumulate_bytes, SseAccumulator};
 pub use codec::{encode_done, encode_sse};
 pub use event::SseEvent;
 pub use pipeline::{
