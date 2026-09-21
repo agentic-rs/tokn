@@ -93,6 +93,11 @@ pub(super) fn endpoints_for_model(
   descriptor: &'static tokn_auth::descriptor::ProviderDescriptor,
   model_id: &str,
 ) -> Vec<Endpoint> {
+  if descriptor.id == tokn_core::provider::ID_OPENCODE_GO {
+    if let Some(endpoint) = tokn_catalogue::endpoint_for_model(descriptor.id, model_id) {
+      return vec![endpoint];
+    }
+  }
   let all: Vec<Endpoint> = descriptor.endpoints.iter().map(|e| e.endpoint).collect();
   let Some(rules) = descriptor.model_endpoint_rules else {
     return all;

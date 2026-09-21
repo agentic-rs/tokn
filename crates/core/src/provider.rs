@@ -20,6 +20,7 @@ pub const ID_GITHUB_COPILOT: &str = "github-copilot";
 pub const ID_DEEPSEEK: &str = "deepseek";
 pub const ID_LLAMA_CPP: &str = "llama-cpp";
 pub const ID_OPENAI: &str = "openai";
+pub const ID_OPENCODE_GO: &str = "opencode-go";
 pub const ID_CODEX: &str = "codex";
 pub const ID_ZAI_CODING_PLAN: &str = "zai-coding-plan";
 pub const ID_ZAI: &str = "zai";
@@ -55,6 +56,10 @@ pub const OFFICIAL_PROVIDER_PRESETS: &[OfficialProviderPreset] = &[
   OfficialProviderPreset {
     id: ID_OPENAI,
     driver: ID_OPENAI,
+  },
+  OfficialProviderPreset {
+    id: ID_OPENCODE_GO,
+    driver: ID_OPENCODE_GO,
   },
   OfficialProviderPreset {
     id: ID_ZAI,

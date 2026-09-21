@@ -29,6 +29,7 @@ members = [
   "crates/provider-deepseek",
   "crates/provider-llama-cpp",
   "crates/provider-openai",
+  "crates/provider-opencode",
   "crates/provider-zai",
   "bindings/python",
   "bindings/typescript",
@@ -73,6 +74,7 @@ tokn-provider-copilot = { version = "0.2.2", path = "crates/provider-copilot" }
 tokn-provider-deepseek = { version = "0.2.2", path = "crates/provider-deepseek" }
 tokn-provider-llama-cpp = { version = "0.2.2", path = "crates/provider-llama-cpp" }
 tokn-provider-openai = { version = "0.2.2", path = "crates/provider-openai" }
+tokn-provider-opencode = { version = "0.2.2", path = "crates/provider-opencode" }
 tokn-provider-zai = { version = "0.2.2", path = "crates/provider-zai" }
 
 anyhow = "1"

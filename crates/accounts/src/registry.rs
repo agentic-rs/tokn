@@ -178,6 +178,7 @@ fn builtin_descriptors() -> &'static [&'static ProviderDescriptor] {
     &tokn_provider_llama_cpp::DESCRIPTOR,
     &tokn_provider_openai::DESCRIPTOR_OPENAI,
     &tokn_provider_openai::DESCRIPTOR_CODEX,
+    &tokn_provider_opencode::DESCRIPTOR,
     &tokn_provider_zai::DESCRIPTOR_ZAI,
     &tokn_provider_zai::DESCRIPTOR_ZAI_CODING_PLAN,
     &tokn_provider_zai::DESCRIPTOR_ZHIPUAI,
@@ -248,8 +249,8 @@ mod tests {
   use super::*;
   use tokn_auth::descriptor::RewriteTarget;
   use tokn_core::provider::{
-    Endpoint, ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_LLAMA_CPP, ID_OPENAI, ID_ZAI, ID_ZAI_CODING_PLAN,
-    ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN,
+    Endpoint, ID_CODEX, ID_DEEPSEEK, ID_GITHUB_COPILOT, ID_LLAMA_CPP, ID_OPENAI, ID_OPENCODE_GO, ID_ZAI,
+    ID_ZAI_CODING_PLAN, ID_ZHIPUAI, ID_ZHIPUAI_CODING_PLAN,
   };
 
   fn llama_account(id: &str, base_url: Option<&str>) -> Arc<AccountConfig> {
@@ -283,6 +284,10 @@ mod tests {
       Some(ID_LLAMA_CPP)
     );
     assert_eq!(registry.provider_id_for_url("api.openai.com"), Some(ID_OPENAI));
+    assert_eq!(
+      registry.provider_id_for_url("https://opencode.ai/zen/go/v1/models"),
+      Some(ID_OPENCODE_GO)
+    );
     assert_eq!(
       registry.provider_id_for_url("chatgpt.com/backend-api/codex/responses"),
       Some(ID_CODEX)
@@ -379,6 +384,14 @@ mod tests {
     assert_eq!(
       registry.rewrite_target("api.deepseek.com", "POST", "/anthropic/v1/messages"),
       Some(RewriteTarget::Endpoint(Endpoint::Messages))
+    );
+    assert_eq!(
+      registry.rewrite_target("opencode.ai", "POST", "/zen/go/v1/responses"),
+      Some(RewriteTarget::Endpoint(Endpoint::Responses))
+    );
+    assert_eq!(
+      registry.rewrite_target("opencode.ai", "GET", "/zen/go/v1/models"),
+      Some(RewriteTarget::Path("/v1/models"))
     );
     // Codex non-canonical inbound path.
     assert_eq!(

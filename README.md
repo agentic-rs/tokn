@@ -5,7 +5,8 @@ Local, account-aware LLM gateway for OpenAI-compatible clients.
 `tokn` runs a local HTTP API and optional MITM forward proxy, routes requests
 across configured provider accounts, and records local usage/session/request
 history. GitHub Copilot is still the default provider, but the gateway now also
-supports OpenAI, ChatGPT Codex, DeepSeek, llama.cpp, Z.ai, and Zhipu BigModel.
+supports OpenAI, ChatGPT Codex, OpenCode Go, DeepSeek, llama.cpp, Z.ai, and
+Zhipu BigModel.
 
 The shipped Cargo package is `tokn-gateway-cli` and the binary is
 `tokn-gateway`.
@@ -339,6 +340,7 @@ credential kind, for example `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
 | `github-copilot` | GitHub OAuth refresh token | chat completions |
 | `openai` | API key | chat completions, responses |
 | `codex` | OpenAI refresh token or API key | responses |
+| `opencode-go` | API key | chat completions, responses, messages (model-dependent) |
 | `deepseek` | API key | chat completions, messages |
 | `llama-cpp` | API key | chat completions |
 | `zai`, `zai-coding-plan` | API key | chat completions |

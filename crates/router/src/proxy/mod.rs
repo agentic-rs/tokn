@@ -55,10 +55,11 @@ pub(crate) const INTERCEPT_HOSTS: &[&str] = &[
   "chatgpt.com",
   // "ab.chatgpt.com",
   "api.deepseek.com",
+  "opencode.ai",
 ];
 
 /// Hosts the proxy intercepts even though no provider claims them.
-pub(crate) const EXTRA_INTERCEPT_HOSTS: &[&str] = &["openrouter.ai", "api.anthropic.com", "opencode.ai"];
+pub(crate) const EXTRA_INTERCEPT_HOSTS: &[&str] = &["openrouter.ai", "api.anthropic.com"];
 
 #[derive(Clone)]
 pub struct ProxyOptions {

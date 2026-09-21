@@ -55,6 +55,7 @@ key!(X_INITIATOR, "X-Initiator", "x-initiator");
 key!(X_PROJECT_CWD, "X-Project-Cwd", "x-project-cwd");
 key!(X_INTERACTION_ID, "X-Interaction-Id", "x-interaction-id");
 key!(X_BEHAVE_AS, "X-Behave-As", "x-behave-as");
+key!(X_OPENCODE_SESSION, "X-OpenCode-Session", "x-opencode-session");
 
 // Codex CLI native (lowercase, no x- prefix in real captures)
 key!(ORIGINATOR, "originator", "originator");
@@ -163,6 +164,7 @@ mod tests {
       X_PROJECT_CWD,
       X_INTERACTION_ID,
       X_BEHAVE_AS,
+      X_OPENCODE_SESSION,
       ORIGINATOR,
       VERSION,
       SESSION_ID_LOWER,
