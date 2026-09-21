@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokn_core::account::AccountConfig;
 use tokn_core::provider::{match_endpoint_rule, ProviderTarget};
-use tokn_core::upstream_url::CleartextHttpPolicy;
+use tokn_core::upstream_url::{CanonicalUpstreamUrl, CleartextHttpPolicy};
 use tokn_headers::keys::{
   ACCEPT, ANTHROPIC_VERSION, AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT, X_OPENCODE_SESSION,
 };
@@ -46,7 +46,7 @@ impl OpenCodeGoProvider {
 
   pub fn from_account(account: Arc<AccountConfig>) -> Result<Self> {
     let base_url = account.base_url.as_deref().unwrap_or(crate::OPENCODE_GO_BASE_URL);
-    let target = ProviderTarget::parse(base_url, CleartextHttpPolicy::Allow).map_err(|source| {
+    let target = ProviderTarget::parse(base_url, CleartextHttpPolicy::LoopbackOnly).map_err(|source| {
       error::Error::InvalidUpstreamUrl {
         account: account.id.clone(),
         source,
@@ -57,6 +57,12 @@ impl OpenCodeGoProvider {
 
   pub fn from_account_at(account: Arc<AccountConfig>, target: ProviderTarget) -> Result<Self> {
     Self::validate_account(&account)?;
+    CanonicalUpstreamUrl::parse(target.base_url().as_str(), CleartextHttpPolicy::LoopbackOnly).map_err(|source| {
+      error::Error::InvalidUpstreamUrl {
+        account: account.id.clone(),
+        source,
+      }
+    })?;
     let api_key = account.api_key.clone().expect("validated api_key");
     let upstream_url = target.base_url().to_string();
     let model_cache = target.model_cache().clone();
@@ -300,6 +306,22 @@ mod tests {
   }
 
   #[test]
+  fn rejects_cleartext_non_loopback_targets() {
+    let mut configured = account(Some("sk-test"));
+    configured.base_url = Some("http://api.example.com/zen/go/v1".into());
+    let error = OpenCodeGoProvider::from_account(Arc::new(configured.clone()))
+      .err()
+      .unwrap();
+    assert!(error.to_string().contains("non-loopback HTTP"));
+
+    let prebuilt = ProviderTarget::parse(configured.base_url.as_deref().unwrap(), CleartextHttpPolicy::Allow).unwrap();
+    let error = OpenCodeGoProvider::from_account_at(Arc::new(configured), prebuilt)
+      .err()
+      .unwrap();
+    assert!(error.to_string().contains("non-loopback HTTP"));
+  }
+
+  #[test]
   fn fallback_endpoint_rules_cover_each_protocol() {
     let provider = OpenCodeGoProvider::from_account(Arc::new(account(Some("sk-test")))).unwrap();
     assert!(provider.has_endpoint("gpt-5.6-luna", Endpoint::Responses));
@@ -308,6 +330,39 @@ mod tests {
     assert!(!provider.has_endpoint("qwen3.7-max", Endpoint::ChatCompletions));
     assert!(provider.has_endpoint("glm-5.3", Endpoint::ChatCompletions));
     assert!(!provider.has_endpoint("gpt-5.6-luna", Endpoint::ChatCompletions));
+  }
+
+  #[test]
+  fn request_id_is_used_as_the_session_fallback() {
+    let provider = OpenCodeGoProvider::from_account(Arc::new(account(Some("sk-test")))).unwrap();
+    let mut headers = HeaderMap::new();
+    let body = Value::Null;
+    let inbound = HeaderMap::new();
+    let vars = TemplateVars {
+      request_id: Some("request-42".into()),
+      ..Default::default()
+    };
+    provider
+      .patch_headers(
+        &mut headers,
+        &HeaderPatchCtx {
+          request_kind: ProviderRequestKind::Operation(Endpoint::Responses),
+          body: &body,
+          bearer_token: None,
+          content_encoding: None,
+          stream: false,
+          initiator: "user",
+          inbound_headers: &inbound,
+          vars: &vars,
+          agent_id: &tokn_core::AgentId::Opencode,
+        },
+      )
+      .unwrap();
+
+    assert_eq!(
+      headers.get(&X_OPENCODE_SESSION).map(HeaderValue::as_str),
+      Some("request-42")
+    );
   }
 
   #[tokio::test]

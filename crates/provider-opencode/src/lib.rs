@@ -95,7 +95,7 @@ pub static DESCRIPTOR: ProviderDescriptor = ProviderDescriptor {
 };
 
 pub fn matches_url(host: &str, path: &str, _id: &'static str) -> bool {
-  host == "opencode.ai" && (path.is_empty() || path.starts_with("/zen/go/v1"))
+  host == "opencode.ai" && (path.is_empty() || path == "/zen/go/v1" || path.starts_with("/zen/go/v1/"))
 }
 
 pub fn validate(account: &tokn_core::account::AccountConfig) -> Result<()> {
@@ -107,4 +107,23 @@ pub fn build(
   target: ProviderTarget,
 ) -> Result<Arc<dyn tokn_core::provider::Provider>> {
   Ok(Arc::new(OpenCodeGoProvider::from_account_at(account, target)?))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn matches_only_the_opencode_go_path_prefix() {
+    assert!(matches_url("opencode.ai", "", ID_OPENCODE_GO));
+    assert!(matches_url("opencode.ai", "/zen/go/v1", ID_OPENCODE_GO));
+    assert!(matches_url(
+      "opencode.ai",
+      "/zen/go/v1/chat/completions",
+      ID_OPENCODE_GO
+    ));
+    assert!(!matches_url("opencode.ai", "/zen/go/v10", ID_OPENCODE_GO));
+    assert!(!matches_url("opencode.ai", "/zen/go/v1-other", ID_OPENCODE_GO));
+    assert!(!matches_url("example.com", "/zen/go/v1", ID_OPENCODE_GO));
+  }
 }

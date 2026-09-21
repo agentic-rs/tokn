@@ -3,6 +3,7 @@ use serde::Deserialize;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokn_auth::{AuthError, QuotaSnapshot, Result, UsageBucket};
 use tokn_core::account::AccountConfig;
+use tokn_core::upstream_url::{CanonicalUpstreamUrl, CleartextHttpPolicy};
 
 #[derive(Deserialize)]
 struct UsageResponse {
@@ -88,14 +89,11 @@ async fn request(client: &Client, account: &AccountConfig) -> Result<serde_json:
 }
 
 fn usage_url(base: &str) -> Result<Url> {
-  let mut url = Url::parse(base).map_err(|error| AuthError::Other(format!("invalid OpenCode Go base URL: {error}")))?;
-  let mut path = url
-    .path_segments_mut()
-    .map_err(|()| AuthError::Other("OpenCode Go base URL cannot contain path segments".into()))?;
-  path.pop_if_empty();
-  path.push("usage");
-  drop(path);
-  Ok(url)
+  let base = CanonicalUpstreamUrl::parse(base, CleartextHttpPolicy::LoopbackOnly)
+    .map_err(|error| AuthError::Other(format!("invalid OpenCode Go base URL: {error}")))?;
+  base
+    .operation_url(["usage"])
+    .map_err(|error| AuthError::Other(format!("invalid OpenCode Go usage URL: {error}")))
 }
 
 fn usage_bucket(label: &str, window: UsageWindow) -> Result<UsageBucket> {
@@ -195,5 +193,55 @@ mod tests {
       .unwrap_err();
 
     assert!(matches!(error, AuthError::Upstream(message) if message.contains("HTTP 401")));
+  }
+
+  #[tokio::test]
+  async fn verifies_credentials_through_authenticated_usage_endpoint() {
+    let server = server().await;
+    verify(&client(), &account(server.base_url(), "sk-test")).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn rejects_missing_credentials_before_network_access() {
+    let error = fetch(&client(), &account("https://opencode.ai/zen/go/v1", ""))
+      .await
+      .unwrap_err();
+    assert!(matches!(error, AuthError::MissingCredential { field: "api_key", .. }));
+  }
+
+  #[test]
+  fn usage_url_requires_https_or_a_literal_loopback() {
+    assert_eq!(
+      usage_url("https://opencode.ai/zen/go/v1").unwrap().as_str(),
+      "https://opencode.ai/zen/go/v1/usage"
+    );
+    assert_eq!(
+      usage_url("http://127.0.0.1:8080/v1").unwrap().as_str(),
+      "http://127.0.0.1:8080/v1/usage"
+    );
+    assert!(usage_url("http://opencode.ai/zen/go/v1").is_err());
+  }
+
+  #[test]
+  fn rejects_invalid_usage_window_values() {
+    let invalid_percent = usage_bucket(
+      "weekly usage",
+      UsageWindow {
+        percent: 101.0,
+        resets_at: "2030-03-18T00:00:00Z".into(),
+      },
+    )
+    .unwrap_err();
+    assert!(matches!(invalid_percent, AuthError::Decode(message) if message.contains("percentage")));
+
+    let invalid_reset = usage_bucket(
+      "weekly usage",
+      UsageWindow {
+        percent: 25.0,
+        resets_at: "tomorrow".into(),
+      },
+    )
+    .unwrap_err();
+    assert!(matches!(invalid_reset, AuthError::Decode(message) if message.contains("reset timestamp")));
   }
 }
