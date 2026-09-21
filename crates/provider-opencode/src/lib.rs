@@ -18,9 +18,9 @@ pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go/v1";
 
 pub static DEFAULT_ENDPOINTS: &[Endpoint] = &[Endpoint::ChatCompletions, Endpoint::Responses, Endpoint::Messages];
 
-/// Startup fallback for models documented by OpenCode Go. Runtime routing
-/// prefers the current models.dev adapter metadata, which is refreshed by the
-/// gateway independently of the live `/models` identity list.
+/// Authoritative endpoint bindings for model families documented by OpenCode
+/// Go. Runtime routing consults refreshed models.dev adapter metadata only for
+/// models that do not match one of these rules.
 pub static MODEL_ENDPOINT_RULES: &[EndpointRule] = &[
   EndpointRule {
     pattern: "gpt-*",

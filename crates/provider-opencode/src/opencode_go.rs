@@ -127,10 +127,13 @@ impl Provider for OpenCodeGoProvider {
   }
 
   fn has_endpoint(&self, model: &str, endpoint: Endpoint) -> bool {
+    if let Some(allowed) = match_endpoint_rule(crate::MODEL_ENDPOINT_RULES, model, endpoint) {
+      return allowed;
+    }
     if let Some(expected) = crate::catalogue::endpoint_for_model(ID_OPENCODE_GO, model) {
       return endpoint == expected;
     }
-    match_endpoint_rule(crate::MODEL_ENDPOINT_RULES, model, endpoint).unwrap_or(endpoint == Endpoint::ChatCompletions)
+    endpoint == Endpoint::ChatCompletions
   }
 
   fn inject_credentials(&self, headers: &mut HeaderMap, _ctx: &HeaderPatchCtx<'_>) -> Result<()> {
@@ -301,6 +304,8 @@ mod tests {
     let provider = OpenCodeGoProvider::from_account(Arc::new(account(Some("sk-test")))).unwrap();
     assert!(provider.has_endpoint("gpt-5.6-luna", Endpoint::Responses));
     assert!(provider.has_endpoint("minimax-m3", Endpoint::Messages));
+    assert!(provider.has_endpoint("qwen3.7-max", Endpoint::Messages));
+    assert!(!provider.has_endpoint("qwen3.7-max", Endpoint::ChatCompletions));
     assert!(provider.has_endpoint("glm-5.3", Endpoint::ChatCompletions));
     assert!(!provider.has_endpoint("gpt-5.6-luna", Endpoint::ChatCompletions));
   }
