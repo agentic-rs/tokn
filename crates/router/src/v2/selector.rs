@@ -114,11 +114,15 @@ impl V2AccountSelector {
               allowed_matching_binding_exists |= provider_allowed(binding.provider_id().as_str(), allowed.as_ref());
             }
           }
-          match self.state.pool.acquire(extracted.session_id.as_deref(), |binding| {
-            self.route().allows_provider(binding.provider_id())
-              && managed_binding_matches(route, &candidate, evidence, operation, binding)
-              && provider_allowed(binding.provider_id().as_str(), allowed.as_ref())
-          }) {
+          match self.state.pool.acquire_ranked(
+            extracted.session_id.as_deref(),
+            |binding| {
+              self.route().allows_provider(binding.provider_id())
+                && managed_binding_matches(route, &candidate, evidence, operation, binding)
+                && provider_allowed(binding.provider_id().as_str(), allowed.as_ref())
+            },
+            |binding| model_provider_score(route, &candidate, binding),
+          ) {
             PoolAcquire::Selected(binding) => {
               return Ok(selected(binding, operation, candidate.model.clone()));
             }
@@ -578,6 +582,13 @@ fn managed_binding_matches(
       DiscoveryEvidence::Preferred => unreachable!("preferred discovery expands into concrete matching passes"),
       DiscoveryEvidence::Ignored => binding.driver().has_endpoint(candidate.model.as_str(), operation),
     }
+}
+
+fn model_provider_score(route: &ManagedRoute, candidate: &ModelCandidate, binding: &ProviderBinding) -> i32 {
+  if matches!(route.target().model(), ModelSelector::Qualified { .. }) {
+    return 0;
+  }
+  route.provider_score(candidate.model.as_str(), binding.provider_id())
 }
 
 fn managed_unavailable_outcome(

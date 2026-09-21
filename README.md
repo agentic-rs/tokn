@@ -209,6 +209,10 @@ strategy = "round_robin"
 failure_cooldown_secs = 60
 session_ttl_secs = 18000
 
+# Sparse per-model provider preferences. Higher scores are preferred.
+[model_scores."gpt-5.6-luna"]
+opencode-go = 100
+
 [db]
 enabled = true
 record_sessions = true
@@ -246,6 +250,13 @@ profile inherits the default account set. Profile `model_families`, when
 present, replaces default model families for that profile. API `passthrough`
 and `switch` policies require `default_provider_id` so the router can target a
 deterministic provider while preserving request bytes.
+
+`model_scores` ranks providers for a specific model without requiring a full
+provider list. Unlisted providers have score `0`; providers with the same score
+continue to use round-robin selection. Active accounts are considered before
+fallback accounts, and an existing healthy session affinity remains sticky.
+Cooling providers are skipped so a lower-scored eligible provider can serve the
+request. Provider-qualified requests bypass this ranking.
 
 ## Database
 
@@ -496,10 +507,13 @@ binding = { path = "/my/api" }
 
 [routes.coding]
 kind = "managed"
-providers = ["openai", "deepseek"]
+providers = ["openai", "deepseek", "opencode-go"]
 provider = { kind = "any" }
 model = { kind = "capability" }
 operation = "translate_compatible"
+
+[model_scores."gpt-5.6-luna"]
+opencode-go = 100
 ```
 
 Both profiles reuse the route while keeping independent round-robin,
@@ -508,6 +522,14 @@ profile uses the normal pool defaults and all eligible accounts. A route's
 optional `providers` list restricts configured provider IDs; a fixed provider
 or destination must also be in that list. Existing managed/relay, model,
 operation, credential, and retry semantics are unchanged.
+
+Top-level `model_scores` supplies sparse per-model provider preferences to
+managed routes. Higher scores are selected first and omitted providers default
+to `0`, so adding one preference does not require enumerating every eligible
+provider. Equal-scored healthy accounts retain round-robin behavior. Account
+tier, session affinity, cooldown, route provider restrictions, and endpoint
+compatibility still apply; provider-qualified requests do not use these
+scores.
 
 Model discovery is evidence for automatic routing, not a complete list of IDs
 an upstream accepts. Automatic routing first prefers a provider that advertises

@@ -34,7 +34,8 @@ pub(super) fn compile_resources(raw: &RawConfig) -> Result<CompiledResources, Co
   let providers = compile_providers(&raw.providers)?;
   let mut account_pools = BTreeMap::new();
   let retry_policies = compile_retry_policies(&raw.retry_policies)?;
-  let routes = compile_routes(&raw.routes, &providers, &retry_policies)?;
+  let model_scores = compile_model_scores(&raw.model_scores, &providers)?;
+  let routes = compile_routes(&raw.routes, &providers, &retry_policies, &model_scores)?;
   let profiles = profiles::compile_profiles(raw, &routes, &providers, &mut account_pools)?;
 
   Ok(CompiledResources {
@@ -291,6 +292,7 @@ fn compile_routes(
   raw_routes: &BTreeMap<String, RawRoute>,
   providers: &BTreeMap<ProviderId, ProviderPlan>,
   retry_policies: &BTreeMap<RetryPolicyId, RetryPolicyPlan>,
+  model_scores: &BTreeMap<String, BTreeMap<ProviderId, i32>>,
 ) -> Result<BTreeMap<RouteId, RoutePlan>, CompileError> {
   raw_routes
     .iter()
@@ -317,12 +319,10 @@ fn compile_routes(
             RawOperationPolicy::TranslateCompatible => OperationPolicy::TranslateCompatible,
           };
           let retry = compile_managed_retry(raw_id, retry, retry_policies)?;
-          RoutePlan::Managed(ManagedRoute::new(
-            ManagedTarget::new(provider_selector, model),
-            operation,
-            None,
-            retry,
-          ))
+          RoutePlan::Managed(
+            ManagedRoute::new(ManagedTarget::new(provider_selector, model), operation, None, retry)
+              .with_model_scores(model_scores.clone()),
+          )
         }
         RawRoute::Relay {
           providers: _,
@@ -371,6 +371,29 @@ fn compile_routes(
       Ok((id, plan))
     })
     .collect()
+}
+
+fn compile_model_scores(
+  raw_scores: &BTreeMap<String, BTreeMap<String, i32>>,
+  providers: &BTreeMap<ProviderId, ProviderPlan>,
+) -> Result<BTreeMap<String, BTreeMap<ProviderId, i32>>, CompileError> {
+  let mut scores = BTreeMap::new();
+  for (model, raw_providers) in raw_scores {
+    validate_model_name(format!("model_scores.{model}"), model)?;
+    if raw_providers.is_empty() {
+      return Err(invalid_value(
+        format!("model_scores.{model}"),
+        "provider score maps must not be empty",
+      ));
+    }
+    let mut provider_scores = BTreeMap::new();
+    for (provider, score) in raw_providers {
+      let provider_id = resolve_provider("model score", model, "provider", provider, providers)?;
+      provider_scores.insert(provider_id, *score);
+    }
+    scores.insert(model.clone(), provider_scores);
+  }
+  Ok(scores)
 }
 
 fn compile_managed_retry(

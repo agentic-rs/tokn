@@ -300,6 +300,10 @@ pub struct Config {
   pub profiles: BTreeMap<String, ProfileConfig>,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
+  /// Sparse provider scores keyed by concrete model ID. Higher scores are
+  /// preferred; providers omitted from a model retain the neutral score zero.
+  #[serde(default)]
+  pub model_scores: BTreeMap<String, BTreeMap<String, i32>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -953,6 +957,7 @@ impl Config {
     self.proxy.validate()?;
     self.proxy_mode.validate()?;
     validate_model_families(&self.model_families)?;
+    validate_model_scores(&self.model_scores)?;
     validate_model_families(&self.defaults.model_families)?;
     validate_provider_id(
       "defaults.default_provider_id",
@@ -1566,6 +1571,35 @@ fn validate_profile_name(name: &str) -> Result<()> {
 
 fn validate_providers(section: &str, providers: Option<&[String]>) -> Result<()> {
   validate_ids(section, providers, "provider ids must be non-empty")
+}
+
+fn validate_model_scores(scores: &BTreeMap<String, BTreeMap<String, i32>>) -> Result<()> {
+  for (model, providers) in scores {
+    if model.trim().is_empty() || model.trim() != model {
+      return error::InvalidAccountSnafu {
+        id: format!("model_scores.{model}"),
+        message: String::from("model ids must be non-empty and have no surrounding whitespace"),
+      }
+      .fail();
+    }
+    if providers.is_empty() {
+      return error::InvalidAccountSnafu {
+        id: format!("model_scores.{model}"),
+        message: String::from("provider score maps must not be empty"),
+      }
+      .fail();
+    }
+    for provider in providers.keys() {
+      if provider.trim().is_empty() || provider.trim() != provider {
+        return error::InvalidAccountSnafu {
+          id: format!("model_scores.{model}.{provider}"),
+          message: String::from("provider ids must be non-empty and have no surrounding whitespace"),
+        }
+        .fail();
+      }
+    }
+  }
+  Ok(())
 }
 
 fn validate_provider_id(section: &str, provider_id: Option<&str>) -> Result<()> {

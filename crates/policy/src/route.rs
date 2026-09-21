@@ -1,6 +1,6 @@
 use crate::{AccountPoolId, HeaderPatchSetId, OperationId, ProviderId, RetryPolicyId, RouteId, WireIdentityId};
 use smol_str::SmolStr;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 /// The request-handling families supported by the gateway.
@@ -206,6 +206,7 @@ pub struct ManagedRoute {
   header_patches: Option<HeaderPatchSetId>,
   retry: ManagedRetry,
   providers: Option<BTreeSet<ProviderId>>,
+  model_scores: BTreeMap<String, BTreeMap<ProviderId, i32>>,
 }
 
 impl ManagedRoute {
@@ -221,6 +222,7 @@ impl ManagedRoute {
       header_patches,
       retry,
       providers: None,
+      model_scores: BTreeMap::new(),
     }
   }
 
@@ -238,6 +240,26 @@ impl ManagedRoute {
 
   pub fn retry(&self) -> &ManagedRetry {
     &self.retry
+  }
+
+  pub fn with_model_scores(mut self, scores: BTreeMap<String, BTreeMap<ProviderId, i32>>) -> Self {
+    self.model_scores = scores;
+    self
+  }
+
+  /// Return the configured score for one concrete provider/model pairing.
+  /// Unconfigured pairings remain eligible at the neutral score of zero.
+  pub fn provider_score(&self, model: &str, provider: &ProviderId) -> i32 {
+    self
+      .model_scores
+      .get(model)
+      .and_then(|scores| scores.get(provider))
+      .copied()
+      .unwrap_or_default()
+  }
+
+  pub fn model_scores(&self) -> &BTreeMap<String, BTreeMap<ProviderId, i32>> {
+    &self.model_scores
   }
 }
 

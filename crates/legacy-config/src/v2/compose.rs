@@ -207,6 +207,7 @@ pub fn project_v2_config(
         initial_backoff_ms: LEGACY_INITIAL_BACKOFF_MS,
       },
     )]),
+    model_scores: legacy.model_scores.clone(),
     providers,
   };
   let compiled_config = tokn_config::v2::compile_config(&raw_config, Path::new(GENERATED_SOURCE))
@@ -560,7 +561,9 @@ mod tests {
   use tokn_accounts::link::{link_account_pools, link_provider_graph};
   use tokn_accounts::registry::Registry;
   use tokn_config::{ModelFamily, ProfileConfig};
-  use tokn_policy::{ManagedRetry, ModelSelector, RelayRetry, RetryPolicyId, RouteKind, RoutePlan, WireIdentity};
+  use tokn_policy::{
+    ManagedRetry, ModelSelector, ProviderId, RelayRetry, RetryPolicyId, RouteKind, RoutePlan, WireIdentity,
+  };
 
   fn account(id: &str, provider: &str, base_url: Option<&str>) -> AccountConfig {
     let mut account: AccountConfig = toml::from_str(&format!(
@@ -690,6 +693,33 @@ mod tests {
         .unwrap()
         .kind(),
       RouteKind::Relay
+    );
+  }
+
+  #[test]
+  fn projects_sparse_model_scores_into_managed_routes() {
+    let mut legacy = Config::default();
+    legacy
+      .model_scores
+      .insert("shared-model".into(), BTreeMap::from([("openai".into(), 42)]));
+    let projection = project_v2_config(
+      &legacy,
+      &[account("primary", "openai", None)],
+      V2ProjectionOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(projection.raw_config().model_scores, legacy.model_scores);
+    let RoutePlan::Managed(route) = &projection.compiled_config().gateway().routes()["default"] else {
+      panic!("expected managed route");
+    };
+    assert_eq!(
+      route.provider_score("shared-model", &ProviderId::new("openai").unwrap()),
+      42
+    );
+    assert_eq!(
+      route.provider_score("other-model", &ProviderId::new("openai").unwrap()),
+      0
     );
   }
 
