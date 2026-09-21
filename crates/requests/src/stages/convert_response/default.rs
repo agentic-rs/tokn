@@ -27,6 +27,7 @@ use tokn_convert::sse::{observer_channel, EndpointTranslator, ObserverMsg, SsePi
 use tokn_convert::usage::{parse_usage_any_value, usage_has_any};
 use tokn_core::provider::Endpoint;
 use tokn_core::request_event::RecordEvent;
+use tokn_headers::keys::{CONTENT_LENGTH, CONTENT_TYPE};
 use tokn_headers::HeaderMap;
 use tracing::{debug, instrument};
 
@@ -35,6 +36,91 @@ pub struct DefaultConvertResponse;
 impl DefaultConvertResponse {
   pub fn new() -> Self {
     Self
+  }
+
+  fn body_looks_like_sse(body: &[u8]) -> bool {
+    let first = body
+      .iter()
+      .position(|byte| !byte.is_ascii_whitespace())
+      .unwrap_or(body.len());
+    body[first..].starts_with(b"event:") || body[first..].starts_with(b"data:")
+  }
+
+  fn headers_indicate_sse(headers: &HeaderMap) -> bool {
+    headers.get(&CONTENT_TYPE).is_some_and(|value| {
+      value
+        .as_str()
+        .split(';')
+        .next()
+        .is_some_and(|media_type| media_type.trim().eq_ignore_ascii_case("text/event-stream"))
+    })
+  }
+
+  #[instrument(name = "default_convert_buffered_sse", skip_all, fields(
+    status = status,
+    upstream_endpoint = ?upstream_endpoint,
+    inbound_endpoint = ?ctx.request_endpoint,
+    body_len = body.len(),
+  ))]
+  async fn convert_buffered_sse(
+    &self,
+    ctx: &PipelineCtx,
+    status: u16,
+    mut headers: HeaderMap,
+    upstream_endpoint: Option<Endpoint>,
+    body: Bytes,
+  ) -> Result<ConvertedResponse, PipelineError> {
+    let inbound_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingResolvedEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
+    let upstream_endpoint = upstream_endpoint.ok_or_else(|| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::MissingUpstreamEndpoint {
+          request_endpoint: smol_str::SmolStr::new(ctx.request_endpoint.as_str()),
+        },
+      )
+    })?;
+
+    let accumulated = tokn_convert::sse::accumulate_bytes(upstream_endpoint, body)
+      .await
+      .map_err(|source| {
+        PipelineError::permanent(Stage::ConvertResponse, RequestsError::ResponseConversion { source })
+      })?;
+    let body_json = match inbound_endpoint {
+      Endpoint::ChatCompletions => tokn_convert::value::chat::response_to_value(&accumulated),
+      Endpoint::Responses => tokn_convert::value::responses::response_to_value(&accumulated),
+      Endpoint::Messages => tokn_convert::value::messages::response_to_value(&accumulated),
+    }
+    .map_err(|source| PipelineError::permanent(Stage::ConvertResponse, RequestsError::ResponseConversion { source }))?;
+
+    let parsed_usage = parse_usage_any_value(&body_json);
+    if usage_has_any(&parsed_usage) {
+      ctx.emit_record(RecordEvent::Usage(parsed_usage));
+    }
+    let body_bytes = serde_json::to_vec(&body_json).map(Bytes::from).map_err(|source| {
+      PipelineError::permanent(
+        Stage::ConvertResponse,
+        RequestsError::SerializeTranslatedResponse { source },
+      )
+    })?;
+    headers.insert(&CONTENT_TYPE, "application/json");
+    headers.remove(&CONTENT_LENGTH);
+
+    Ok(ConvertedResponse {
+      status,
+      headers,
+      kind: ConvertedResponseKind::Managed,
+      body: ConvertedBody::Buffered {
+        body_json: Some(Arc::new(body_json)),
+        body_bytes,
+      },
+    })
   }
 }
 
@@ -60,6 +146,15 @@ impl ConvertResponseStage for DefaultConvertResponse {
     upstream_endpoint: Option<Endpoint>,
     body: Bytes,
   ) -> Result<ConvertedResponse, PipelineError> {
+    // Some managed upstreams require SSE even when the downstream caller
+    // requested a buffered response. Content-Type is not guaranteed to
+    // survive every transport path, so recognize the wire format as well.
+    if Self::headers_indicate_sse(&headers) || Self::body_looks_like_sse(&body) {
+      return self
+        .convert_buffered_sse(ctx, status, headers, upstream_endpoint, body)
+        .await;
+    }
+
     let inbound_endpoint = ctx.request_endpoint.resolved().ok_or_else(|| {
       PipelineError::permanent(
         Stage::ConvertResponse,
@@ -358,6 +453,46 @@ mod tests {
       }
     }
     assert!(saw, "buffered convert_response should emit UpstreamBody");
+  }
+
+  #[tokio::test]
+  async fn provided_convert_response_accumulates_sse_for_buffered_caller() {
+    let stage = DefaultConvertResponse::new();
+    let events = Arc::new(EventBus::new(64));
+    let ctx = PipelineCtx::new("req-buffered-sse", Endpoint::Responses.into(), events);
+    let body = concat!(
+      "event: response.created\n",
+      "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.6-luna\"}}\n\n",
+      "event: response.output_text.delta\n",
+      "data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n",
+      "event: response.completed\n",
+      "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.6-luna\",\"status\":\"completed\",\"usage\":{\"input_tokens\":3,\"output_tokens\":1,\"total_tokens\":4}}}\n\n",
+      "data: [DONE]\n\n"
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(&CONTENT_LENGTH, body.len().to_string());
+    let sent = SentResponse {
+      status: 200,
+      headers,
+      stream: false,
+      upstream_endpoint: Some(Endpoint::Responses),
+      response: response(200, body, "text/event-stream; charset=utf-8"),
+    };
+
+    let out = stage.convert_response(&ctx, sent).await.unwrap();
+    assert_eq!(out.headers.get(&CONTENT_TYPE).unwrap().as_str(), "application/json");
+    assert!(!out.headers.contains_key(&CONTENT_LENGTH));
+    match out.body {
+      ConvertedBody::Buffered { body_json, body_bytes } => {
+        let body_json = body_json.unwrap();
+        assert_eq!(body_json["id"], "resp_1");
+        assert_eq!(body_json["model"], "gpt-5.6-luna");
+        assert_eq!(body_json["output_text"], "hello");
+        assert_eq!(body_json["usage"]["total_tokens"], 4);
+        assert_eq!(serde_json::from_slice::<Value>(&body_bytes).unwrap(), *body_json);
+      }
+      _ => panic!("expected buffered"),
+    }
   }
 
   #[tokio::test]
