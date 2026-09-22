@@ -11,8 +11,8 @@ const adapters = new Map<string, AgentAdapter>([
 
 export function resolveAgent(id: string): AgentAdapter {
   const adapter = adapters.get(id);
-  if (!adapter) throw new Error(`Unsupported trial agent '${id}' (available: ${[...adapters.keys()].join(", ")})`);
+  if (!adapter) throw new Error(`Unsupported agent-test adapter '${id}' (available: ${[...adapters.keys()].join(", ")})`);
   return adapter;
 }
 
-export type { AgentAdapter, PreparedTrial, TrialCase, TrialOutput, TrialResult, TrialToolCall } from "./types";
+export type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, AgentTestResult, AgentTestToolCall } from "./types";

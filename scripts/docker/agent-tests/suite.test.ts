@@ -9,7 +9,7 @@ import { parseSuite, validateInputs } from "./suite";
 let directory: string;
 
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "tokn-trial-suite-"));
+  directory = mkdtempSync(join(tmpdir(), "tokn-agent-test-suite-"));
   writeFileSync(join(directory, "config.toml"), "schema_version = 2\n");
   writeFileSync(join(directory, "auth.yaml"), "version: 1\naccounts: []\n");
 });
@@ -28,7 +28,7 @@ function input(overrides: Record<string, unknown> = {}): Record<string, unknown>
   };
 }
 
-describe("trial suite configuration", () => {
+describe("agent-test suite configuration", () => {
   test("resolves relative inputs beside the suite and supplies isolated defaults", () => {
     const suite = parseSuite(input(), directory);
     expect(suite.config_file).toBe(join(directory, "config.toml"));
@@ -58,12 +58,12 @@ describe("trial suite configuration", () => {
   test("resolves explicit fragments, absolute files, and home-relative inputs", () => {
     const suite = parseSuite(input({
       config_file: join(directory, "config.toml"),
-      auth_file: "~/trial-test/auth.yaml",
+      auth_file: "~/agent-test-fixture/auth.yaml",
       config_dir: "../custom-config.d",
       auth_dir: "./custom-auth.d",
     }), directory);
     expect(suite.config_file).toBe(join(directory, "config.toml"));
-    expect(suite.auth_file).toBe(join(homedir(), "trial-test", "auth.yaml"));
+    expect(suite.auth_file).toBe(join(homedir(), "agent-test-fixture", "auth.yaml"));
     expect(suite.config_dir).toBe(resolve(directory, "../custom-config.d"));
     expect(suite.auth_dir).toBe(join(directory, "custom-auth.d"));
   });
@@ -119,7 +119,7 @@ describe("trial suite configuration", () => {
   });
 });
 
-describe("trial input validation", () => {
+describe("agent-test input validation", () => {
   test("requires visible shutdown logs in either schema", () => {
     for (const section of ["[logging]", "schema_version = 2\n[service.logging]"]) {
       writeFileSync(join(directory, "config.toml"), `${section}\ntarget = "file"\n`);

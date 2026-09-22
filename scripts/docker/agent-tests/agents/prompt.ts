@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 
-import type { TrialCase } from "./types";
+import type { AgentTestCase } from "./types";
 
-export const fixturePath = "/trial/tool-fixture.txt";
+export const fixturePath = "/agent-test/tool-fixture.txt";
 
-export function preparePrompt(trial: TrialCase, marker?: string): {
+export function preparePrompt(testCase: AgentTestCase, marker?: string): {
   expected_text: string;
   prompt: string;
   fixture?: { path: string; content: string };
 } {
-  const expectedText = trial.expected_text ?? marker ?? `TOKN_${randomUUID().replaceAll("-", "")}`;
-  if (trial.probe === "read_tool") {
+  const expectedText = testCase.expected_text ?? marker ?? `TOKN_${randomUUID().replaceAll("-", "")}`;
+  if (testCase.probe === "read_tool") {
     return {
       expected_text: expectedText,
       prompt: `Use the read tool exactly once to read ${fixturePath}. Do not guess the contents or use other tools. ` +

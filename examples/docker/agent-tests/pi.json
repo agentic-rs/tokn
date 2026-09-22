@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "gateway_image": "tokn-gateway-cli:trials",
+  "gateway_image": "tokn-gateway-cli:agent-test",
   "config_file": "~/.tokn/router/config.toml",
   "router_url": "http://127.0.0.1:4141",
   "timeout_secs": 120,

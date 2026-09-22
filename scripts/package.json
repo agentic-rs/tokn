@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "docker": "bun docker/cli.ts",
-    "test": "bun test docker/trials",
+    "test": "bun test docker/agent-tests",
     "check": "tsc --noEmit"
   },
   "devDependencies": {

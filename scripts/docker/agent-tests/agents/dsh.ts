@@ -1,19 +1,19 @@
 import { preparePrompt } from "./prompt";
-import type { AgentAdapter, PreparedTrial, TrialCase, TrialOutput, TrialResult } from "./types";
+import type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, AgentTestResult } from "./types";
 
 function yamlString(value: string): string {
   return JSON.stringify(value);
 }
 
-function prepare(trial: TrialCase, options: { router_url: string; marker?: string }): PreparedTrial {
-  if (trial.mode !== "api") throw new Error(`DSH does not support trial mode '${trial.mode}'`);
-  if (trial.probe !== "text") {
+function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
+  if (testCase.mode !== "api") throw new Error(`DSH does not support agent-test mode '${testCase.mode}'`);
+  if (testCase.probe !== "text") {
     throw new Error("DSH 0.1.5-rc.2 does not expose structured tool events; only text probes are supported");
   }
-  const { expected_text: expectedText, prompt } = preparePrompt(trial, options.marker);
-  const model = trial.upstream_model ?? trial.model;
-  const api = trial.api === "responses" ? "openai-responses" : "openai-completions";
-  const baseUrl = `${options.router_url.replace(/\/$/, "")}${trial.base_path}`;
+  const { expected_text: expectedText, prompt } = preparePrompt(testCase, options.marker);
+  const model = testCase.upstream_model ?? testCase.model;
+  const api = testCase.api === "responses" ? "openai-responses" : "openai-completions";
+  const baseUrl = `${options.router_url.replace(/\/$/, "")}${testCase.base_path}`;
   const settings = [
     "agent-default-model:",
     `  provider: ${yamlString("tokn")}`,
@@ -21,7 +21,7 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
     "llm-pi-ai:",
     "  providers:",
     "    tokn:",
-    `      apiKeyEnv: ${yamlString("TOKN_TRIAL_API_KEY")}`,
+    `      apiKeyEnv: ${yamlString("TOKN_AGENT_TEST_API_KEY")}`,
     `      api: ${yamlString(api)}`,
     `      baseURL: ${yamlString(baseUrl)}`,
     "      models:",
@@ -44,10 +44,10 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
   };
 }
 
-function evaluate(_trial: TrialCase, prepared: PreparedTrial, output: TrialOutput): TrialResult {
+function evaluate(_testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput): AgentTestResult {
   const text = output.stdout.trim();
   let error: string | undefined;
-  if (output.timed_out) error = "DSH trial timed out";
+  if (output.timed_out) error = "DSH agent test timed out";
   else if (output.exit_code !== 0) error = `DSH exited with code ${output.exit_code ?? "unknown"}`;
   else if (text !== prepared.expected_text) error = "DSH response did not exactly match the expected marker";
   return {
@@ -63,7 +63,7 @@ function evaluate(_trial: TrialCase, prepared: PreparedTrial, output: TrialOutpu
 export const dsh: AgentAdapter = {
   id: "dsh",
   version: "0.1.5-rc.2",
-  image: "tokn-dsh-trials:0.1.5-rc.2",
+  image: "tokn-dsh-agent-test:0.1.5-rc.2",
   dockerfile: "scripts/docker/Dockerfile.dsh",
   prepare,
   evaluate,

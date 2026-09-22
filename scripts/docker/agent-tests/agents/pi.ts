@@ -1,19 +1,19 @@
 import { fixturePath, preparePrompt } from "./prompt";
-import type { AgentAdapter, PreparedTrial, TrialCase, TrialOutput, TrialResult, TrialToolCall } from "./types";
+import type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, AgentTestResult, AgentTestToolCall } from "./types";
 
-function prepare(trial: TrialCase, options: { router_url: string; marker?: string }): PreparedTrial {
-  if (trial.mode !== "api") throw new Error(`Pi does not support trial mode '${trial.mode}'`);
-  const { expected_text: expectedText, prompt, fixture } = preparePrompt(trial, options.marker);
-  const model = trial.upstream_model ?? trial.model;
+function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
+  if (testCase.mode !== "api") throw new Error(`Pi does not support agent-test mode '${testCase.mode}'`);
+  const { expected_text: expectedText, prompt, fixture } = preparePrompt(testCase, options.marker);
+  const model = testCase.upstream_model ?? testCase.model;
   const config = {
     providers: {
       tokn: {
-        baseUrl: `${options.router_url.replace(/\/$/, "")}${trial.base_path}`,
-        api: trial.api === "responses" ? "openai-responses" : "openai-completions",
-        apiKey: "$TOKN_TRIAL_API_KEY",
+        baseUrl: `${options.router_url.replace(/\/$/, "")}${testCase.base_path}`,
+        api: testCase.api === "responses" ? "openai-responses" : "openai-completions",
+        apiKey: "$TOKN_AGENT_TEST_API_KEY",
         models: [{
           id: model,
-          name: trial.display_name ?? trial.model,
+          name: testCase.display_name ?? testCase.model,
           reasoning: false,
           input: ["text"],
           contextWindow: 128_000,
@@ -30,7 +30,7 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
     ],
     command: [
       "--mode", "json", "--no-session", "--no-approve", "--provider", "tokn", "--model", model,
-      ...(trial.probe === "read_tool" ? ["--tools", "read"] : ["--no-tools"]),
+      ...(testCase.probe === "read_tool" ? ["--tools", "read"] : ["--no-tools"]),
       prompt,
     ],
     environment: { PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_OFFLINE: "1" },
@@ -57,7 +57,7 @@ function contentText(value: unknown): string {
   }).join("");
 }
 
-function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput): TrialResult {
+function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput): AgentTestResult {
   let sessionHeader = false;
   let agentStarted = false;
   let agentEnded = false;
@@ -66,7 +66,7 @@ function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput
   let agentError = false;
   let text = "";
   const sessionIds = new Set<string>();
-  const toolCalls: TrialToolCall[] = [];
+  const toolCalls: AgentTestToolCall[] = [];
   const toolArgs = new Map<string, Record<string, unknown>>();
 
   for (const [index, line] of output.stdout.split(/\r?\n/).entries()) {
@@ -113,14 +113,14 @@ function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput
   }
 
   let error: string | undefined;
-  if (output.timed_out) error = "Pi trial timed out";
+  if (output.timed_out) error = "Pi agent test timed out";
   else if (output.exit_code !== 0) error = `Pi exited with code ${output.exit_code ?? "unknown"}`;
   else if (parseError) error = parseError;
   else if (agentError) error = "Pi reported an assistant error; inspect stdout.jsonl for details";
   else if (!sessionHeader || !agentStarted || !agentEnded || completedSteps === 0) error = "Pi did not emit a complete agent session";
   else if (text !== prepared.expected_text) error = "Pi response did not exactly match the expected marker";
-  else if (trial.probe === "text" && toolCalls.length !== 0) error = "Text probe unexpectedly invoked a tool";
-  else if (trial.probe === "read_tool") {
+  else if (testCase.probe === "text" && toolCalls.length !== 0) error = "Text probe unexpectedly invoked a tool";
+  else if (testCase.probe === "read_tool") {
     const call = toolCalls[0];
     if (toolCalls.length !== 1 || call?.name !== "read" || call.status !== "completed") {
       error = "Read probe requires exactly one completed read tool call and no other tools";
@@ -143,7 +143,7 @@ function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput
 export const pi: AgentAdapter = {
   id: "pi",
   version: "0.85.1",
-  image: "tokn-pi-trials:0.85.1",
+  image: "tokn-pi-agent-test:0.85.1",
   dockerfile: "scripts/docker/Dockerfile.pi",
   prepare,
   evaluate,

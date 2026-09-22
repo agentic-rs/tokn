@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import { resolveAgent } from "./index";
 import { pi } from "./pi";
-import type { TrialCase } from "./types";
+import type { AgentTestCase } from "./types";
 
 const marker = "TOKN_PI_709f";
-const trial: TrialCase = {
+const testCase: AgentTestCase = {
   id: "pi-test",
   agent: "pi",
   mode: "api",
@@ -30,7 +30,7 @@ function completeEvents(text = marker, extra: unknown[] = []): string {
   );
 }
 
-function readEvents(path = "/trial/tool-fixture.txt", token = marker, isError = false) {
+function readEvents(path = "/agent-test/tool-fixture.txt", token = marker, isError = false) {
   return [{
     type: "tool_execution_start",
     toolCallId: "tool-one",
@@ -45,24 +45,24 @@ function readEvents(path = "/trial/tool-fixture.txt", token = marker, isError = 
   }];
 }
 
-function evaluate(stdout: string, overrides: Partial<TrialCase> = {}, exit_code: number | null = 0, timed_out = false) {
-  const selected = { ...trial, ...overrides };
+function evaluate(stdout: string, overrides: Partial<AgentTestCase> = {}, exit_code: number | null = 0, timed_out = false) {
+  const selected = { ...testCase, ...overrides };
   const prepared = pi.prepare(selected, { router_url: "http://127.0.0.1:4141", marker });
   return pi.evaluate(selected, prepared, { stdout, stderr: "", exit_code, timed_out });
 }
 
 describe("Pi preparation", () => {
   test("configures an isolated Chat Completions provider without embedding credentials", () => {
-    const prepared = pi.prepare(trial, { router_url: "http://127.0.0.1:4141/", marker });
+    const prepared = pi.prepare(testCase, { router_url: "http://127.0.0.1:4141/", marker });
     const config = JSON.parse(prepared.files.find((file) => file.path === "models.json")!.content);
     expect(config.providers.tokn).toMatchObject({
       baseUrl: "http://127.0.0.1:4141/test/v1",
       api: "openai-completions",
-      apiKey: "$TOKN_TRIAL_API_KEY",
+      apiKey: "$TOKN_AGENT_TEST_API_KEY",
     });
-    expect(config.providers.tokn.models[0]).toMatchObject({ id: trial.model, name: trial.model });
+    expect(config.providers.tokn.models[0]).toMatchObject({ id: testCase.model, name: testCase.model });
     expect(prepared.command).toEqual([
-      "--mode", "json", "--no-session", "--no-approve", "--provider", "tokn", "--model", trial.model,
+      "--mode", "json", "--no-session", "--no-approve", "--provider", "tokn", "--model", testCase.model,
       "--no-tools", expect.stringContaining(marker),
     ]);
     expect(prepared.environment).toEqual({ PI_CODING_AGENT_DIR: "/tmp/pi-agent", PI_OFFLINE: "1" });
@@ -72,7 +72,7 @@ describe("Pi preparation", () => {
 
   test("selects Responses and the qualified upstream model independently", () => {
     const prepared = pi.prepare({
-      ...trial,
+      ...testCase,
       api: "responses",
       model: "gpt-5.6-luna",
       upstream_model: "codex/gpt-5.6-luna",
@@ -85,17 +85,17 @@ describe("Pi preparation", () => {
   });
 
   test("keeps the read marker out of the prompt and enables only read", () => {
-    const prepared = pi.prepare({ ...trial, probe: "read_tool" }, { router_url: "http://127.0.0.1:4141", marker });
+    const prepared = pi.prepare({ ...testCase, probe: "read_tool" }, { router_url: "http://127.0.0.1:4141", marker });
     expect(prepared.command).toContain("--tools");
     expect(prepared.command).toContain("read");
     expect(prepared.command.join(" ")).not.toContain(marker);
     expect(prepared.files.find((file) => file.path === "tool-fixture.txt")!.content).toContain(marker);
-    expect(prepared.fixture_path).toBe("/trial/tool-fixture.txt");
+    expect(prepared.fixture_path).toBe("/agent-test/tool-fixture.txt");
   });
 
   test("rejects unsupported modes", () => {
-    expect(() => pi.prepare({ ...trial, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
-      .toThrow("does not support trial mode");
+    expect(() => pi.prepare({ ...testCase, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
+      .toThrow("does not support agent-test mode");
   });
 });
 
@@ -116,7 +116,7 @@ describe("Pi JSONL verification", () => {
     expect(result.tool_calls[0]).toMatchObject({
       name: "read",
       status: "completed",
-      file_path: "/trial/tool-fixture.txt",
+      file_path: "/agent-test/tool-fixture.txt",
     });
   });
 
@@ -130,9 +130,9 @@ describe("Pi JSONL verification", () => {
   test("rejects unexpected or invalid tool calls", () => {
     expect(evaluate(completeEvents(marker, readEvents())).error).toContain("unexpectedly invoked");
     for (const events of [
-      readEvents("/trial/other.txt"),
-      readEvents("/trial/tool-fixture.txt", "WRONG"),
-      readEvents("/trial/tool-fixture.txt", marker, true),
+      readEvents("/agent-test/other.txt"),
+      readEvents("/agent-test/tool-fixture.txt", "WRONG"),
+      readEvents("/agent-test/tool-fixture.txt", marker, true),
       readEvents().map((event) => ({ ...event, toolName: "bash" })),
     ]) {
       expect(evaluate(completeEvents(marker, events), { probe: "read_tool" }).success).toBe(false);
@@ -154,6 +154,6 @@ describe("Pi JSONL verification", () => {
 
   test("reports process failure and timeout without copying provider output", () => {
     expect(evaluate("secret provider error", {}, 1).error).toBe("Pi exited with code 1");
-    expect(evaluate("secret provider error", {}, null, true).error).toBe("Pi trial timed out");
+    expect(evaluate("secret provider error", {}, null, true).error).toBe("Pi agent test timed out");
   });
 });

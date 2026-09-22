@@ -4,12 +4,12 @@ This directory contains repo-local helper tooling that should not make the Rust
 workspace root a JavaScript package.
 
 For repeatable agent/model tests with read-only host config, private databases,
-and a native history import, use the [container trial harness](docker/trials/README.md).
+and a native history import, use the [container agent-test harness](docker/agent-tests/README.md).
 
-## Docker PR Trial
+## Docker PR harness
 
 For native v2 configurations, use [the standard Docker setup](../docs/docker.md).
-The older Bun trial helper below still supplies legacy `serve --with-proxy`
+The older Bun Docker helper below still supplies legacy `serve --with-proxy`
 flags and requires a compatible v1 config with client authentication enabled.
 It stops containers with a 40-second grace period before removing them.
 

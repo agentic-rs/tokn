@@ -1,15 +1,15 @@
 import { fixturePath, preparePrompt } from "./prompt";
-import type { AgentAdapter, PreparedTrial, TrialCase, TrialOutput, TrialResult, TrialToolCall } from "./types";
+import type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, AgentTestResult, AgentTestToolCall } from "./types";
 
 // OpenCode 1.18.10 uses "/" as the worktree in our empty non-Git workspace.
 // Its read permission checks paths relative to that worktree, while the
 // external_directory permission checks absolute directory globs.
 const fixtureReadPattern = fixturePath.slice(1);
 
-function prepare(trial: TrialCase, options: { router_url: string; marker?: string }): PreparedTrial {
-  if (trial.mode !== "api") throw new Error(`OpenCode does not support trial mode '${trial.mode}'`);
-  const { expected_text: expectedText, prompt, fixture } = preparePrompt(trial, options.marker);
-  const readTool = trial.probe === "read_tool";
+function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
+  if (testCase.mode !== "api") throw new Error(`OpenCode does not support agent-test mode '${testCase.mode}'`);
+  const { expected_text: expectedText, prompt, fixture } = preparePrompt(testCase, options.marker);
+  const readTool = testCase.probe === "read_tool";
   const config = {
     $schema: "https://opencode.ai/config.json",
     autoupdate: false,
@@ -19,22 +19,22 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
     mcp: {},
     enabled_providers: ["tokn"],
     permission: readTool
-      ? { "*": "deny", read: { "*": "deny", [fixtureReadPattern]: "allow" }, external_directory: { "*": "deny", "/trial/*": "allow" } }
+      ? { "*": "deny", read: { "*": "deny", [fixtureReadPattern]: "allow" }, external_directory: { "*": "deny", "/agent-test/*": "allow" } }
       : "deny",
     tools: readTool ? { "*": false, read: true } : { "*": false },
     provider: {
       tokn: {
-        npm: trial.api === "responses" ? "@ai-sdk/openai" : "@ai-sdk/openai-compatible",
-        name: "Tokn integration trial",
+        npm: testCase.api === "responses" ? "@ai-sdk/openai" : "@ai-sdk/openai-compatible",
+        name: "Tokn integration test",
         options: {
           // These property names belong to the OpenCode provider schema.
-          baseURL: `${options.router_url.replace(/\/$/, "")}${trial.base_path}`,
-          apiKey: "{env:TOKN_TRIAL_API_KEY}",
+          baseURL: `${options.router_url.replace(/\/$/, "")}${testCase.base_path}`,
+          apiKey: "{env:TOKN_AGENT_TEST_API_KEY}",
         },
         models: {
-          [trial.model]: {
-            name: trial.display_name ?? trial.model,
-            id: trial.upstream_model ?? trial.model,
+          [testCase.model]: {
+            name: testCase.display_name ?? testCase.model,
+            id: testCase.upstream_model ?? testCase.model,
             tool_call: readTool,
           },
         },
@@ -47,13 +47,13 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
       { path: "prompt.txt", content: `${prompt}\n` },
       ...(fixture ? [fixture] : []),
     ],
-    command: ["--pure", "run", "--format", "json", "--model", `tokn/${trial.model}`, "--title", trial.id, "--dir", "/workspace", prompt],
+    command: ["--pure", "run", "--format", "json", "--model", `tokn/${testCase.model}`, "--title", testCase.id, "--dir", "/workspace", prompt],
     environment: {
       XDG_CONFIG_HOME: "/tmp/opencode-home/config",
       XDG_DATA_HOME: "/tmp/opencode-home/data",
       XDG_CACHE_HOME: "/tmp/opencode-home/cache",
       XDG_STATE_HOME: "/tmp/opencode-home/state",
-      OPENCODE_CONFIG: "/trial/opencode.json",
+      OPENCODE_CONFIG: "/agent-test/opencode.json",
       OPENCODE_DISABLE_PROJECT_CONFIG: "1",
       OPENCODE_DISABLE_AUTOUPDATE: "1",
       OPENCODE_DISABLE_MODELS_FETCH: "1",
@@ -75,9 +75,9 @@ function string(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput): TrialResult {
+function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput): AgentTestResult {
   const texts: string[] = [];
-  const toolCalls: TrialToolCall[] = [];
+  const toolCalls: AgentTestToolCall[] = [];
   const sessionIds = new Set<string>();
   let completedSteps = 0;
   let terminalStep = false;
@@ -123,14 +123,14 @@ function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput
 
   const text = texts.join("").trim();
   let error: string | undefined;
-  if (output.timed_out) error = "OpenCode trial timed out";
+  if (output.timed_out) error = "OpenCode agent test timed out";
   else if (output.exit_code !== 0) error = `OpenCode exited with code ${output.exit_code ?? "unknown"}`;
   else if (agentError) error = "OpenCode reported an error event; inspect stdout.jsonl for details";
   else if (parseError) error = parseError;
   else if (!terminalStep) error = "OpenCode did not finish a terminal step with reason 'stop'";
   else if (text !== prepared.expected_text) error = "OpenCode response did not exactly match the expected marker";
-  else if (trial.probe === "text" && toolCalls.length !== 0) error = "Text probe unexpectedly invoked a tool";
-  else if (trial.probe === "read_tool") {
+  else if (testCase.probe === "text" && toolCalls.length !== 0) error = "Text probe unexpectedly invoked a tool";
+  else if (testCase.probe === "read_tool") {
     const call = toolCalls[0];
     if (toolCalls.length !== 1 || call?.name !== "read" || call.status !== "completed") {
       error = "Read probe requires exactly one completed read tool call and no other tools";
@@ -153,7 +153,7 @@ function evaluate(trial: TrialCase, prepared: PreparedTrial, output: TrialOutput
 export const opencode: AgentAdapter = {
   id: "opencode",
   version: "1.18.10",
-  image: "tokn-opencode-trials:1.18.10",
+  image: "tokn-opencode-agent-test:1.18.10",
   dockerfile: "scripts/docker/Dockerfile.opencode",
   prepare,
   evaluate,

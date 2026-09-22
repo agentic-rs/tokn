@@ -3,9 +3,9 @@ import { homedir } from "node:os";
 import { basename, dirname, extname, resolve } from "node:path";
 
 import { parseCases } from "./cases";
-import type { TrialCase } from "./agents/types";
+import type { AgentTestCase } from "./agents/types";
 
-export type TrialSuite = {
+export type AgentTestSuite = {
   schema_version: 1;
   gateway_image: string;
   config_file: string;
@@ -16,7 +16,7 @@ export type TrialSuite = {
   serve_args: string[];
   timeout_secs: number;
   agent_images: Record<string, string>;
-  cases: TrialCase[];
+  cases: AgentTestCase[];
 };
 
 function object(value: unknown, label: string): Record<string, unknown> {
@@ -33,7 +33,7 @@ function localPath(value: string, base_dir: string): string {
   return resolve(base_dir, value.startsWith("~/") ? resolve(homedir(), value.slice(2)) : value);
 }
 
-export function parseSuite(value: unknown, base_dir: string): TrialSuite {
+export function parseSuite(value: unknown, base_dir: string): AgentTestSuite {
   const input = object(value, "suite");
   const fields = new Set(["schema_version", "gateway_image", "config_file", "auth_file", "config_dir", "auth_dir", "router_url", "serve_args", "timeout_secs", "agent_images", "cases"]);
   for (const field of Object.keys(input)) if (!fields.has(field)) throw new Error(`unknown suite field: ${field}`);
@@ -72,11 +72,11 @@ export function parseSuite(value: unknown, base_dir: string): TrialSuite {
   };
 }
 
-export function loadSuite(path: string): TrialSuite {
+export function loadSuite(path: string): AgentTestSuite {
   return parseSuite(JSON.parse(readFileSync(path, "utf8")), dirname(resolve(path)));
 }
 
-export function validateInputs(suite: TrialSuite): void {
+export function validateInputs(suite: AgentTestSuite): void {
   for (const path of [suite.config_file, suite.auth_file]) {
     if (!statSync(path).isFile()) throw new Error(`expected an input file: ${path}`);
     if (realpathSync(path).includes(",")) throw new Error("Docker bind mount paths cannot contain commas");
@@ -88,12 +88,12 @@ export function validateInputs(suite: TrialSuite): void {
   const config = Bun.TOML.parse(readFileSync(suite.config_file, "utf8")) as Record<string, unknown>;
   const service = (config.service ?? {}) as Record<string, unknown>;
   const logging = (config.schema_version === 2 ? service.logging : config.logging) as Record<string, unknown> | undefined;
-  if (logging?.target === "file") throw new Error("trials require logging.target = stderr or both to verify persistence shutdown");
+  if (logging?.target === "file") throw new Error("agent tests require logging.target = stderr or both to verify persistence shutdown");
   const persistence = (config.schema_version === 2 ? service.persistence : config.db) as Record<string, unknown> | undefined;
-  if (persistence?.enabled === false || persistence?.record_sessions === false) throw new Error("trials require persistence and session recording enabled");
+  if (persistence?.enabled === false || persistence?.record_sessions === false) throw new Error("agent tests require persistence and session recording enabled");
   // Export names must match the private volume. Host-specific absolute paths
   // cannot be silently reused inside the container.
   for (const field of ["db_path", "usage_db_path", "sessions_db_path", "requests_dir"]) {
-    if (persistence?.[field] !== undefined) throw new Error(`trial config must use default persistence paths; remove ${field} in a dedicated config`);
+    if (persistence?.[field] !== undefined) throw new Error(`agent-test config must use default persistence paths; remove ${field} in a dedicated config`);
   }
 }

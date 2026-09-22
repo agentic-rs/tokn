@@ -9,8 +9,8 @@ RUN apk add --no-cache ca-certificates git ripgrep \
   && test "$(dsh --version)" = "0.1.5-rc.2" \
   && apk del .build-deps
 
-COPY scripts/docker/dsh-trial-entrypoint.sh /usr/local/bin/dsh-trial-entrypoint
-RUN chmod 0755 /usr/local/bin/dsh-trial-entrypoint
+COPY scripts/docker/dsh-agent-test-entrypoint.sh /usr/local/bin/dsh-agent-test-entrypoint
+RUN chmod 0755 /usr/local/bin/dsh-agent-test-entrypoint
 
 WORKDIR /workspace
-ENTRYPOINT ["dsh-trial-entrypoint"]
+ENTRYPOINT ["dsh-agent-test-entrypoint"]

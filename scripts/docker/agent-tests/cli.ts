@@ -10,14 +10,14 @@ import { runSuite } from "./runner";
 import { loadSuite } from "./suite";
 
 const help = `Usage:
-  bun --cwd scripts docker trial build-agent --agent <opencode|pi|dsh>
-  bun --cwd scripts docker trial run --suite <suite.json> [--case <id>]... [--output <new-directory>]
+  bun --cwd scripts docker agent-test build-agent --agent <opencode|pi|dsh>
+  bun --cwd scripts docker agent-test run --suite <suite.json> [--case <id>]... [--output <new-directory>]
 
 TOKN_CONTAINER_ENGINE selects podman (default) or docker.
 Runs retain their private volume and write report.json plus closed databases.
-See scripts/docker/trials/README.md for the separate history import step.`;
+See scripts/docker/agent-tests/README.md for the separate history import step.`;
 
-export async function trial(args: string[]): Promise<void> {
+export async function agentTest(args: string[]): Promise<void> {
   if (args.length === 0 || args.includes("--help")) { console.log(help); return; }
   const [command, ...rest] = args;
   const fields = new Map<string, string[]>();
@@ -40,12 +40,12 @@ export async function trial(args: string[]): Promise<void> {
   if (command !== "run" || !suite_path) throw new Error(help);
   const suite = loadSuite(suite_path);
   suite.cases = selectCases(suite.cases, fields.get("--case") ?? []);
-  const root = resolve(repoRoot, "tmp/docker-trials");
+  const root = resolve(repoRoot, "tmp/docker-agent-tests");
   const requested_output = fields.get("--output")?.[0];
   if (!requested_output) mkdirSync(root, { recursive: true, mode: 0o700 });
   const output_dir = resolve(requested_output ?? resolve(root, `${Date.now()}-${randomUUID().slice(0, 8)}`));
   const controller = new AbortController();
-  const cancel = () => controller.abort(new Error("Trial interrupted; cleaning up containers"));
+  const cancel = () => controller.abort(new Error("Agent test interrupted; cleaning up containers"));
   process.on("SIGINT", cancel);
   process.on("SIGTERM", cancel);
   try {

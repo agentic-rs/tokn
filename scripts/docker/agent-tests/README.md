@@ -1,4 +1,4 @@
-# Container agent trials
+# Container agent tests
 
 Run the gateway and agent in separate containers while the native gateway keeps
 running. Each run gets a fresh database volume. Only the selected host config,
@@ -13,25 +13,25 @@ root; suite paths resolve relative to the suite file, while `--output` resolves
 relative to the current working directory.
 
 ```sh
-docker build -t tokn-gateway-cli:trials .
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent opencode
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
-  --suite ../examples/docker/trials/opencode.json
+docker build -t tokn-gateway-cli:agent-test .
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent opencode
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
+  --suite ../examples/docker/agent-tests/opencode.json
 
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent pi
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
-  --suite ../examples/docker/trials/pi.json
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent pi
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
+  --suite ../examples/docker/agent-tests/pi.json
 
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent dsh
-TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
-  --suite ../examples/docker/trials/dsh.json
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent dsh
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
+  --suite ../examples/docker/agent-tests/dsh.json
 ```
 
 The example reads `~/.tokn/router/config.toml` and `auth.yaml`. Set `auth_file` in
 your local suite to use another credential file. Set `config_dir` or `auth_dir`
 to override automatic sibling `config.d`/`auth.d` discovery. Keep credentials
 out of the repository. These mounts are read-only, so credentials that need
-refreshing must first be refreshed outside the trial.
+refreshing must first be refreshed outside the agent test.
 
 The examples expect existing `opencode-deepseek` and `opencode-codex` profiles.
 Edit each case's `base_path` to match your profiles. `model` names the model in
@@ -48,7 +48,7 @@ clears inherited HTTP proxy environment variables; an explicit upstream proxy
 in router config must still be reachable from inside the container. Legacy v1
 configs may use `serve_args: ["--no-proxy"]` to disable their interception proxy.
 Native v2 configs should leave `serve_args` empty.
-For a proxy running on the macOS host, use a trial config whose proxy URL names
+For a proxy running on the macOS host, use an agent-test config whose proxy URL names
 `host.containers.internal` instead of `localhost`.
 Logging must target `stderr` or `both`; the runner sets `RUST_LOG=info` so startup
 and persistence shutdown confirmations remain observable.
@@ -65,7 +65,7 @@ It rejects read-tool probes before any containers are created.
 
 ## Captures and import
 
-Outputs default to ignored `tmp/docker-trials/<run>/`. `report.json` records case
+Outputs default to ignored `tmp/docker-agent-tests/<run>/`. `report.json` records case
 results, errors, shutdown status, and the retained private volume name. Raw agent
 and gateway logs and exported databases may contain sensitive request data;
 directories are mode 0700 and files mode 0600. The private client API key is
@@ -83,11 +83,11 @@ locking can differ across that boundary.
 
 ```sh
 cargo run --locked -p tokn-gateway-cli --bin tokn-gateway -- \
-  history import --source tmp/docker-trials/<run>/export --json
+  history import --source tmp/docker-agent-tests/<run>/export --json
 
 # After reviewing the dry-run result:
 cargo run --locked -p tokn-gateway-cli --bin tokn-gateway -- \
-  history import --source tmp/docker-trials/<run>/export --commit --json
+  history import --source tmp/docker-agent-tests/<run>/export --commit --json
 ```
 
 By default the destination uses configured native persistence paths. Use global
@@ -124,5 +124,5 @@ cargo test --locked -p tokn-persistence --all-features --test history_import
 cargo test --locked -p tokn-gateway-cli --all-features cli::history
 ```
 
-Offline tests run in CI without credentials or paid model requests. Live trials
+Offline tests run in CI without credentials or paid model requests. Live agent tests
 are explicit local runs and return nonzero if any case or cleanup step fails.
