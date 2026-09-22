@@ -29,9 +29,21 @@ fn is_benign_disconnect(err: &anyhow::Error) -> bool {
   let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err.as_ref());
   while let Some(source) = current {
     if let Some(io_err) = source.downcast_ref::<std::io::Error>() {
-      if io_err.kind() == std::io::ErrorKind::UnexpectedEof {
+      if matches!(
+        io_err.kind(),
+        std::io::ErrorKind::UnexpectedEof
+          | std::io::ErrorKind::ConnectionReset
+          | std::io::ErrorKind::ConnectionAborted
+          | std::io::ErrorKind::BrokenPipe
+      ) {
         return true;
       }
+    }
+    if source
+      .downcast_ref::<hyper::Error>()
+      .is_some_and(hyper::Error::is_incomplete_message)
+    {
+      return true;
     }
     let message = source.to_string();
     if message.contains("peer closed connection without sending TLS close_notify")
@@ -141,10 +153,11 @@ where
         let plain_http_handler = plain_http_handler.clone();
         connections.spawn(async move {
           if let Err(err) = handle_client(stream, peer, runtime, outbound_proxy, plain_http_handler).await {
+            let error_chain = format!("{err:#}");
             if is_benign_disconnect(&err) {
-              tracing::debug!(%peer, error = %err, "proxy connection closed by peer");
+              tracing::debug!(%peer, error = %error_chain, "proxy connection closed by peer");
             } else {
-              tracing::warn!(%peer, error = %err, "proxy connection failed");
+              tracing::warn!(%peer, error = %error_chain, "proxy connection failed");
             }
           }
         });
@@ -193,10 +206,11 @@ where
         let connection_shutdown = connection_shutdown_rx.clone();
         connections.spawn(async move {
           if let Err(error) = handle_v2_client(stream, peer, state, outbound_proxy, connection_shutdown).await {
+            let error_chain = format!("{error:#}");
             if is_benign_disconnect(&error) {
-              tracing::debug!(%peer, %error, "v2 proxy connection closed by peer");
+              tracing::debug!(%peer, error = %error_chain, "v2 proxy connection closed by peer");
             } else {
-              tracing::warn!(%peer, %error, "v2 proxy connection failed");
+              tracing::warn!(%peer, error = %error_chain, "v2 proxy connection failed");
             }
           }
         });
@@ -377,6 +391,35 @@ mod tests {
   fn benign_disconnect_matches_unexpected_eof() {
     let err = anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "stream ended"));
     assert!(is_benign_disconnect(&err));
+  }
+
+  #[test]
+  fn benign_disconnect_matches_abrupt_peer_close_io_kinds() {
+    for kind in [
+      std::io::ErrorKind::ConnectionReset,
+      std::io::ErrorKind::ConnectionAborted,
+      std::io::ErrorKind::BrokenPipe,
+    ] {
+      let err = anyhow::Error::from(std::io::Error::new(kind, "peer closed connection"));
+      assert!(is_benign_disconnect(&err), "expected {kind:?} to be benign");
+    }
+  }
+
+  #[tokio::test]
+  async fn benign_disconnect_matches_incomplete_hyper_request() {
+    let (mut client, server) = tokio::io::duplex(1024);
+    let connection = hyper::server::conn::http1::Builder::new().serve_connection(
+      hyper_util::rt::TokioIo::new(server),
+      hyper::service::service_fn(|_| async {
+        Ok::<_, std::convert::Infallible>(axum::http::Response::new(axum::body::Body::empty()))
+      }),
+    );
+    let server = tokio::spawn(connection);
+    client.write_all(b"GET / HTTP/1.1\r\nHost: incomplete").await.unwrap();
+    drop(client);
+
+    let error = anyhow::Error::from(server.await.unwrap().unwrap_err()).context("serve proxy connection");
+    assert!(is_benign_disconnect(&error));
   }
 
   #[test]
