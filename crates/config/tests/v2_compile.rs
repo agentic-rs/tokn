@@ -81,6 +81,51 @@ codex = -10
 }
 
 #[test]
+fn model_score_prefixes_apply_per_provider_by_specificity() {
+  let config = format!(
+    r#"{MINIMAL_MANAGED}
+[model_scores."*"]
+openai = 5
+
+[model_scores."gpt-*"]
+openai = 10
+codex = 20
+
+[model_scores."gpt-5.6-*"]
+opencode-go = 50
+
+[model_scores."gpt-5.6-luna"]
+codex = 100
+"#
+  );
+  let plan = parse(&config, Path::new("config.toml")).unwrap();
+  let RoutePlan::Managed(route) = &plan.routes()["default"] else {
+    panic!("expected managed route");
+  };
+
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("codex").unwrap()),
+    100
+  );
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("opencode-go").unwrap()),
+    50
+  );
+  assert_eq!(
+    route.provider_score("gpt-5.6-luna", &ProviderId::new("openai").unwrap()),
+    10
+  );
+  assert_eq!(
+    route.provider_score("deepseek-v3", &ProviderId::new("openai").unwrap()),
+    5
+  );
+  assert_eq!(
+    route.provider_score("deepseek-v3", &ProviderId::new("codex").unwrap()),
+    0
+  );
+}
+
+#[test]
 fn model_scores_reject_unknown_providers_and_empty_maps() {
   for extra in [
     "[model_scores.\"gpt-5.6-luna\"]\nunknown = 1\n",
@@ -88,6 +133,15 @@ fn model_scores_reject_unknown_providers_and_empty_maps() {
   ] {
     let error = parse(&format!("{MINIMAL_MANAGED}\n{extra}"), Path::new("config.toml")).unwrap_err();
     assert!(matches!(error, Error::Compile { .. }));
+  }
+}
+
+#[test]
+fn model_scores_reject_non_trailing_or_multiple_wildcards() {
+  for pattern in ["*gpt", "gpt-*-mini", "gpt-**"] {
+    let config = format!("{MINIMAL_MANAGED}\n[model_scores.\"{pattern}\"]\nopenai = 1\n");
+    let error = parse(&config, Path::new("config.toml")).unwrap_err();
+    assert!(matches!(error, Error::Compile { .. }), "pattern {pattern} was accepted");
   }
 }
 

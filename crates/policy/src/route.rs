@@ -207,6 +207,7 @@ pub struct ManagedRoute {
   retry: ManagedRetry,
   providers: Option<BTreeSet<ProviderId>>,
   model_scores: BTreeMap<String, BTreeMap<ProviderId, i32>>,
+  model_score_prefixes: Vec<(SmolStr, BTreeMap<ProviderId, i32>)>,
 }
 
 impl ManagedRoute {
@@ -223,6 +224,7 @@ impl ManagedRoute {
       retry,
       providers: None,
       model_scores: BTreeMap::new(),
+      model_score_prefixes: Vec::new(),
     }
   }
 
@@ -243,18 +245,46 @@ impl ManagedRoute {
   }
 
   pub fn with_model_scores(mut self, scores: BTreeMap<String, BTreeMap<ProviderId, i32>>) -> Self {
+    self.model_score_prefixes = scores
+      .iter()
+      .filter_map(|(pattern, provider_scores)| {
+        pattern
+          .strip_suffix('*')
+          .map(|prefix| (SmolStr::new(prefix), provider_scores.clone()))
+      })
+      .collect();
+    self
+      .model_score_prefixes
+      .sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()).then_with(|| left.cmp(right)));
     self.model_scores = scores;
     self
   }
 
-  /// Return the configured score for one concrete provider/model pairing.
-  /// Unconfigured pairings remain eligible at the neutral score of zero.
+  /// Return the configured score for one provider/model pairing.
+  ///
+  /// Exact model rules take precedence. Otherwise, the longest trailing-`*`
+  /// prefix rule that configures this provider wins. Unconfigured pairings
+  /// remain eligible at the neutral score of zero.
   pub fn provider_score(&self, model: &str, provider: &ProviderId) -> i32 {
-    self
+    if let Some(score) = self
       .model_scores
       .get(model)
+      .filter(|_| !model.ends_with('*'))
       .and_then(|scores| scores.get(provider))
-      .copied()
+    {
+      return *score;
+    }
+
+    self
+      .model_score_prefixes
+      .iter()
+      .find_map(|(prefix, scores)| {
+        if model.starts_with(prefix.as_str()) {
+          scores.get(provider).copied()
+        } else {
+          None
+        }
+      })
       .unwrap_or_default()
   }
 
@@ -500,6 +530,34 @@ mod tests {
     assert_eq!(route.destination_policy(), DestinationPolicy::SelectedProvider);
     assert_eq!(route.operation_policy(), OperationPolicy::TranslateCompatible);
     assert_eq!(route.header_strategy(), HeaderStrategy::ProviderOwned);
+  }
+
+  #[test]
+  fn model_scores_use_the_most_specific_rule_per_provider() {
+    let openai: ProviderId = id("openai");
+    let codex: ProviderId = id("codex");
+    let opencode_go: ProviderId = id("opencode-go");
+    let route = ManagedRoute::new(
+      ManagedTarget::new(ProviderSelector::Any, ModelSelector::Capability),
+      OperationPolicy::TranslateCompatible,
+      None,
+      ManagedRetry::Never,
+    )
+    .with_model_scores(BTreeMap::from([
+      ("*".into(), BTreeMap::from([(openai.clone(), 5)])),
+      (
+        "gpt-*".into(),
+        BTreeMap::from([(openai.clone(), 10), (codex.clone(), 20)]),
+      ),
+      ("gpt-5.6-*".into(), BTreeMap::from([(opencode_go.clone(), 50)])),
+      ("gpt-5.6-luna".into(), BTreeMap::from([(codex.clone(), 100)])),
+    ]));
+
+    assert_eq!(route.provider_score("gpt-5.6-luna", &codex), 100);
+    assert_eq!(route.provider_score("gpt-5.6-luna", &opencode_go), 50);
+    assert_eq!(route.provider_score("gpt-5.6-luna", &openai), 10);
+    assert_eq!(route.provider_score("deepseek-v3", &openai), 5);
+    assert_eq!(route.provider_score("deepseek-v3", &codex), 0);
   }
 
   #[test]

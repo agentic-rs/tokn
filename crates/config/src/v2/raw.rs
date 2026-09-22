@@ -53,8 +53,9 @@ pub struct RawConfig {
   pub routes: BTreeMap<String, RawRoute>,
   #[serde(default)]
   pub retry_policies: BTreeMap<String, RawRetryPolicy>,
-  /// Sparse provider scores keyed by concrete model ID. Higher scores are
-  /// preferred; providers omitted from a model retain the neutral score zero.
+  /// Sparse provider scores keyed by an exact model ID or trailing-`*` prefix.
+  /// Higher scores are preferred; providers omitted from all matching rules
+  /// retain the neutral score zero.
   #[serde(default)]
   pub model_scores: BTreeMap<String, BTreeMap<String, i32>>,
   #[serde(default)]
