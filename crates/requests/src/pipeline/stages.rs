@@ -21,11 +21,12 @@ use bytes::Bytes;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use serde_json::Value;
 use smol_str::SmolStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokn_accounts::AccountHandle;
 use tokn_core::provider::{Endpoint, ProviderRequestKind};
-use tokn_core::request_event::RequestEndpoint;
+use tokn_core::request_event::{RequestEndpoint, Stage, StageEvent};
 use tokn_core::AgentId;
 use tokn_headers::{HeaderMap, TemplateVars};
 
@@ -33,7 +34,12 @@ pub const RUN_UPSTREAM_ENDPOINT_KEY: &str = "run.upstream_endpoint";
 
 #[derive(Clone)]
 pub(crate) struct AccumHelper {
+  inner: Arc<AccumInner>,
+}
+
+struct AccumInner {
   tx: mpsc::UnboundedSender<AccumMsg>,
+  finished: AtomicBool,
 }
 
 pub(crate) enum AccumMsg {
@@ -50,6 +56,7 @@ impl AccumHelper {
     let attempt = ctx.attempt;
     let attempts = attempt + 1;
     let request_endpoint = ctx.request_endpoint.as_str().to_string();
+    let completion_endpoint = ctx.request_endpoint.clone();
     let events = ctx.events.clone();
     let guard = ctx.events.begin_finalizer();
     let (tx, mut rx) = mpsc::unbounded_channel::<AccumMsg>();
@@ -99,6 +106,11 @@ impl AccumHelper {
         }
       }
 
+      let stream_error = upstream_error
+        .clone()
+        .or_else(|| converted_error.clone())
+        .or_else(|| stream_terminal_error(&completion_endpoint, &upstream));
+
       events.emit(tokn_core::event::Event::Requests(
         tokn_core::request_event::RequestEvent {
           request_id: request_id.clone(),
@@ -125,6 +137,21 @@ impl AccumHelper {
           ),
         },
       ));
+      if let Some(message) = &stream_error {
+        events.emit(tokn_core::event::Event::Requests(
+          tokn_core::request_event::RequestEvent {
+            request_id: request_id.clone(),
+            attempt,
+            ts: tokn_core::util::now_unix_ms(),
+            payload: tokn_core::request_event::RequestEventPayload::Stage(StageEvent::Error {
+              stage: Stage::ConvertResponse,
+              message: message.clone(),
+              recoverable: false,
+              stop: false,
+            }),
+          },
+        ));
+      }
       events.emit(tokn_core::event::Event::Requests(
         tokn_core::request_event::RequestEvent {
           request_id,
@@ -132,7 +159,7 @@ impl AccumHelper {
           ts: tokn_core::util::now_unix_ms(),
           payload: tokn_core::request_event::RequestEventPayload::Stage(
             tokn_core::request_event::StageEvent::Completed {
-              success: true,
+              success: stream_error.is_none(),
               attempts,
             },
           ),
@@ -140,17 +167,25 @@ impl AccumHelper {
       ));
       guard.finish();
     });
-    Self { tx }
+    Self {
+      inner: Arc::new(AccumInner {
+        tx,
+        finished: AtomicBool::new(false),
+      }),
+    }
   }
 
   pub(crate) fn note_upstream(&self, item: &std::io::Result<Bytes>) {
     match item {
       Ok(bytes) => {
-        let _ = self.tx.send(AccumMsg::Upstream(bytes.clone()));
+        let _ = self.inner.tx.send(AccumMsg::Upstream(bytes.clone()));
       }
       Err(err) => {
         tracing::warn!("got upstream chunk error: {:?}", err);
-        let _ = self.tx.send(AccumMsg::UpstreamError(SmolStr::new(err.to_string())));
+        let _ = self
+          .inner
+          .tx
+          .send(AccumMsg::UpstreamError(SmolStr::new(err.to_string())));
       }
     }
   }
@@ -158,25 +193,87 @@ impl AccumHelper {
   pub(crate) fn note_converted(&self, item: &std::io::Result<Bytes>) {
     match item {
       Ok(bytes) => {
-        let _ = self.tx.send(AccumMsg::Converted(bytes.clone()));
+        let _ = self.inner.tx.send(AccumMsg::Converted(bytes.clone()));
       }
       Err(err) => {
         tracing::warn!("got converted chunk error: {:?}", err);
-        let _ = self.tx.send(AccumMsg::ConvertedError(SmolStr::new(err.to_string())));
+        let _ = self
+          .inner
+          .tx
+          .send(AccumMsg::ConvertedError(SmolStr::new(err.to_string())));
       }
     }
   }
 
   pub(crate) fn finish(&self) {
-    tracing::debug!("upstream stream ended");
-    let _ = self.tx.send(AccumMsg::Finish);
+    self.inner.finish();
   }
 }
 
-impl Drop for AccumHelper {
+impl AccumInner {
+  fn finish(&self) {
+    if !self.finished.swap(true, Ordering::AcqRel) {
+      tracing::debug!("upstream stream ended");
+      let _ = self.tx.send(AccumMsg::Finish);
+    }
+  }
+}
+
+impl Drop for AccumInner {
   fn drop(&mut self) {
     self.finish();
   }
+}
+
+/// Validate the terminal frame for protocols with a defined SSE lifecycle.
+/// Custom paths remain transport-only because their completion convention is
+/// unknown to the router.
+fn stream_terminal_error(endpoint: &RequestEndpoint, body: &[u8]) -> Option<SmolStr> {
+  let endpoint = endpoint.resolved()?;
+  let text = String::from_utf8_lossy(body);
+  let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+
+  for frame in normalized.split("\n\n") {
+    let mut event = None;
+    let mut data = String::new();
+    for line in frame.lines() {
+      if let Some(value) = line.strip_prefix("event:") {
+        event = Some(value.trim());
+      } else if let Some(value) = line.strip_prefix("data:") {
+        if !data.is_empty() {
+          data.push('\n');
+        }
+        data.push_str(value.trim_start());
+      }
+    }
+
+    let data_type = serde_json::from_str::<Value>(&data)
+      .ok()
+      .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
+    let event_type = data_type.as_deref().or(event);
+    match endpoint {
+      Endpoint::ChatCompletions if data.trim() == "[DONE]" => return None,
+      Endpoint::Responses if event_type == Some("response.completed") => return None,
+      Endpoint::Responses if matches!(event_type, Some("response.failed" | "response.incomplete" | "error")) => {
+        return Some(SmolStr::new(format!(
+          "upstream responses stream terminated with {}",
+          event_type.unwrap_or("error")
+        )));
+      }
+      Endpoint::Messages if event_type == Some("message_stop") => return None,
+      Endpoint::Messages if event_type == Some("error") => {
+        return Some(SmolStr::new("upstream messages stream terminated with error"));
+      }
+      _ => {}
+    }
+  }
+
+  let message = match endpoint {
+    Endpoint::ChatCompletions => "upstream chat completions stream ended without [DONE]",
+    Endpoint::Responses => "upstream responses stream ended without a terminal response event",
+    Endpoint::Messages => "upstream messages stream ended without message_stop",
+  };
+  Some(SmolStr::new(message))
 }
 
 /// Raw inbound HTTP payload passed to the Extract stage. The runner is
@@ -667,5 +764,161 @@ pub trait ConvertResponseStage: Send + Sync {
     self
       .convert_buffered(ctx, status, headers, upstream_endpoint, raw)
       .await
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use tokn_core::event::Event as CoreEvent;
+  use tokn_core::request_event::{RequestEvent, RequestEventPayload};
+
+  #[test]
+  fn validates_known_stream_terminal_events() {
+    assert!(stream_terminal_error(
+      &Endpoint::Responses.into(),
+      b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"
+    )
+    .is_none());
+    assert!(stream_terminal_error(&Endpoint::ChatCompletions.into(), b"data: [DONE]\n\n").is_none());
+    assert!(stream_terminal_error(
+      &Endpoint::Messages.into(),
+      b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+    )
+    .is_none());
+  }
+
+  #[test]
+  fn rejects_missing_or_failed_stream_terminal_events() {
+    let missing = stream_terminal_error(
+      &Endpoint::Responses.into(),
+      b"event: response.compaction.compacting\ndata: {\"type\":\"response.compaction.compacting\"}\n\n",
+    )
+    .unwrap();
+    assert!(missing.contains("without a terminal response event"));
+
+    let failed = stream_terminal_error(
+      &Endpoint::Responses.into(),
+      b"event: response.failed\ndata: {\"type\":\"response.failed\"}\n\n",
+    )
+    .unwrap();
+    assert!(failed.contains("response.failed"));
+
+    assert!(stream_terminal_error(&RequestEndpoint::custom("/events"), b"data: partial\n\n").is_none());
+  }
+
+  #[tokio::test]
+  async fn stream_chunk_error_emits_error_and_failed_completion() {
+    let events = Arc::new(crate::event::EventBus::new(32));
+    let mut receiver = events.subscribe();
+    let ctx = PipelineCtx::new("req-stream-error", Endpoint::Responses.into(), events);
+    let accum = AccumHelper::spawn(&ctx, SmolStr::new("gpt-test"));
+    accum.note_upstream(&Ok(Bytes::from_static(
+      b"event: response.created\ndata: {\"type\":\"response.created\"}\n\n",
+    )));
+    accum.note_converted(&Ok(Bytes::from_static(
+      b"event: response.created\ndata: {\"type\":\"response.created\"}\n\n",
+    )));
+    accum.note_upstream(&Err(std::io::Error::new(
+      std::io::ErrorKind::UnexpectedEof,
+      "upstream TLS stream ended",
+    )));
+    accum.note_converted(&Err(std::io::Error::new(
+      std::io::ErrorKind::UnexpectedEof,
+      "upstream TLS stream ended",
+    )));
+    accum.finish();
+
+    let request_events = receive_until_completed(&mut receiver).await;
+    assert!(request_events.iter().any(|event| {
+      matches!(
+        &event.payload,
+        RequestEventPayload::Stage(StageEvent::Error {
+          stage: Stage::ConvertResponse,
+          message,
+          ..
+        }) if message.contains("upstream TLS stream ended")
+      )
+    }));
+    assert!(request_events.iter().any(|event| {
+      matches!(
+        &event.payload,
+        RequestEventPayload::Stage(StageEvent::Completed { success: false, .. })
+      )
+    }));
+  }
+
+  #[tokio::test]
+  async fn missing_terminal_event_emits_failed_completion() {
+    let events = Arc::new(crate::event::EventBus::new(32));
+    let mut receiver = events.subscribe();
+    let ctx = PipelineCtx::new("req-stream-incomplete", Endpoint::Responses.into(), events);
+    let accum = AccumHelper::spawn(&ctx, SmolStr::new("gpt-test"));
+    let partial = Bytes::from_static(
+      b"event: response.compaction.compacting\ndata: {\"type\":\"response.compaction.compacting\"}\n\n",
+    );
+    accum.note_upstream(&Ok(partial.clone()));
+    accum.note_converted(&Ok(partial));
+    accum.finish();
+
+    let request_events = receive_until_completed(&mut receiver).await;
+    assert!(request_events.iter().any(|event| {
+      matches!(
+        &event.payload,
+        RequestEventPayload::Stage(StageEvent::Error { message, .. })
+          if message.contains("without a terminal response event")
+      )
+    }));
+    assert!(request_events.iter().any(|event| {
+      matches!(
+        &event.payload,
+        RequestEventPayload::Stage(StageEvent::Completed { success: false, .. })
+      )
+    }));
+  }
+
+  #[tokio::test]
+  async fn complete_stream_emits_successful_completion() {
+    let events = Arc::new(crate::event::EventBus::new(32));
+    let mut receiver = events.subscribe();
+    let ctx = PipelineCtx::new("req-stream-complete", Endpoint::Responses.into(), events);
+    let accum = AccumHelper::spawn(&ctx, SmolStr::new("gpt-test"));
+    let terminal = Bytes::from_static(b"event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n");
+    accum.note_upstream(&Ok(terminal.clone()));
+    accum.note_converted(&Ok(terminal));
+    accum.finish();
+
+    let request_events = receive_until_completed(&mut receiver).await;
+    assert!(!request_events
+      .iter()
+      .any(|event| matches!(&event.payload, RequestEventPayload::Stage(StageEvent::Error { .. }))));
+    assert!(request_events.iter().any(|event| {
+      matches!(
+        &event.payload,
+        RequestEventPayload::Stage(StageEvent::Completed { success: true, .. })
+      )
+    }));
+  }
+
+  async fn receive_until_completed(
+    receiver: &mut tokio::sync::broadcast::Receiver<Arc<CoreEvent>>,
+  ) -> Vec<RequestEvent> {
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+      let mut events = Vec::new();
+      loop {
+        let event = receiver.recv().await.unwrap();
+        let CoreEvent::Requests(event) = &*event else {
+          continue;
+        };
+        let event = event.clone();
+        let completed = matches!(event.payload, RequestEventPayload::Stage(StageEvent::Completed { .. }));
+        events.push(event);
+        if completed {
+          return events;
+        }
+      }
+    })
+    .await
+    .expect("stream accumulator should complete")
   }
 }
