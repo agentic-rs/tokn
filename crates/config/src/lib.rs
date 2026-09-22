@@ -300,8 +300,9 @@ pub struct Config {
   pub profiles: BTreeMap<String, ProfileConfig>,
   #[serde(default)]
   pub model_families: Vec<ModelFamily>,
-  /// Sparse provider scores keyed by concrete model ID. Higher scores are
-  /// preferred; providers omitted from a model retain the neutral score zero.
+  /// Sparse provider scores keyed by an exact model ID or trailing-`*` prefix.
+  /// Higher scores are preferred; providers omitted from all matching rules
+  /// retain the neutral score zero.
   #[serde(default)]
   pub model_scores: BTreeMap<String, BTreeMap<String, i32>>,
 }
@@ -1592,10 +1593,10 @@ fn validate_providers(section: &str, providers: Option<&[String]>) -> Result<()>
 
 fn validate_model_scores(scores: &BTreeMap<String, BTreeMap<String, i32>>) -> Result<()> {
   for (model, providers) in scores {
-    if model.trim().is_empty() || model.trim() != model {
+    if let Some(message) = model_score_pattern_error(model) {
       return error::InvalidAccountSnafu {
         id: format!("model_scores.{model}"),
-        message: String::from("model ids must be non-empty and have no surrounding whitespace"),
+        message: String::from(message),
       }
       .fail();
     }
@@ -1617,6 +1618,17 @@ fn validate_model_scores(scores: &BTreeMap<String, BTreeMap<String, i32>>) -> Re
     }
   }
   Ok(())
+}
+
+pub(crate) fn model_score_pattern_error(pattern: &str) -> Option<&'static str> {
+  if pattern.trim().is_empty() || pattern.trim() != pattern {
+    return Some("model score patterns must be non-empty and have no surrounding whitespace");
+  }
+  let wildcard_count = pattern.bytes().filter(|byte| *byte == b'*').count();
+  if wildcard_count > 1 || wildcard_count == 1 && !pattern.ends_with('*') {
+    return Some("model score patterns may contain only one wildcard, at the end");
+  }
+  None
 }
 
 fn validate_provider_id(section: &str, provider_id: Option<&str>) -> Result<()> {
@@ -2624,6 +2636,19 @@ deepseek = 50
     assert_eq!(loaded.config.model_scores["gpt-5.6-luna"]["opencode-go"], 100);
     assert_eq!(loaded.config.model_scores["deepseek-v3.2"]["deepseek"], 50);
     assert_eq!(loaded.sources.fragments, vec![fragment]);
+  }
+
+  #[test]
+  fn legacy_model_scores_reject_non_trailing_or_multiple_wildcards() {
+    for pattern in ["*gpt", "gpt-*-mini", "gpt-**"] {
+      let config = format!("[model_scores.\"{pattern}\"]\nopenai = 1\n");
+      let cfg: Config = toml::from_str(&config).unwrap();
+      let error = cfg.validate().unwrap_err();
+      assert!(
+        error.to_string().contains("only one wildcard"),
+        "pattern {pattern} was accepted"
+      );
+    }
   }
 
   #[test]

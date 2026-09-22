@@ -379,7 +379,9 @@ fn compile_model_scores(
 ) -> Result<BTreeMap<String, BTreeMap<ProviderId, i32>>, CompileError> {
   let mut scores = BTreeMap::new();
   for (model, raw_providers) in raw_scores {
-    validate_model_name(format!("model_scores.{model}"), model)?;
+    if let Some(message) = crate::model_score_pattern_error(model) {
+      return Err(invalid_value(format!("model_scores.{model}"), message));
+    }
     if raw_providers.is_empty() {
       return Err(invalid_value(
         format!("model_scores.{model}"),

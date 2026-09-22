@@ -209,7 +209,10 @@ strategy = "round_robin"
 failure_cooldown_secs = 60
 session_ttl_secs = 18000
 
-# Sparse per-model provider preferences. Higher scores are preferred.
+# Sparse exact-model or trailing-* provider preferences. Higher scores win.
+[model_scores."gpt-*"]
+openai = 10
+
 [model_scores."gpt-5.6-luna"]
 opencode-go = 100
 
@@ -251,12 +254,17 @@ present, replaces default model families for that profile. API `passthrough`
 and `switch` policies require `default_provider_id` so the router can target a
 deterministic provider while preserving request bytes.
 
-`model_scores` ranks providers for a specific model without requiring a full
-provider list. Unlisted providers have score `0`; providers with the same score
-continue to use round-robin selection. Active accounts are considered before
-fallback accounts, and an existing healthy session affinity remains sticky.
-Cooling providers are skipped so a lower-scored eligible provider can serve the
-request. Provider-qualified requests bypass this ranking.
+`model_scores` ranks providers without requiring a full provider list. Keys are
+either exact model IDs or prefix patterns containing one trailing `*`; `*`
+alone supplies a global fallback. Score lookup happens independently for each
+provider: an exact rule wins, followed by the longest matching prefix that
+mentions that provider. A narrower rule therefore does not need to repeat
+providers configured by broader rules. Providers omitted from every matching
+rule have score `0`, and providers with the same score continue to use
+round-robin selection. Active accounts are considered before fallback accounts,
+and an existing healthy session affinity remains sticky. Cooling providers are
+skipped so a lower-scored eligible provider can serve the request.
+Provider-qualified requests bypass this ranking.
 
 For an unversioned legacy configuration, the same table may live in
 `config.d/model_scores.toml`; entries merge with scores in `config.toml` by
@@ -519,6 +527,9 @@ operation = "translate_compatible"
 
 [model_scores."gpt-5.6-luna"]
 opencode-go = 100
+
+[model_scores."gpt-*"]
+openai = 10
 ```
 
 Both profiles reuse the route while keeping independent round-robin,
@@ -528,13 +539,14 @@ optional `providers` list restricts configured provider IDs; a fixed provider
 or destination must also be in that list. Existing managed/relay, model,
 operation, credential, and retry semantics are unchanged.
 
-Top-level `model_scores` supplies sparse per-model provider preferences to
-managed routes. Higher scores are selected first and omitted providers default
+Top-level `model_scores` supplies sparse provider preferences to managed routes.
+Keys may be exact model IDs or prefix patterns with one trailing `*`; `*` alone
+matches every model. For each provider, an exact rule wins, followed by the
+longest matching prefix that mentions that provider. Omitted providers default
 to `0`, so adding one preference does not require enumerating every eligible
 provider. Equal-scored healthy accounts retain round-robin behavior. Account
 tier, session affinity, cooldown, route provider restrictions, and endpoint
-compatibility still apply; provider-qualified requests do not use these
-scores.
+compatibility still apply; provider-qualified requests do not use these scores.
 
 Model discovery is evidence for automatic routing, not a complete list of IDs
 an upstream accepts. Automatic routing first prefers a provider that advertises
