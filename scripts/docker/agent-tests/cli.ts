@@ -10,7 +10,7 @@ import { runSuite } from "./runner";
 import { loadSuite } from "./suite";
 
 const help = `Usage:
-  bun --cwd scripts docker agent-test build-agent --agent <opencode|pi|dsh>
+  bun --cwd scripts docker agent-test build-agent --agent <opencode|pi|dsh|codex|claude-code>
   bun --cwd scripts docker agent-test run --suite <suite.json> [--case <id>]... [--output <new-directory>]
 
 TOKN_CONTAINER_ENGINE selects podman (default) or docker.

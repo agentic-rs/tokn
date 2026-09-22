@@ -15,6 +15,10 @@ describe("agent-test matrix", () => {
     expect(parseCases([custom])[0]).toEqual(custom);
   });
 
+  test("accepts the Anthropic Messages API as an explicit endpoint", () => {
+    expect(parseCases([{ ...defaultCases[0], api: "messages" }])[0].api).toBe("messages");
+  });
+
   test("rejects invalid or ambiguous case declarations", () => {
     for (const value of [null, {}, [], [null], [defaultCases[0], defaultCases[0]]]) {
       expect(() => parseCases(value)).toThrow();

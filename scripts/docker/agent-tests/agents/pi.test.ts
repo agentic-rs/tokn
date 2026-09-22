@@ -96,6 +96,8 @@ describe("Pi preparation", () => {
   test("rejects unsupported modes", () => {
     expect(() => pi.prepare({ ...testCase, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
       .toThrow("does not support agent-test mode");
+    expect(() => pi.prepare({ ...testCase, api: "messages" }, { router_url: "http://127.0.0.1:4141" }))
+      .toThrow("do not support the Messages API");
   });
 });
 

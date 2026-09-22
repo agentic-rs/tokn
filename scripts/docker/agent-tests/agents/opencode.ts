@@ -8,6 +8,7 @@ const fixtureReadPattern = fixturePath.slice(1);
 
 function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
   if (testCase.mode !== "api") throw new Error(`OpenCode does not support agent-test mode '${testCase.mode}'`);
+  if (testCase.api === "messages") throw new Error("OpenCode agent tests do not support the Messages API");
   const { expected_text: expectedText, prompt, fixture } = preparePrompt(testCase, options.marker);
   const readTool = testCase.probe === "read_tool";
   const config = {

@@ -1,0 +1,13 @@
+FROM docker.io/node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install --global @anthropic-ai/claude-code@2.1.272 \
+  && claude --version | grep -F "2.1.272"
+
+COPY scripts/docker/claude-code-agent-test-entrypoint.sh /usr/local/bin/claude-code-agent-test-entrypoint
+RUN chmod 0755 /usr/local/bin/claude-code-agent-test-entrypoint
+
+WORKDIR /workspace
+ENTRYPOINT ["claude-code-agent-test-entrypoint"]

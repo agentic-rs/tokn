@@ -48,10 +48,10 @@ const fields = new Set([
 ]);
 
 export function parseCases(value: unknown): AgentTestCase[] {
-  if (!Array.isArray(value) || value.length === 0) throw new Error("Trial cases must be a nonempty JSON array");
+  if (!Array.isArray(value) || value.length === 0) throw new Error("Agent-test cases must be a nonempty JSON array");
   const ids = new Set<string>();
   return value.map((entry, index) => {
-    const location = `Trial case ${index + 1}`;
+    const location = `Agent-test case ${index + 1}`;
     if (entry === null || typeof entry !== "object" || Array.isArray(entry)) throw new Error(`${location} must be an object`);
     const item = entry as Record<string, unknown>;
     for (const key of Object.keys(item)) {
@@ -69,8 +69,8 @@ export function parseCases(value: unknown): AgentTestCase[] {
     }
     if (ids.has(testCase.id)) throw new Error(`Duplicate agent-test case id '${testCase.id}'`);
     ids.add(testCase.id);
-    if (testCase.api !== "responses" && testCase.api !== "chat_completions") {
-      throw new Error(`${location}.api must be 'responses' or 'chat_completions'`);
+    if (testCase.api !== "responses" && testCase.api !== "chat_completions" && testCase.api !== "messages") {
+      throw new Error(`${location}.api must be 'responses', 'chat_completions', or 'messages'`);
     }
     if (testCase.probe !== "text" && testCase.probe !== "read_tool") {
       throw new Error(`${location}.probe must be 'text' or 'read_tool'`);
