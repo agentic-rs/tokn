@@ -1,0 +1,10 @@
+FROM docker.io/node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git ripgrep \
+  && rm -rf /var/lib/apt/lists/* \
+  && npm install --global @openai/codex@0.154.0 \
+  && codex --version | grep -F "0.154.0"
+
+WORKDIR /workspace
+ENTRYPOINT ["codex"]

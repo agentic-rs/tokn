@@ -106,9 +106,10 @@ describe("OpenCode preparation", () => {
 
   test("does not pretend unsupported agents or modes are implemented", () => {
     expect(resolveAgent("opencode")).toBe(opencode);
-    expect(() => resolveAgent("codex")).toThrow("Unsupported agent-test adapter");
     expect(() => opencode.prepare({ ...testCase, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
       .toThrow("does not support agent-test mode");
+    expect(() => opencode.prepare({ ...testCase, api: "messages" }, { router_url: "http://127.0.0.1:4141" }))
+      .toThrow("do not support the Messages API");
   });
 });
 

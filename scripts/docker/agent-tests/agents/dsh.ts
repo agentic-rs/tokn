@@ -7,6 +7,7 @@ function yamlString(value: string): string {
 
 function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
   if (testCase.mode !== "api") throw new Error(`DSH does not support agent-test mode '${testCase.mode}'`);
+  if (testCase.api === "messages") throw new Error("DSH agent tests do not support the Messages API");
   if (testCase.probe !== "text") {
     throw new Error("DSH 0.1.5-rc.2 does not expose structured tool events; only text probes are supported");
   }
