@@ -2,12 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import { defaultCases, parseCases, selectCases } from "./cases";
 
-describe("trial matrix", () => {
+describe("agent-test matrix", () => {
   test("defaults cover text and real tool use for DeepSeek and Luna", () => {
     const cases = parseCases(defaultCases);
     expect(cases).toHaveLength(4);
-    expect(new Set(cases.map((trial) => `${trial.model}/${trial.probe}`)).size).toBe(4);
-    expect(cases.filter((trial) => trial.model === "gpt-5.6-luna").every((trial) => trial.api === "responses")).toBe(true);
+    expect(new Set(cases.map((testCase) => `${testCase.model}/${testCase.probe}`)).size).toBe(4);
+    expect(cases.filter((testCase) => testCase.model === "gpt-5.6-luna").every((testCase) => testCase.api === "responses")).toBe(true);
   });
 
   test("supports future agents and modes without silently mapping them to current ones", () => {
@@ -35,6 +35,6 @@ describe("trial matrix", () => {
     expect(selectCases(defaultCases, [])).toEqual(defaultCases);
     expect(selectCases(defaultCases, [defaultCases[1].id, defaultCases[0].id])).toEqual(defaultCases.slice(0, 2));
     expect(selectCases(defaultCases, [defaultCases[0].id, defaultCases[0].id])).toEqual([defaultCases[0]]);
-    expect(() => selectCases(defaultCases, [defaultCases[0].id, "typo"])).toThrow("Unknown trial case(s): typo");
+    expect(() => selectCases(defaultCases, [defaultCases[0].id, "typo"])).toThrow("Unknown agent-test case(s): typo");
   });
 });

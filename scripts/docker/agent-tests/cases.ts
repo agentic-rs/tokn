@@ -1,8 +1,8 @@
-import type { TrialCase } from "./agents/types";
+import type { AgentTestCase } from "./agents/types";
 
 // Routes are explicit so suites can target existing host profiles without
 // changing host configuration. Add agent adapters independently of test modes.
-export const defaultCases: TrialCase[] = [
+export const defaultCases: AgentTestCase[] = [
   {
     id: "opencode-deepseek-text",
     agent: "opencode",
@@ -47,7 +47,7 @@ const fields = new Set([
   "id", "agent", "mode", "model", "base_path", "api", "probe", "upstream_model", "display_name", "expected_text",
 ]);
 
-export function parseCases(value: unknown): TrialCase[] {
+export function parseCases(value: unknown): AgentTestCase[] {
   if (!Array.isArray(value) || value.length === 0) throw new Error("Trial cases must be a nonempty JSON array");
   const ids = new Set<string>();
   return value.map((entry, index) => {
@@ -63,35 +63,35 @@ export function parseCases(value: unknown): TrialCase[] {
     for (const key of ["id", "agent", "mode", "model", "base_path", "api", "probe"]) {
       if (typeof item[key] !== "string") throw new Error(`${location} requires '${key}'`);
     }
-    const trial = item as TrialCase;
-    if (!/^[a-z0-9][a-z0-9_-]*$/.test(trial.id)) {
+    const testCase = item as AgentTestCase;
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(testCase.id)) {
       throw new Error(`${location}.id must contain only lowercase letters, digits, '_' or '-'`);
     }
-    if (ids.has(trial.id)) throw new Error(`Duplicate trial case id '${trial.id}'`);
-    ids.add(trial.id);
-    if (trial.api !== "responses" && trial.api !== "chat_completions") {
+    if (ids.has(testCase.id)) throw new Error(`Duplicate agent-test case id '${testCase.id}'`);
+    ids.add(testCase.id);
+    if (testCase.api !== "responses" && testCase.api !== "chat_completions") {
       throw new Error(`${location}.api must be 'responses' or 'chat_completions'`);
     }
-    if (trial.probe !== "text" && trial.probe !== "read_tool") {
+    if (testCase.probe !== "text" && testCase.probe !== "read_tool") {
       throw new Error(`${location}.probe must be 'text' or 'read_tool'`);
     }
-    if (!/^\/(?:[a-zA-Z0-9_-]+\/)*v1$/.test(trial.base_path)) {
+    if (!/^\/(?:[a-zA-Z0-9_-]+\/)*v1$/.test(testCase.base_path)) {
       throw new Error(`${location}.base_path must be an absolute API path ending in '/v1'`);
     }
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(trial.model)) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(testCase.model)) {
       throw new Error(`${location}.model must be an unqualified model name; use upstream_model for a provider-qualified ID`);
     }
-    if (trial.expected_text !== undefined && trial.expected_text.trim() !== trial.expected_text) {
+    if (testCase.expected_text !== undefined && testCase.expected_text.trim() !== testCase.expected_text) {
       throw new Error(`${location}.expected_text must not have surrounding whitespace`);
     }
-    return { ...trial };
+    return { ...testCase };
   });
 }
 
-export function selectCases(cases: TrialCase[], ids: string[]): TrialCase[] {
+export function selectCases(cases: AgentTestCase[], ids: string[]): AgentTestCase[] {
   if (ids.length === 0) return [...cases];
   const requested = new Set(ids);
-  const selected = cases.filter((trial) => requested.delete(trial.id));
-  if (requested.size > 0) throw new Error(`Unknown trial case(s): ${[...requested].join(", ")}`);
+  const selected = cases.filter((testCase) => requested.delete(testCase.id));
+  if (requested.size > 0) throw new Error(`Unknown agent-test case(s): ${[...requested].join(", ")}`);
   return selected;
 }

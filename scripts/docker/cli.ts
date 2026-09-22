@@ -2,7 +2,7 @@ import { agent } from "./agent";
 import { UsageError } from "./args";
 import { loadImage } from "./artifacts";
 import { buildAgent, down, logs, reset, status, up } from "./containers";
-import { trial } from "./trials/cli";
+import { agentTest } from "./agent-tests/cli";
 
 function usage(): never {
   console.error(`Usage:
@@ -16,7 +16,7 @@ function usage(): never {
   bun --cwd scripts docker status [--tag <tag>]
   bun --cwd scripts docker logs [--tag <tag>]
   bun --cwd scripts docker build-agent
-  bun --cwd scripts docker trial --help
+  bun --cwd scripts docker agent-test --help
 
 Environment:
   TOKN_CONTAINER_ENGINE=podman|docker  (default: podman)`);
@@ -27,8 +27,8 @@ async function main(): Promise<void> {
   const [cmd, ...args] = process.argv.slice(2);
   try {
     switch (cmd) {
-      case "trial":
-        await trial(args);
+      case "agent-test":
+        await agentTest(args);
         break;
       case "load":
         await loadImage(args);

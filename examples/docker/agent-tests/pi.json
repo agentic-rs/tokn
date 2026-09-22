@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "gateway_image": "tokn-gateway-cli:agent-test",
+  "config_file": "~/.tokn/router/config.toml",
+  "router_url": "http://127.0.0.1:4141",
+  "timeout_secs": 120,
+  "cases": [
+    {
+      "id": "pi-deepseek-text",
+      "agent": "pi",
+      "mode": "api",
+      "model": "deepseek-chat",
+      "base_path": "/opencode-deepseek/v1",
+      "api": "chat_completions",
+      "probe": "text"
+    },
+    {
+      "id": "pi-deepseek-read",
+      "agent": "pi",
+      "mode": "api",
+      "model": "deepseek-chat",
+      "base_path": "/opencode-deepseek/v1",
+      "api": "chat_completions",
+      "probe": "read_tool"
+    },
+    {
+      "id": "pi-luna-text",
+      "agent": "pi",
+      "mode": "api",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "codex/gpt-5.6-luna",
+      "base_path": "/opencode-codex/v1",
+      "api": "responses",
+      "probe": "text"
+    },
+    {
+      "id": "pi-luna-read",
+      "agent": "pi",
+      "mode": "api",
+      "model": "gpt-5.6-luna",
+      "upstream_model": "codex/gpt-5.6-luna",
+      "base_path": "/opencode-codex/v1",
+      "api": "responses",
+      "probe": "read_tool"
+    }
+  ]
+}

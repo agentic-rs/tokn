@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { defaultCases } from "./cases";
 import type { CommandOptions, CommandResult, ContainerEngine } from "./engine";
 import { runSuite } from "./runner";
-import { parseSuite, type TrialSuite } from "./suite";
+import { parseSuite, type AgentTestSuite } from "./suite";
 
 const private_key = "tokn_test_private_key_not_for_artifacts";
 const marker = "TOKN_OFFLINE_PROBE_OK";
@@ -65,7 +65,7 @@ class FakeEngine implements ContainerEngine {
       return result();
     }
     if (args[0] === "run") {
-      if (args.includes("api-key")) return result(`name: offline-trial\nkey: ${private_key}\n`);
+      if (args.includes("api-key")) return result(`name: offline-agent-test\nkey: ${private_key}\n`);
       if (args.includes("--rm")) return result();
       const container_name = args[args.indexOf("--name") + 1];
       const kind = args.includes("serve") ? "gateway" : "agent";
@@ -78,7 +78,7 @@ class FakeEngine implements ContainerEngine {
     if (args[0] === "wait") {
       const state = this.state(name);
       if (this.behavior.cancel_on_wait) {
-        this.behavior.cancel_on_wait.abort(new Error("trial cancelled"));
+        this.behavior.cancel_on_wait.abort(new Error("agent test cancelled"));
         options.signal?.throwIfAborted();
       }
       if (this.behavior.agent_wait_failure) return result("", 125, "wait failed");
@@ -136,10 +136,10 @@ class FakeEngine implements ContainerEngine {
 
 let directory: string;
 let output_dir: string;
-let suite: TrialSuite;
+let suite: AgentTestSuite;
 
 beforeEach(() => {
-  directory = mkdtempSync(join(tmpdir(), "tokn-trial-runner-"));
+  directory = mkdtempSync(join(tmpdir(), "tokn-agent-test-runner-"));
   const host_dir = join(directory, "host-router");
   mkdirSync(host_dir);
   mkdirSync(join(host_dir, "config.d"));
@@ -174,7 +174,7 @@ function expectCleaned(engine: FakeEngine): void {
   expect(engine.volumes.size).toBe(1);
 }
 
-describe("container trial runner", () => {
+describe("container agent-test runner", () => {
   test("isolates host state, exports after shutdown, and passes the key only via process environment", async () => {
     const engine = new FakeEngine();
     const report = await runSuite(engine, suite, { output_dir });
@@ -184,7 +184,7 @@ describe("container trial runner", () => {
     expect(report.gateway_exit_code).toBe(0);
     expectCleaned(engine);
 
-    const gateway_runs = engine.calls.filter(({ args }) => args[0] === "run" && !args.includes("TOKN_TRIAL_API_KEY"));
+    const gateway_runs = engine.calls.filter(({ args }) => args[0] === "run" && !args.includes("TOKN_AGENT_TEST_API_KEY"));
     const expected_sources = [suite.config_file, suite.auth_file, suite.config_dir!, suite.auth_dir!].map((path) => realpathSync(path));
     for (const { args } of gateway_runs) {
       const mounts = args.filter((_, index) => args[index - 1] === "--mount");
@@ -195,8 +195,8 @@ describe("container trial runner", () => {
       expect(binds.every((mount) => mount.endsWith(",readonly"))).toBe(true);
       expect(binds.map((mount) => /,src=([^,]+),/.exec(mount)![1]).sort()).toEqual([...expected_sources].sort());
     }
-    const agent_run = engine.calls.find(({ args }) => args[0] === "run" && args.includes("TOKN_TRIAL_API_KEY"))!;
-    expect(agent_run.options.env).toEqual({ TOKN_TRIAL_API_KEY: private_key });
+    const agent_run = engine.calls.find(({ args }) => args[0] === "run" && args.includes("TOKN_AGENT_TEST_API_KEY"))!;
+    expect(agent_run.options.env).toEqual({ TOKN_AGENT_TEST_API_KEY: private_key });
     expect(agent_run.args[agent_run.args.indexOf("--network") + 1]).toBe(`container:${report.run_id}-gateway`);
     expect(agent_run.args).toContain(`/workspace:rw`);
     const all_args = engine.calls.flatMap(({ args }) => args);
@@ -261,7 +261,7 @@ describe("container trial runner", () => {
     const report = await runSuite(engine, suite, { output_dir, signal: cancellation.signal });
     expect(report.success).toBe(false);
     expect(report.export_complete).toBe(true);
-    expect(report.errors).toContain("trial cancelled");
+    expect(report.errors).toContain("agent test cancelled");
     expect(report.cases).toHaveLength(0);
     expect(engine.calls.filter(({ args }) => args[0] === "rm")).toHaveLength(2);
     expectCleaned(engine);
@@ -313,7 +313,7 @@ describe("container trial runner", () => {
   test("refuses unsupported cases and reused capture directories before creating resources", async () => {
     const engine = new FakeEngine();
     const unsupported = { ...suite, cases: [{ ...suite.cases[0], agent: "future-agent" }] };
-    await expect(runSuite(engine, unsupported, { output_dir })).rejects.toThrow("Unsupported trial agent");
+    await expect(runSuite(engine, unsupported, { output_dir })).rejects.toThrow("Unsupported agent-test adapter");
     expect(engine.calls).toHaveLength(0);
     mkdirSync(output_dir);
     await expect(runSuite(engine, suite, { output_dir })).rejects.toThrow();

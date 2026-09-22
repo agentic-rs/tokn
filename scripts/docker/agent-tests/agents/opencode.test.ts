@@ -3,9 +3,9 @@ import { posix } from "node:path";
 
 import { resolveAgent } from "./index";
 import { opencode } from "./opencode";
-import type { TrialCase } from "./types";
+import type { AgentTestCase } from "./types";
 
-const trial: TrialCase = {
+const testCase: AgentTestCase = {
   id: "opencode-test",
   agent: "opencode",
   mode: "api",
@@ -28,7 +28,7 @@ function finishEvent(reason = "stop") {
   return { type: "step_finish", sessionID: "session-one", part: { reason } };
 }
 
-function readEvent(status = "completed", filePath = "/trial/tool-fixture.txt", token = marker) {
+function readEvent(status = "completed", filePath = "/agent-test/tool-fixture.txt", token = marker) {
   return {
     type: "tool_use",
     sessionID: "session-one",
@@ -36,19 +36,19 @@ function readEvent(status = "completed", filePath = "/trial/tool-fixture.txt", t
   };
 }
 
-function evaluate(stdout: string, overrides: Partial<TrialCase> = {}, exit_code: number | null = 0, timed_out = false) {
-  const selected = { ...trial, ...overrides };
+function evaluate(stdout: string, overrides: Partial<AgentTestCase> = {}, exit_code: number | null = 0, timed_out = false) {
+  const selected = { ...testCase, ...overrides };
   const prepared = opencode.prepare(selected, { router_url: "http://127.0.0.1:4141", marker });
   return opencode.evaluate(selected, prepared, { stdout, stderr: "", exit_code, timed_out });
 }
 
 describe("OpenCode preparation", () => {
   test("produces isolated configuration and JSON invocation without embedding credentials", () => {
-    const prepared = opencode.prepare(trial, { router_url: "http://127.0.0.1:4141/", marker });
+    const prepared = opencode.prepare(testCase, { router_url: "http://127.0.0.1:4141/", marker });
     const config = JSON.parse(prepared.files.find((file) => file.path === "opencode.json")!.content);
     expect(config.provider.tokn).toMatchObject({
       npm: "@ai-sdk/openai-compatible",
-      options: { baseURL: "http://127.0.0.1:4141/test/v1", apiKey: "{env:TOKN_TRIAL_API_KEY}" },
+      options: { baseURL: "http://127.0.0.1:4141/test/v1", apiKey: "{env:TOKN_AGENT_TEST_API_KEY}" },
     });
     expect(config.permission).toBe("deny");
     expect(config.tools).toEqual({ "*": false });
@@ -56,21 +56,21 @@ describe("OpenCode preparation", () => {
     expect(config.plugin).toEqual([]);
     expect(config.mcp).toEqual({});
     expect(prepared.command).toEqual([
-      "--pure", "run", "--format", "json", "--model", "tokn/deepseek-v4-flash", "--title", trial.id, "--dir", "/workspace",
+      "--pure", "run", "--format", "json", "--model", "tokn/deepseek-v4-flash", "--title", testCase.id, "--dir", "/workspace",
       expect.stringContaining(marker),
     ]);
     expect(prepared.working_dir).toBe("/workspace");
-    expect(prepared.environment.OPENCODE_CONFIG).toBe("/trial/opencode.json");
+    expect(prepared.environment.OPENCODE_CONFIG).toBe("/agent-test/opencode.json");
     expect(prepared.environment.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("1");
     expect(prepared.environment.OPENCODE_DISABLE_DEFAULT_PLUGINS).toBe("1");
     expect(prepared.environment.OPENCODE_DISABLE_EXTERNAL_SKILLS).toBe("1");
-    expect(prepared.environment.TOKN_TRIAL_API_KEY).toBeUndefined();
+    expect(prepared.environment.TOKN_AGENT_TEST_API_KEY).toBeUndefined();
     expect(prepared.files.every((file) => !file.path.startsWith("/") && !file.path.includes(".."))).toBe(true);
   });
 
   test("selects Responses independently of the agent and upstream model ID", () => {
     const prepared = opencode.prepare({
-      ...trial, api: "responses", model: "gpt-5.6-luna", upstream_model: "codex/gpt-5.6-luna", display_name: "Luna",
+      ...testCase, api: "responses", model: "gpt-5.6-luna", upstream_model: "codex/gpt-5.6-luna", display_name: "Luna",
     }, { router_url: "http://127.0.0.1:4141", marker });
     const config = JSON.parse(prepared.files[0].content);
     expect(config.provider.tokn.npm).toBe("@ai-sdk/openai");
@@ -79,36 +79,36 @@ describe("OpenCode preparation", () => {
   });
 
   test("keeps read answer only in its fixture and grants narrowly scoped read access", () => {
-    const prepared = opencode.prepare({ ...trial, probe: "read_tool" }, { router_url: "http://127.0.0.1:4141", marker });
+    const prepared = opencode.prepare({ ...testCase, probe: "read_tool" }, { router_url: "http://127.0.0.1:4141", marker });
     const config = JSON.parse(prepared.files[0].content);
     expect(prepared.files.find((file) => file.path === "prompt.txt")!.content).not.toContain(marker);
     expect(prepared.command.join(" ")).not.toContain(marker);
     expect(prepared.files.find((file) => file.path === "tool-fixture.txt")!.content).toContain(`verification_token=${marker}`);
     expect(config.permission).toEqual({
       "*": "deny",
-      read: { "*": "deny", "trial/tool-fixture.txt": "allow" },
-      external_directory: { "*": "deny", "/trial/*": "allow" },
+      read: { "*": "deny", "agent-test/tool-fixture.txt": "allow" },
+      external_directory: { "*": "deny", "/agent-test/*": "allow" },
     });
     expect(config.tools).toEqual({ "*": false, read: true });
     // Pinned OpenCode reads relative to the global non-Git worktree, not cwd.
     expect(config.permission.read[posix.relative("/", prepared.fixture_path!)]).toBe("allow");
     expect(config.permission.read["*"]).toBe("deny");
-    expect(config.permission.read["trial/opencode.json"]).toBeUndefined();
+    expect(config.permission.read["agent-test/opencode.json"]).toBeUndefined();
   });
 
   test("generates fresh fixture markers unless the case explicitly supplies one", () => {
-    const first = opencode.prepare(trial, { router_url: "http://127.0.0.1:4141" });
-    const second = opencode.prepare(trial, { router_url: "http://127.0.0.1:4141" });
+    const first = opencode.prepare(testCase, { router_url: "http://127.0.0.1:4141" });
+    const second = opencode.prepare(testCase, { router_url: "http://127.0.0.1:4141" });
     expect(first.expected_text).not.toBe(second.expected_text);
-    const fixed = opencode.prepare({ ...trial, expected_text: "FIXED" }, { router_url: "http://127.0.0.1:4141", marker });
+    const fixed = opencode.prepare({ ...testCase, expected_text: "FIXED" }, { router_url: "http://127.0.0.1:4141", marker });
     expect(fixed.expected_text).toBe("FIXED");
   });
 
   test("does not pretend unsupported agents or modes are implemented", () => {
     expect(resolveAgent("opencode")).toBe(opencode);
-    expect(() => resolveAgent("codex")).toThrow("Unsupported trial agent");
-    expect(() => opencode.prepare({ ...trial, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
-      .toThrow("does not support trial mode");
+    expect(() => resolveAgent("codex")).toThrow("Unsupported agent-test adapter");
+    expect(() => opencode.prepare({ ...testCase, mode: "proxy" }, { router_url: "http://127.0.0.1:4141" }))
+      .toThrow("does not support agent-test mode");
   });
 });
 
@@ -122,7 +122,7 @@ describe("OpenCode JSONL verification", () => {
     const result = evaluate(events(readEvent(), finishEvent("tool-calls"), textEvent(), finishEvent()), { probe: "read_tool" });
     expect(result.success).toBe(true);
     expect(result.completed_steps).toBe(2);
-    expect(result.tool_calls[0]).toMatchObject({ name: "read", status: "completed", file_path: "/trial/tool-fixture.txt" });
+    expect(result.tool_calls[0]).toMatchObject({ name: "read", status: "completed", file_path: "/agent-test/tool-fixture.txt" });
   });
 
   test("fails on an error event even if the process exits zero and text matched", () => {
@@ -158,8 +158,8 @@ describe("OpenCode JSONL verification", () => {
       [],
       [readEvent("error")],
       [readEvent("running")],
-      [readEvent("completed", "/trial/other.txt")],
-      [readEvent("completed", "/trial/tool-fixture.txt", "WRONG")],
+      [readEvent("completed", "/agent-test/other.txt")],
+      [readEvent("completed", "/agent-test/tool-fixture.txt", "WRONG")],
       [readEvent(), readEvent()],
       [readEvent(), { type: "tool_use", part: { tool: "bash", state: { status: "completed" } } }],
     ];

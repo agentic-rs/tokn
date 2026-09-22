@@ -1,4 +1,4 @@
-export type TrialCase = {
+export type AgentTestCase = {
   id: string;
   agent: string;
   mode: string;
@@ -11,7 +11,7 @@ export type TrialCase = {
   expected_text?: string;
 };
 
-export type PreparedTrial = {
+export type PreparedAgentTest = {
   files: { path: string; content: string }[];
   command: string[];
   environment: Record<string, string>;
@@ -20,24 +20,24 @@ export type PreparedTrial = {
   fixture_path?: string;
 };
 
-export type TrialOutput = {
+export type AgentTestOutput = {
   stdout: string;
   stderr: string;
   exit_code: number | null;
   timed_out?: boolean;
 };
 
-export type TrialToolCall = {
+export type AgentTestToolCall = {
   name: string;
   status: string;
   file_path?: string;
   output?: string;
 };
 
-export type TrialResult = {
+export type AgentTestResult = {
   success: boolean;
   text: string;
-  tool_calls: TrialToolCall[];
+  tool_calls: AgentTestToolCall[];
   completed_steps: number;
   session_ids: string[];
   error?: string;
@@ -48,6 +48,6 @@ export type AgentAdapter = {
   version: string;
   image: string;
   dockerfile: string;
-  prepare: (trial: TrialCase, options: { router_url: string; marker?: string }) => PreparedTrial;
-  evaluate: (trial: TrialCase, prepared: PreparedTrial, output: TrialOutput) => TrialResult;
+  prepare: (testCase: AgentTestCase, options: { router_url: string; marker?: string }) => PreparedAgentTest;
+  evaluate: (testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput) => AgentTestResult;
 };
