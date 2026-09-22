@@ -41,8 +41,8 @@ resolver = "2"
 version = "0.2.2"
 edition = "2021"
 documentation = "https://docs.rs/tokn-router"
-homepage = "https://github.com/agentic-rs/tokn"
-repository = "https://github.com/agentic-rs/tokn"
+homepage = "https://github.com/tokn-ai/tokn"
+repository = "https://github.com/tokn-ai/tokn"
 license = "MIT"
 
 [workspace.dependencies]
