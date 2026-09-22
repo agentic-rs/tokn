@@ -32,9 +32,9 @@ gateway settles.
 - Optional HTTP CONNECT proxy with local CA generation for agent workflows.
 
 See [Docker setup and shutdown](docs/docker.md) for an authenticated configuration.
-Docker PR trial helpers live under [`scripts/`](scripts/README.md).
+Docker agent-test helpers live under [`scripts/`](scripts/README.md).
 They load the CI image artifact, run a persistent gateway container, and launch
-disposable Codex/opencode/pi agent containers through Bun.
+disposable Codex, Claude Code, OpenCode, Pi, and DSH agent containers through Bun.
 
 ## Install
 

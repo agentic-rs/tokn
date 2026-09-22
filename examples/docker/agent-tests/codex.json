@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "gateway_image": "tokn-gateway-cli:agent-test",
+  "config_file": "~/.tokn/router/config.toml",
+  "router_url": "http://127.0.0.1:4141",
+  "timeout_secs": 180,
+  "cases": [
+    {
+      "id": "codex-copilot-gpt-text",
+      "agent": "codex",
+      "mode": "api",
+      "model": "gpt-5.4",
+      "base_path": "/opencode-github-copilot/v1",
+      "api": "responses",
+      "probe": "text"
+    },
+    {
+      "id": "codex-copilot-gpt-read",
+      "agent": "codex",
+      "mode": "api",
+      "model": "gpt-5.4",
+      "base_path": "/opencode-github-copilot/v1",
+      "api": "responses",
+      "probe": "read_tool"
+    }
+  ]
+}

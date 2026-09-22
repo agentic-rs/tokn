@@ -25,6 +25,14 @@ TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
 TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent dsh
 TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
   --suite ../examples/docker/agent-tests/dsh.json
+
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent codex
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
+  --suite ../examples/docker/agent-tests/codex.json
+
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test build-agent --agent claude-code
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker agent-test run \
+  --suite ../examples/docker/agent-tests/claude-code.json
 ```
 
 The example reads `~/.tokn/router/config.toml` and `auth.yaml`. Set `auth_file` in
@@ -33,13 +41,17 @@ to override automatic sibling `config.d`/`auth.d` discovery. Keep credentials
 out of the repository. These mounts are read-only, so credentials that need
 refreshing must first be refreshed outside the agent test.
 
-The examples expect existing `opencode-deepseek` and `opencode-codex` profiles.
+The examples expect existing `opencode-deepseek`, `opencode-codex`, and
+`opencode-github-copilot` profiles. Codex CLI uses `gpt-5.4` over Responses;
+Claude Code uses `claude-sonnet-4.6` over Messages.
 Edit each case's `base_path` to match your profiles. `model` names the model in
 the agent; optional `upstream_model` supplies a qualified router model identifier.
-`api` explicitly selects Chat Completions or Responses. Model eligibility and
+`api` explicitly selects Chat Completions, Responses, or Messages. Model eligibility and
 provider errors are real test failures; the harness does not bypass the router's
 model catalogue. In particular, a provider that omits `gpt-5.6-luna` from its
 catalogue may fail these Luna cases even if a raw upstream diagnostic succeeds.
+For Claude Code, the adapter removes the terminal `/v1` from `base_path` because
+the CLI appends `/v1/messages` to `ANTHROPIC_BASE_URL`.
 
 The config must enable persistence/session recording and use default database
 paths. Use a dedicated config if your native configuration has absolute paths.
@@ -56,7 +68,7 @@ and persistence shutdown confirmations remain observable.
 Select cases with repeated `--case ID` flags. `timeout_secs` bounds each agent
 container (default 120). A timeout stops the actual container. SIGINT/SIGTERM
 also trigger cleanup. A failed case does not prevent later cases from running.
-OpenCode and Pi cases require valid structured events, exact expected text, and
+OpenCode, Pi, Codex, and Claude Code cases require valid structured events, exact expected text, and
 a terminal completion; read-tool cases additionally require the completed read
 of a random fixture token. Exit status zero alone is insufficient. The pinned
 DSH 0.1.5-rc.2 headless CLI exposes only its final answer, so its adapter accepts
@@ -109,7 +121,8 @@ docker volume rm <volume_name-from-report>
 ## Extend and verify
 
 `agents/` owns preparation and output interpretation for each agent. The current
-images pin OpenCode 1.18.10, Pi 0.85.1, and DSH 0.1.5-rc.2. Register a new adapter
+images pin OpenCode 1.18.10, Pi 0.85.1, DSH 0.1.5-rc.2, Codex 0.154.0, and
+Claude Code 2.1.272. Register a new adapter
 in `agents/index.ts`, with its pinned image and offline tests.
 `modes.ts` owns container connectivity; only `api` is currently implemented.
 `cases.ts` validates the matrix independently of both registries, so adding an

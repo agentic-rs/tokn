@@ -52,6 +52,8 @@ describe("DSH preparation", () => {
       .toThrow("does not support agent-test mode");
     expect(() => dsh.prepare({ ...testCase, probe: "read_tool" }, { router_url: "http://127.0.0.1:4141" }))
       .toThrow("only text probes are supported");
+    expect(() => dsh.prepare({ ...testCase, api: "messages" }, { router_url: "http://127.0.0.1:4141" }))
+      .toThrow("do not support the Messages API");
   });
 });
 

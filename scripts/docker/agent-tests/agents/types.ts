@@ -4,7 +4,7 @@ export type AgentTestCase = {
   mode: string;
   model: string;
   base_path: string;
-  api: "responses" | "chat_completions";
+  api: "responses" | "chat_completions" | "messages";
   probe: "text" | "read_tool";
   upstream_model?: string;
   display_name?: string;

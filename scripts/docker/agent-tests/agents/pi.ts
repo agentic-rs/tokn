@@ -3,6 +3,7 @@ import type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, A
 
 function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
   if (testCase.mode !== "api") throw new Error(`Pi does not support agent-test mode '${testCase.mode}'`);
+  if (testCase.api === "messages") throw new Error("Pi agent tests do not support the Messages API");
   const { expected_text: expectedText, prompt, fixture } = preparePrompt(testCase, options.marker);
   const model = testCase.upstream_model ?? testCase.model;
   const config = {
