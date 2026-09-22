@@ -1,8 +1,6 @@
-import { randomUUID } from "node:crypto";
-
+import { fixturePath, preparePrompt } from "./prompt";
 import type { AgentAdapter, PreparedTrial, TrialCase, TrialOutput, TrialResult, TrialToolCall } from "./types";
 
-const fixturePath = "/trial/tool-fixture.txt";
 // OpenCode 1.18.10 uses "/" as the worktree in our empty non-Git workspace.
 // Its read permission checks paths relative to that worktree, while the
 // external_directory permission checks absolute directory globs.
@@ -10,12 +8,8 @@ const fixtureReadPattern = fixturePath.slice(1);
 
 function prepare(trial: TrialCase, options: { router_url: string; marker?: string }): PreparedTrial {
   if (trial.mode !== "api") throw new Error(`OpenCode does not support trial mode '${trial.mode}'`);
-  const expectedText = trial.expected_text ?? options.marker ?? `TOKN_${randomUUID().replaceAll("-", "")}`;
+  const { expected_text: expectedText, prompt, fixture } = preparePrompt(trial, options.marker);
   const readTool = trial.probe === "read_tool";
-  const prompt = readTool
-    ? `Use the read tool exactly once to read ${fixturePath}. Do not guess the contents or use other tools. ` +
-      "After reading, reply with only the value of verification_token, without quotes, Markdown, or explanation."
-    : `Reply with exactly ${expectedText}, without quotes, Markdown, explanation, or any other text. Do not use tools.`;
   const config = {
     $schema: "https://opencode.ai/config.json",
     autoupdate: false,
@@ -51,7 +45,7 @@ function prepare(trial: TrialCase, options: { router_url: string; marker?: strin
     files: [
       { path: "opencode.json", content: `${JSON.stringify(config, null, 2)}\n` },
       { path: "prompt.txt", content: `${prompt}\n` },
-      ...(readTool ? [{ path: "tool-fixture.txt", content: `Tokn integration fixture\nverification_token=${expectedText}\n` }] : []),
+      ...(fixture ? [fixture] : []),
     ],
     command: ["--pure", "run", "--format", "json", "--model", `tokn/${trial.model}`, "--title", trial.id, "--dir", "/workspace", prompt],
     environment: {

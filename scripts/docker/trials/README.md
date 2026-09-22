@@ -17,6 +17,14 @@ docker build -t tokn-gateway-cli:trials .
 TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent opencode
 TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
   --suite ../examples/docker/trials/opencode.json
+
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent pi
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
+  --suite ../examples/docker/trials/pi.json
+
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial build-agent --agent dsh
+TOKN_CONTAINER_ENGINE=docker bun --cwd scripts docker trial run \
+  --suite ../examples/docker/trials/dsh.json
 ```
 
 The example reads `~/.tokn/router/config.toml` and `auth.yaml`. Set `auth_file` in
@@ -25,9 +33,9 @@ to override automatic sibling `config.d`/`auth.d` discovery. Keep credentials
 out of the repository. These mounts are read-only, so credentials that need
 refreshing must first be refreshed outside the trial.
 
-The example expects existing `opencode-deepseek` and `opencode-codex` profiles.
-Edit each case's `base_path` to match your profiles. `model` names the OpenCode
-model; optional `upstream_model` supplies a qualified router model identifier.
+The examples expect existing `opencode-deepseek` and `opencode-codex` profiles.
+Edit each case's `base_path` to match your profiles. `model` names the model in
+the agent; optional `upstream_model` supplies a qualified router model identifier.
 `api` explicitly selects Chat Completions or Responses. Model eligibility and
 provider errors are real test failures; the harness does not bypass the router's
 model catalogue. In particular, a provider that omits `gpt-5.6-luna` from its
@@ -40,15 +48,20 @@ clears inherited HTTP proxy environment variables; an explicit upstream proxy
 in router config must still be reachable from inside the container. Legacy v1
 configs may use `serve_args: ["--no-proxy"]` to disable their interception proxy.
 Native v2 configs should leave `serve_args` empty.
+For a proxy running on the macOS host, use a trial config whose proxy URL names
+`host.containers.internal` instead of `localhost`.
 Logging must target `stderr` or `both`; the runner sets `RUST_LOG=info` so startup
 and persistence shutdown confirmations remain observable.
 
 Select cases with repeated `--case ID` flags. `timeout_secs` bounds each agent
 container (default 120). A timeout stops the actual container. SIGINT/SIGTERM
 also trigger cleanup. A failed case does not prevent later cases from running.
-Every case requires valid structured events, exact expected text, and a terminal
-completion; read-tool cases additionally require the completed read of a random
-fixture token. Exit status zero alone is insufficient.
+OpenCode and Pi cases require valid structured events, exact expected text, and
+a terminal completion; read-tool cases additionally require the completed read
+of a random fixture token. Exit status zero alone is insufficient. The pinned
+DSH 0.1.5-rc.2 headless CLI exposes only its final answer, so its adapter accepts
+text probes only and verifies exact output plus successful process completion.
+It rejects read-tool probes before any containers are created.
 
 ## Captures and import
 
@@ -95,8 +108,9 @@ docker volume rm <volume_name-from-report>
 
 ## Extend and verify
 
-`agents/` owns preparation and output interpretation for each agent. Register a
-new adapter in `agents/index.ts`, with its pinned image and offline tests.
+`agents/` owns preparation and output interpretation for each agent. The current
+images pin OpenCode 1.18.10, Pi 0.85.1, and DSH 0.1.5-rc.2. Register a new adapter
+in `agents/index.ts`, with its pinned image and offline tests.
 `modes.ts` owns container connectivity; only `api` is currently implemented.
 `cases.ts` validates the matrix independently of both registries, so adding an
 agent does not require duplicating orchestration. Add models and probes to the
