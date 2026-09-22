@@ -102,6 +102,14 @@ describe("Claude Code stream verification", () => {
     });
   });
 
+  test("rejects missing and conflicting session identities", () => {
+    expect(evaluate(successEvents().replace(',"session_id":"session-one"', "")).error).toContain("missing session_id");
+    expect(evaluate(successEvents().replace(
+      '"num_turns":1,"session_id":"session-one"',
+      '"num_turns":1,"session_id":"session-two"',
+    )).error).toContain("conflicting session_id");
+  });
+
   test("rejects incomplete, malformed, failed, and unexpected output", () => {
     for (const stdout of ["", "{}", "not json", events({ type: "system", subtype: "init" })]) {
       expect(evaluate(stdout).success).toBe(false);

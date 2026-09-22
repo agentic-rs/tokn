@@ -39,8 +39,8 @@ function string(value: unknown): string | undefined {
 }
 
 function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput): AgentTestResult {
-  const sessionIds = new Set<string>();
   const toolCalls: AgentTestToolCall[] = [];
+  let threadId: string | undefined;
   let threadStarted = false;
   let turnStarted = false;
   let completedSteps = 0;
@@ -58,9 +58,17 @@ function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: 
       parseError ??= `Invalid Codex JSON event at line ${index + 1}`;
       continue;
     }
-    const threadId = string(event.thread_id);
-    if (threadId) sessionIds.add(threadId);
-    if (event.type === "thread.started") threadStarted = true;
+    const eventThreadId = string(event.thread_id);
+    if (event.type === "thread.started" && !eventThreadId) {
+      parseError ??= `Codex thread.started event at line ${index + 1} is missing thread_id`;
+    }
+    if (eventThreadId) {
+      if (threadId === undefined) threadId = eventThreadId;
+      else if (threadId !== eventThreadId) {
+        parseError ??= `Codex event at line ${index + 1} has a conflicting thread_id`;
+      }
+    }
+    if (event.type === "thread.started" && eventThreadId) threadStarted = true;
     if (event.type === "turn.started") turnStarted = true;
     if (event.type === "turn.completed") completedSteps += 1;
     if (event.type === "turn.failed" || event.type === "error") agentError = true;
@@ -106,7 +114,7 @@ function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: 
     text,
     tool_calls: toolCalls,
     completed_steps: completedSteps,
-    session_ids: [...sessionIds],
+    session_ids: threadId ? [threadId] : [],
     ...(error ? { error } : {}),
   };
 }

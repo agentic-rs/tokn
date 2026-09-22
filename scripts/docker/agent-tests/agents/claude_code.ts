@@ -50,9 +50,9 @@ function blockText(value: unknown): string {
 }
 
 function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: AgentTestOutput): AgentTestResult {
-  const sessionIds = new Set<string>();
   const toolCalls: AgentTestToolCall[] = [];
   const toolIndexes = new Map<string, number>();
+  let sessionId: string | undefined;
   let initialized = false;
   let completedSteps = 0;
   let parseError: string | undefined;
@@ -70,9 +70,18 @@ function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: 
       parseError ??= `Invalid Claude Code JSON event at line ${index + 1}`;
       continue;
     }
-    const sessionId = string(event.session_id);
-    if (sessionId) sessionIds.add(sessionId);
-    if (event.type === "system" && event.subtype === "init") initialized = true;
+    const eventSessionId = string(event.session_id);
+    const isInit = event.type === "system" && event.subtype === "init";
+    if (isInit && !eventSessionId) {
+      parseError ??= `Claude Code init event at line ${index + 1} is missing session_id`;
+    }
+    if (eventSessionId) {
+      if (sessionId === undefined) sessionId = eventSessionId;
+      else if (sessionId !== eventSessionId) {
+        parseError ??= `Claude Code event at line ${index + 1} has a conflicting session_id`;
+      }
+    }
+    if (isInit && eventSessionId) initialized = true;
     if (event.type === "assistant") {
       const message = record(event.message);
       for (const block of blocks(message.content)) {
@@ -133,7 +142,7 @@ function evaluate(testCase: AgentTestCase, prepared: PreparedAgentTest, output: 
     text,
     tool_calls: toolCalls,
     completed_steps: completedSteps,
-    session_ids: [...sessionIds],
+    session_ids: sessionId ? [sessionId] : [],
     ...(error ? { error } : {}),
   };
 }

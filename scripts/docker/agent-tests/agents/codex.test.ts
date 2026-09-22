@@ -95,6 +95,14 @@ describe("Codex JSONL verification", () => {
     });
   });
 
+  test("rejects missing and conflicting thread identities", () => {
+    expect(evaluate(successEvents().replace(',"thread_id":"thread-one"', "")).error).toContain("missing thread_id");
+    expect(evaluate(successEvents().replace(
+      '{"type":"turn.started"}',
+      '{"type":"turn.started","thread_id":"thread-two"}',
+    )).error).toContain("conflicting thread_id");
+  });
+
   test("rejects incomplete, malformed, failed, and unexpected output", () => {
     for (const stdout of ["", "{}", "not json", events({ type: "thread.started", thread_id: "one" })]) {
       expect(evaluate(stdout).success).toBe(false);
