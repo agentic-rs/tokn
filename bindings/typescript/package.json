@@ -55,7 +55,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/agentic-rs/tokn.git",
+    "url": "git+https://github.com/tokn-ai/tokn.git",
     "directory": "bindings/typescript"
   },
   "license": "MIT",
