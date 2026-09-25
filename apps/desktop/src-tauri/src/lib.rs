@@ -1,3 +1,4 @@
+mod accounts;
 mod commands;
 mod config;
 mod data;
@@ -11,6 +12,7 @@ pub fn run() {
   let exiting = AtomicBool::new(false);
   tauri::Builder::default()
     .manage(gateway::Gateway::default())
+    .manage(accounts::Logins::default())
     .invoke_handler(tauri::generate_handler![
       commands::gateway_status,
       commands::start_gateway,
@@ -18,7 +20,14 @@ pub fn run() {
       commands::reload_gateway,
       commands::read_routing,
       commands::save_routing,
-      commands::list_accounts,
+      accounts::list_accounts,
+      accounts::account_providers,
+      accounts::edit_account,
+      accounts::probe_account,
+      accounts::import_account,
+      accounts::begin_account_login,
+      accounts::complete_account_login,
+      accounts::cancel_account_login,
       commands::read_usage,
       inspect::inspect_query
     ])

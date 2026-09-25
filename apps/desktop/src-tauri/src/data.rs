@@ -3,15 +3,6 @@ use serde::Serialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Serialize)]
-pub struct AccountSummary {
-  pub id: String,
-  pub provider: String,
-  pub label: Option<String>,
-  pub enabled: bool,
-  pub tier: String,
-}
-
-#[derive(Serialize)]
 pub struct UsageSummary {
   pub account: Option<String>,
   pub provider: Option<String>,
@@ -20,22 +11,6 @@ pub struct UsageSummary {
   pub input_tokens: u64,
   pub output_tokens: u64,
   pub cached_tokens: u64,
-}
-
-pub fn accounts() -> Result<Vec<AccountSummary>> {
-  Ok(
-    tokn_auth::AuthStore::load(None, None)?
-      .accounts
-      .into_iter()
-      .map(|account| AccountSummary {
-        id: account.id,
-        provider: account.provider,
-        label: account.label,
-        enabled: account.enabled,
-        tier: format!("{:?}", account.tier).to_lowercase(),
-      })
-      .collect(),
-  )
 }
 
 pub fn usage() -> Result<Vec<UsageSummary>> {

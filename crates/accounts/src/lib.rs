@@ -18,3 +18,7 @@ pub use handle::AccountHandle;
 pub use inventory::{AccountInventory, AccountPoolRuleset};
 pub use pool::{AccountPool, EndpointAcquire, Error, Result, SessionAcquire};
 pub use routing::{ResolveError, RouteResolution, RouteResolver, RouteSelector};
+
+pub mod auth_registry;
+pub mod context;
+pub mod management;

@@ -3,7 +3,9 @@ use crate::{
   gateway::{self, Gateway, GatewayStatus},
 };
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, String> {
+pub(crate) async fn blocking<T: Send + 'static>(
+  f: impl FnOnce() -> anyhow::Result<T> + Send + 'static,
+) -> Result<T, String> {
   tokio::task::spawn_blocking(f)
     .await
     .map_err(|error| error.to_string())?
@@ -43,10 +45,6 @@ pub async fn read_routing() -> Result<config::RoutingDocument, String> {
 #[tauri::command(rename_all = "snake_case")]
 pub async fn save_routing(revision: String, routing_toml: String) -> Result<config::RoutingDocument, String> {
   blocking(move || config::save_at(&config::path()?, &revision, &routing_toml)).await
-}
-#[tauri::command]
-pub async fn list_accounts() -> Result<Vec<data::AccountSummary>, String> {
-  blocking(data::accounts).await
 }
 #[tauri::command]
 pub async fn read_usage() -> Result<Vec<data::UsageSummary>, String> {
