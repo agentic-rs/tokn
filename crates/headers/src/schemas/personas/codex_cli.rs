@@ -68,6 +68,12 @@ pub struct CodexCliHeaders {
   pub codex_beta_features: Option<SmolStr>,
   #[serde(rename = "x-codex-turn-metadata", skip_serializing_if = "Option::is_none")]
   pub codex_turn_metadata: Option<SmolStr>,
+  /// Selects the wire format that carries tools in `additional_tools` input items.
+  #[serde(
+    rename = "x-openai-internal-codex-responses-lite",
+    skip_serializing_if = "Option::is_none"
+  )]
+  pub codex_responses_lite: Option<SmolStr>,
   #[serde(rename = "OpenAI-Beta", skip_serializing_if = "Option::is_none")]
   pub openai_beta: Option<SmolStr>,
   #[serde(rename = "X-Request-Id", skip_serializing_if = "Option::is_none")]
@@ -104,6 +110,7 @@ impl HeaderSchema for CodexCliHeaders {
       codex_window_id: optional(map, &keys::X_CODEX_WINDOW_ID),
       codex_beta_features: optional(map, &keys::X_CODEX_BETA_FEATURES),
       codex_turn_metadata: optional(map, &keys::X_CODEX_TURN_METADATA),
+      codex_responses_lite: optional(map, &keys::X_CODEX_RESPONSES_LITE),
       openai_beta: optional(map, &keys::OPENAI_BETA),
       request_id: optional(map, &keys::X_REQUEST_ID),
       sec_websocket_extensions: optional(map, &keys::SEC_WEBSOCKET_EXTENSIONS),
@@ -131,6 +138,7 @@ impl HeaderSchema for CodexCliHeaders {
     put_opt(&mut m, &keys::X_CODEX_WINDOW_ID, &self.codex_window_id);
     put_opt(&mut m, &keys::X_CODEX_BETA_FEATURES, &self.codex_beta_features);
     put_opt(&mut m, &keys::X_CODEX_TURN_METADATA, &self.codex_turn_metadata);
+    put_opt(&mut m, &keys::X_CODEX_RESPONSES_LITE, &self.codex_responses_lite);
     put_opt(&mut m, &keys::OPENAI_BETA, &self.openai_beta);
     put_opt(&mut m, &keys::X_REQUEST_ID, &self.request_id);
     put_opt(&mut m, &keys::SEC_WEBSOCKET_EXTENSIONS, &self.sec_websocket_extensions);
@@ -140,7 +148,7 @@ impl HeaderSchema for CodexCliHeaders {
     m
   }
   fn known_names() -> &'static [&'static HeaderName] {
-    static NAMES: [&HeaderName; 23] = [
+    static NAMES: [&HeaderName; 24] = [
       &keys::USER_AGENT,
       &keys::AUTHORIZATION,
       &keys::HOST,
@@ -158,6 +166,7 @@ impl HeaderSchema for CodexCliHeaders {
       &keys::X_CODEX_WINDOW_ID,
       &keys::X_CODEX_BETA_FEATURES,
       &keys::X_CODEX_TURN_METADATA,
+      &keys::X_CODEX_RESPONSES_LITE,
       &keys::OPENAI_BETA,
       &keys::X_REQUEST_ID,
       &keys::SEC_WEBSOCKET_EXTENSIONS,
@@ -201,6 +210,7 @@ impl CodexCliHeaders {
       codex_window_id: opt_from_inbound(inbound, &keys::X_CODEX_WINDOW_ID),
       codex_beta_features: opt_from_inbound(inbound, &keys::X_CODEX_BETA_FEATURES),
       codex_turn_metadata: opt_from_inbound(inbound, &keys::X_CODEX_TURN_METADATA),
+      codex_responses_lite: opt_from_inbound(inbound, &keys::X_CODEX_RESPONSES_LITE),
       openai_beta: opt_from_inbound(inbound, &keys::OPENAI_BETA),
       request_id: vars
         .request_id
@@ -237,6 +247,7 @@ mod tests {
       codex_window_id: Some("019e271b-4023-7081-be3e-7a69d97138a2:0".into()),
       codex_beta_features: Some("terminal_resize_reflow".into()),
       codex_turn_metadata: Some("{\"session_id\":\"019e271b\"}".into()),
+      codex_responses_lite: Some("true".into()),
       openai_beta: None,
       request_id: None,
       sec_websocket_extensions: None,

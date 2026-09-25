@@ -62,7 +62,7 @@ describe("Claude Code preparation", () => {
     expect(prepared.command).toEqual([
       "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--bare", "--restricted",
       "--model", "claude-sonnet-4.6", "--permission-mode", "dontAsk", "--permission-prompts", "none", "--max-turns", "3",
-      "--tools", "", expect.stringContaining(marker),
+      "--tools", "", "--", expect.stringContaining(marker),
     ]);
     expect(resolveAgent("claude-code")).toBe(claudeCode);
   });
@@ -73,6 +73,8 @@ describe("Claude Code preparation", () => {
     }, { router_url: "http://127.0.0.1:4141", marker });
     expect(prepared.command).toContain("github-copilot/claude-sonnet-4.6");
     expect(prepared.command).toContain("--allowedTools");
+    expect(prepared.command.at(-2)).toBe("--");
+    expect(prepared.working_dir).toBe("/agent-test");
     expect(prepared.command.join(" ")).not.toContain(marker);
     expect(prepared.files.find((file) => file.path === "tool-fixture.txt")!.content).toContain(marker);
   });

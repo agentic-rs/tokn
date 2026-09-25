@@ -41,15 +41,27 @@ to override automatic sibling `config.d`/`auth.d` discovery. Keep credentials
 out of the repository. These mounts are read-only, so credentials that need
 refreshing must first be refreshed outside the agent test.
 
-The examples expect existing `opencode-deepseek`, `opencode-codex`, and
-`opencode-github-copilot` profiles. Codex CLI uses `gpt-5.4` over Responses;
-Claude Code uses `claude-sonnet-4.6` over Messages.
+The OpenCode, Pi, and DSH examples use the `opencode-deepseek` and
+`opencode-codex` profiles. Codex CLI uses `gpt-5.6-luna` over Responses through
+the default `/v1` route; Claude Code uses `deepseek-v4-flash` over Messages
+through the same route. The Codex Luna example has a text probe only: in the tested
+rootless Podman environment, SELinux labeling prevents Codex's nested Bubblewrap
+sandbox from mounting `/dev/pts` before the read command can execute. Claude Code's
+DeepSeek Flash example covers text and read-tool probes. Check the recorded provider
+after each live run.
 Edit each case's `base_path` to match your profiles. `model` names the model in
 the agent; optional `upstream_model` supplies a qualified router model identifier.
 `api` explicitly selects Chat Completions, Responses, or Messages. Model eligibility and
 provider errors are real test failures; the harness does not bypass the router's
 model catalogue. In particular, a provider that omits `gpt-5.6-luna` from its
 catalogue may fail these Luna cases even if a raw upstream diagnostic succeeds.
+For Codex Responses Lite requests, tool definitions live in `input` items with
+`type: "additional_tools"`; an absent top-level `tools` array does not mean the
+model has no tools. Tokn preserves the accompanying
+`x-openai-internal-codex-responses-lite` header. Inspect subsequent
+`custom_tool_call_output` items for code-mode failures: the local Luna read probe
+invoked `exec_command` through `exec`, then returned
+`bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied`.
 For Claude Code, the adapter removes the terminal `/v1` from `base_path` because
 the CLI appends `/v1/messages` to `ANTHROPIC_BASE_URL`.
 
@@ -57,9 +69,9 @@ The config must enable persistence/session recording and use default database
 paths. Use a dedicated config if your native configuration has absolute paths.
 Its listener must match `router_url` (default `http://127.0.0.1:4141`). The runner
 clears inherited HTTP proxy environment variables; an explicit upstream proxy
-in router config must still be reachable from inside the container. Legacy v1
-configs may use `serve_args: ["--no-proxy"]` to disable their interception proxy.
-Native v2 configs should leave `serve_args` empty.
+in router config must still be reachable from inside the container. Leave
+`serve_args` empty unless testing an explicit override: `--no-proxy` disables
+outbound proxying, while `--with-proxy` enables the legacy interception listener.
 For a proxy running on the macOS host, use an agent-test config whose proxy URL names
 `host.containers.internal` instead of `localhost`.
 Logging must target `stderr` or `both`; the runner sets `RUST_LOG=info` so startup

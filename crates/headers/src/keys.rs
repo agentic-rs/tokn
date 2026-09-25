@@ -66,6 +66,11 @@ key!(X_CLIENT_REQUEST_ID, "x-client-request-id", "x-client-request-id");
 key!(X_CODEX_BETA_FEATURES, "x-codex-beta-features", "x-codex-beta-features");
 key!(X_CODEX_TURN_METADATA, "x-codex-turn-metadata", "x-codex-turn-metadata");
 key!(X_CODEX_WINDOW_ID, "x-codex-window-id", "x-codex-window-id");
+key!(
+  X_CODEX_RESPONSES_LITE,
+  "x-openai-internal-codex-responses-lite",
+  "x-openai-internal-codex-responses-lite"
+);
 
 // Copilot CLI / Stainless SDK family
 key!(X_GITHUB_API_VERSION, "X-GitHub-Api-Version", "x-github-api-version");
