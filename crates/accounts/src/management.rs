@@ -172,13 +172,45 @@ pub fn validate_new_id(auth_path: Option<&Path>, id: &str) -> Result<()> {
 }
 
 pub fn insert(auth_path: Option<&Path>, account: AccountConfig) -> Result<()> {
+  insert_with_id(auth_path, account, false)
+}
+
+/// Allocate a unique inferred ID while holding the same lock used to save it.
+pub fn insert_generated(auth_path: Option<&Path>, account: AccountConfig) -> Result<()> {
+  insert_with_id(auth_path, account, true)
+}
+
+fn insert_with_id(auth_path: Option<&Path>, mut account: AccountConfig, generated: bool) -> Result<()> {
   let lock = AuthStoreLock::acquire(auth_path)?;
   let mut store = AuthStore::load_locked(&lock)?;
+  if generated {
+    let base = suggested_id(&account);
+    account.id = base.clone();
+    let mut suffix = 2;
+    while store.accounts.iter().any(|existing| existing.id == account.id) {
+      account.id = format!("{base}-{suffix}");
+      suffix += 1;
+    }
+  }
   if store.accounts.iter().any(|existing| existing.id == account.id) {
     bail!("An account with this ID already exists; nothing was replaced");
   }
   store.upsert_in_main(account)?;
   store.save_locked(&lock)
+}
+
+fn suggested_id(account: &AccountConfig) -> String {
+  [
+    account.username.as_deref(),
+    account.provider_account_id.as_deref(),
+    Some(account.provider.as_str()),
+  ]
+  .into_iter()
+  .flatten()
+  .map(str::trim)
+  .find(|value| !value.is_empty() && value.len() <= 100 && !value.chars().any(char::is_control))
+  .unwrap_or("account")
+  .to_string()
 }
 
 pub fn empty_account(provider: &ResolvedProviderAuth, id: String) -> AccountConfig {

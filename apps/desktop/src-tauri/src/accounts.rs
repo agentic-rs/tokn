@@ -78,10 +78,13 @@ pub async fn import_account(request: ImportRequest) -> Result<(), String> {
   let provider = context
     .resolve_provider(&request.provider)
     .map_err(|_| "Provider is not available in the current configuration")?;
-  let id = request.id.clone();
-  blocking(move || management::validate_new_id(None, &id))
-    .await
-    .map_err(|_| "Account ID is invalid, already exists, or the credential store cannot be read")?;
+  let generated = request.id.trim().is_empty();
+  let id = request.id.trim().to_string();
+  if !generated {
+    blocking(move || management::validate_new_id(None, &id))
+      .await
+      .map_err(|_| "Account ID is invalid, already exists, or the credential store cannot be read")?;
+  }
   let flavor = match request.flavor.as_str() {
     "api_key" => CredentialFlavor::ApiKey,
     "refresh_token" => CredentialFlavor::RefreshToken,
@@ -118,8 +121,8 @@ pub async fn import_account(request: ImportRequest) -> Result<(), String> {
     .map_err(|_| "Unable to build provider HTTP client")?;
   let runtime = tokio::runtime::Handle::current();
   blocking(move || runtime.block_on(async move {
-    let account = tokio::time::timeout(Duration::from_secs(60), management::import_account(&client, &provider, request.id, source)).await??;
-    management::insert(None, account)
+    let account = tokio::time::timeout(Duration::from_secs(60), management::import_account(&client, &provider, request.id.trim().to_string(), source)).await??;
+    if generated { management::insert_generated(None, account) } else { management::insert(None, account) }
   })).await.map_err(|_| "Import was not completed. Check the credential/source, connectivity, and account ID, then retry. Existing accounts were not replaced.".into())
 }
 
@@ -137,10 +140,13 @@ pub async fn begin_account_login(
   id: String,
   provider: String,
 ) -> Result<LoginTicket, String> {
+  let id = id.trim().to_string();
   let account_id = id.clone();
-  blocking(move || management::validate_new_id(None, &account_id))
-    .await
-    .map_err(|_| "Account ID is invalid, already exists, or the credential store cannot be read")?;
+  if !id.is_empty() {
+    blocking(move || management::validate_new_id(None, &account_id))
+      .await
+      .map_err(|_| "Account ID is invalid, already exists, or the credential store cannot be read")?;
+  }
   let context = context().await?;
   let provider = context
     .resolve_provider(&provider)
@@ -229,9 +235,16 @@ pub async fn complete_account_login(
       },
     );
     let account = management::device_account(&login.provider, login.account_id.clone(), outcome);
-    blocking(move || management::insert(None, account))
-      .await
-      .map_err(|_| "Sign-in succeeded but saving failed. Check that the account ID is unique and retry.".to_string())
+    let generated = login.account_id.is_empty();
+    blocking(move || {
+      if generated {
+        management::insert_generated(None, account)
+      } else {
+        management::insert(None, account)
+      }
+    })
+    .await
+    .map_err(|_| "Sign-in succeeded but saving failed. Check that the account ID is unique and retry.".to_string())
   }
   .await;
   state.0.lock().await.remove(&login_id);

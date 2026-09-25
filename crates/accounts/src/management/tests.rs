@@ -259,3 +259,34 @@ async fn rotation_is_persisted_before_quota_failure_or_timeout() {
     );
   }
 }
+
+#[test]
+fn inferred_ids_use_identity_and_resolve_collisions_without_overwriting() {
+  let (_dir, path, provider) = fixture();
+  let mut account = empty_account(&provider, String::new());
+  account.username = Some(" person@example.test ".into());
+  insert_generated(Some(&path), account.clone()).unwrap();
+  insert_generated(Some(&path), account).unwrap();
+  let ids: Vec<_> = list(Some(&path))
+    .unwrap()
+    .into_iter()
+    .map(|account| account.id)
+    .collect();
+  assert_eq!(ids, ["person@example.test", "person@example.test-2"]);
+}
+
+#[test]
+fn inferred_ids_fall_back_to_provider_identity_then_provider() {
+  let (_dir, path, provider) = fixture();
+  let mut account = empty_account(&provider, String::new());
+  account.username = Some("\n".into());
+  account.provider_account_id = Some("upstream-account".into());
+  insert_generated(Some(&path), account).unwrap();
+  insert_generated(Some(&path), empty_account(&provider, String::new())).unwrap();
+  let ids: Vec<_> = list(Some(&path))
+    .unwrap()
+    .into_iter()
+    .map(|account| account.id)
+    .collect();
+  assert_eq!(ids, ["openai", "upstream-account"]);
+}

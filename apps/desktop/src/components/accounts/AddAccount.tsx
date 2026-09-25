@@ -134,21 +134,21 @@ export function AddAccount({
               </select>
             </label>
             <label>
-              Account ID
+              Account ID (optional)
               <input
                 value={id}
                 maxLength={128}
                 onChange={(event) => setId(event.target.value)}
-                placeholder="A unique name for this account"
+                placeholder="Use provider identity automatically"
                 autoComplete="off"
               />
             </label>
             <p className="muted">
-              New accounts are active. Existing accounts with the same ID will
-              not be replaced.
+              Leave the ID empty to use your provider identity, or a generated
+              unique name. Existing accounts will not be replaced.
             </p>
             {provider.device_login && (
-              <button disabled={!id.trim()} onClick={() => void login()}>
+              <button onClick={() => void login()}>
                 Sign in with device code
               </button>
             )}
@@ -214,7 +214,6 @@ export function AddAccount({
             <button
               className="primary"
               disabled={
-                !id.trim() ||
                 !source ||
                 (["string", "env", "file"].includes(source) && !value.trim())
               }

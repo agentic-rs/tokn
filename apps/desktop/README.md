@@ -30,7 +30,9 @@ builds do not require WebKit/GTK or other desktop libraries.
   a floating modal with device-code login or supported credential imports (paste, environment, file,
   and provider-specific sources). Device login shows progress and can be cancelled.
   Stored credentials are never returned to the frontend; pasted credentials are
-  cleared from the form when submitted. Account IDs must be unique.
+  cleared from the form when submitted. Account IDs are optional. When omitted, the app uses the provider username,
+  upstream account ID, or provider name, adding a numeric suffix if needed.
+  Explicit IDs must be unique.
   Changes preserve auth-store shards and attempt to reload a running gateway;
   failures clearly distinguish saved credentials from unapplied runtime changes.
   Token refreshes are persisted before quota probes, including when quota fails.
