@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   GatewayStatus,
@@ -7,6 +8,8 @@ import type {
   InspectQuery,
 } from "./types";
 export const api = {
+  setTheme: (theme: "light" | "dark" | null) =>
+    getCurrentWindow().setTheme(theme),
   status: () => invoke<GatewayStatus>("gateway_status"),
   start: () => invoke<void>("start_gateway"),
   stop: () => invoke<void>("stop_gateway"),

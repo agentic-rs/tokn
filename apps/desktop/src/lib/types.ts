@@ -1,3 +1,5 @@
+export type ThemePreference = "system" | "light" | "dark";
+
 export interface GatewayStatus {
   state: string;
   ownership: string;

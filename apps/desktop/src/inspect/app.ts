@@ -1915,13 +1915,7 @@ class InspectApp extends LitElement {
         : this.requested_session_id !== undefined;
     return html`
       <header class="app-header">
-        <div class="brand">
-          <span class="brand-mark" aria-hidden="true">t</span>
-          <div>
-            <h1>tokn inspect</h1>
-            <p>Local · read only</p>
-          </div>
-        </div>
+        <p class="read-only-label">Local · read only</p>
         <p class="sensitive-notice">
           History may contain sensitive prompts and responses.
         </p>

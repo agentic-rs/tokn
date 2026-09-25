@@ -92,3 +92,5 @@ removed. Use the desktop **Inspect** screen instead. The inspector's existing
 frontend checks now run from this package; native tests are still run locally.
 UI navigation discards cancelled native query results; a database read already
 in progress finishes on a blocking worker rather than interrupting SQLite.
+
+Appearance is available at the bottom of the sidebar: System follows the operating system, while Light and Dark override it. The preference is saved locally and applies to every page, including Inspect.

@@ -9,6 +9,8 @@ import { Overview } from "./pages/Overview";
 import { Providers } from "./pages/Providers";
 import { Routing } from "./pages/Routing";
 import { Inspect } from "./pages/Inspect";
+import { ThemePicker } from "./components/ThemePicker";
+
 const pages = [
   { title: "Overview", icon: Activity, view: Overview },
   { title: "Providers", icon: Boxes, view: Providers },
@@ -20,11 +22,6 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside>
-        <div className="brand">
-          <span className="brand-symbol">t</span>tokn
-          <span className="desktop-label">DESKTOP</span>
-        </div>
-        <div className="nav-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
           {pages.map((page) => (
             <button
@@ -39,8 +36,7 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <span className="local-dot" />
-          Local workspace<small>Tokn · 0.2.4</small>
+          <ThemePicker />
         </div>
       </aside>
       <main>

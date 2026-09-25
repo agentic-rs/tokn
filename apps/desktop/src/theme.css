@@ -1,0 +1,53 @@
+:root {
+  color-scheme: light;
+  --ui-background: #f6f7f5;
+  --ui-surface: #ffffff;
+  --ui-surface-raised: #edf1ec;
+  --ui-hover: #e5ece3;
+  --ui-border: #dce3d9;
+  --ui-border-strong: #a5b4a5;
+  --ui-text: #263a30;
+  --ui-muted: #5e7163;
+  --ui-accent: #35644a;
+  --ui-accent-surface: #e0ecdf;
+  --ui-primary: #315d45;
+  --ui-primary-hover: #244c35;
+  --ui-on-primary: #ffffff;
+  --ui-success: #276d45;
+  --ui-success-surface: #e4f2e8;
+  --ui-success-border: #91bca0;
+  --ui-warning: #855d16;
+  --ui-warning-surface: #faf0d9;
+  --ui-warning-border: #c9af74;
+  --ui-error: #ac3745;
+  --ui-error-surface: #fbe9eb;
+  --ui-error-border: #d99da5;
+  --ui-shadow: #15291d24;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ui-background: #111714;
+  --ui-surface: #18211c;
+  --ui-surface-raised: #202c24;
+  --ui-hover: #2a382f;
+  --ui-border: #324438;
+  --ui-border-strong: #58715e;
+  --ui-text: #e4ece5;
+  --ui-muted: #a4b7a8;
+  --ui-accent: #a4d4b4;
+  --ui-accent-surface: #293f30;
+  --ui-primary: #a4d4b4;
+  --ui-primary-hover: #b9e2c7;
+  --ui-on-primary: #142c1d;
+  --ui-success: #8fd4a7;
+  --ui-success-surface: #203b2a;
+  --ui-success-border: #456b51;
+  --ui-warning: #e6c17e;
+  --ui-warning-surface: #3a3120;
+  --ui-warning-border: #7b6841;
+  --ui-error: #f2a5ae;
+  --ui-error-surface: #42282d;
+  --ui-error-border: #89535c;
+  --ui-shadow: #0006;
+}
