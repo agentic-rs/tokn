@@ -915,6 +915,12 @@ using that listener from another machine.
 The proxy prints the CA SHA-256 fingerprint at startup. Verify that fingerprint
 before trusting a CA fetched over the LAN. The private CA key is never served.
 
+## Desktop app
+
+A macOS-first desktop app is available in [apps/desktop](apps/desktop/README.md).
+It shows local gateway activity, manages an app-owned gateway process, and edits
+validated routing configuration. Run `pnpm desktop` from that directory.
+
 ## Development
 
 This is a Rust workspace. The runtime entrypoint lives in

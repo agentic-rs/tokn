@@ -1,0 +1,33 @@
+{
+  "name": "tokn-desktop",
+  "version": "0.2.4",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "desktop": "pnpm prepare:gateway && tauri dev",
+    "bundle": "pnpm prepare:gateway --release && tauri build",
+    "prepare:gateway": "node --import tsx scripts/prepare-gateway.ts",
+    "format": "prettier --write src scripts *.json *.ts src-tauri/*.json src-tauri/capabilities/*.json",
+    "format:check": "prettier --check src scripts *.json *.ts src-tauri/*.json src-tauri/capabilities/*.json"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "lucide-react": "^0.468",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^4",
+    "prettier": "^3.9.9",
+    "tsx": "^4",
+    "typescript": "^5",
+    "vite": "^6"
+  }
+}

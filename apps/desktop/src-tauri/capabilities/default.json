@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Local desktop window events only",
+  "windows": ["main"],
+  "permissions": ["core:event:default"]
+}
