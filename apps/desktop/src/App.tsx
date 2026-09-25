@@ -8,12 +8,12 @@ import {
 import { Overview } from "./pages/Overview";
 import { Providers } from "./pages/Providers";
 import { Routing } from "./pages/Routing";
-import { History } from "./pages/History";
+import { Inspect } from "./pages/Inspect";
 const pages = [
   { title: "Overview", icon: Activity, view: Overview },
   { title: "Providers", icon: Boxes, view: Providers },
   { title: "Routing", icon: GitBranch, view: Routing },
-  { title: "History", icon: HistoryIcon, view: History },
+  { title: "Inspect", icon: HistoryIcon, view: Inspect },
 ];
 export default function App() {
   const [active, setActive] = useState("Overview");

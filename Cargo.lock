@@ -3019,7 +3019,6 @@ dependencies = [
  "tokn-requests",
  "tokn-router",
  "tokn-router-config",
- "tokn-router-inspect",
  "tokn-router-legacy-config",
  "toml",
  "toml_edit",
@@ -3330,22 +3329,6 @@ dependencies = [
  "tokn-policy",
  "toml",
  "toml_edit",
- "tracing",
-]
-
-[[package]]
-name = "tokn-router-inspect"
-version = "0.2.4"
-dependencies = [
- "anyhow",
- "axum",
- "rusqlite",
- "serde",
- "tempfile",
- "tokio",
- "tokn-core",
- "tokn-persistence",
- "tower",
  "tracing",
 ]
 

@@ -465,3 +465,10 @@ textarea {
     grid-template-columns: 190px minmax(0, 1fr);
   }
 }
+
+.inspector-container {
+  height: calc(100dvh - 102px);
+  min-height: 530px;
+  overflow: hidden;
+  border-radius: 10px;
+}

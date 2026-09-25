@@ -2,7 +2,6 @@ use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::config::LogTarget;
 use crate::logging::{self, RunMode};
 
 mod account;
@@ -14,7 +13,6 @@ mod error;
 mod headers;
 mod history;
 mod import;
-mod inspect;
 mod lan_bootstrap;
 mod login;
 mod migration;
@@ -60,8 +58,6 @@ pub enum Cmd {
   Proxy(proxy::ProxyArgs),
   /// Query usage statistics from the local SQLite log
   Usage(usage::UsageArgs),
-  /// Open a loopback-only viewer for persisted requests and inferred sessions
-  Inspect(inspect::InspectArgs),
   /// Manage archived per-day request databases using the effective configuration.
   #[command(subcommand)]
   Requests(requests::RequestsCmd),
@@ -91,16 +87,13 @@ impl Cli {
       logging::init_basic();
       return history::run(cfg_path, command).map_err(Error::from);
     }
-    let is_inspect = matches!(&self.cmd, Cmd::Inspect(_));
     if matches!(&self.cmd, Cmd::Config(args) if args.requires_pristine_startup()) {
       let Cmd::Config(args) = self.cmd else {
         unreachable!("the pristine startup predicate only matches config commands")
       };
       return config_cmd::run(cfg_path, args).await.map_err(Error::from);
     }
-    if !is_inspect {
-      prepare_default_config_home(cfg_path.as_deref())?;
-    }
+    prepare_default_config_home(cfg_path.as_deref())?;
 
     // Initialize logging *before* dispatching with the schema-aware settings:
     // legacy [logging] or native-v2 [service.logging]. If
@@ -108,13 +101,7 @@ impl Cli {
     // subscriber so the resulting error still gets logged sanely.
     let mode = run_mode_for(&self.cmd);
     let _guard = match config_context::ConfigContext::load(cfg_path.as_deref()) {
-      Ok(context) => {
-        let mut logging_cfg = context.logging().clone();
-        if is_inspect {
-          logging_cfg.target = LogTarget::Stderr;
-        }
-        Some(logging::init(&logging_cfg, mode))
-      }
+      Ok(context) => Some(logging::init(context.logging(), mode)),
       Err(_) => {
         logging::init_basic();
         None
@@ -129,7 +116,6 @@ impl Cli {
       Cmd::Serve(a) => serve::run(cfg_path, a).await,
       Cmd::Proxy(a) => proxy::run(cfg_path, a).await,
       Cmd::Usage(a) => usage::run(cfg_path, a).await,
-      Cmd::Inspect(a) => inspect::run(cfg_path, a).await,
       Cmd::Requests(c) => requests::run(cfg_path, c).await,
       Cmd::History(_) => unreachable!("history commands are dispatched before configuration startup"),
       Cmd::Sessions(c) => sessions::run(c).await,
@@ -164,9 +150,7 @@ fn run_mode_for(cmd: &Cmd) -> RunMode {
   use config_cmd::ConfigCmd::*;
   match cmd {
     Cmd::Serve(_) | Cmd::Proxy(_) => RunMode::Server,
-    Cmd::Inspect(_) | Cmd::Requests(requests::RequestsCmd::Prune(requests::PruneArgs { commit: false })) => {
-      RunMode::ReadOnlyCli
-    }
+    Cmd::Requests(requests::RequestsCmd::Prune(requests::PruneArgs { commit: false })) => RunMode::ReadOnlyCli,
     Cmd::Requests(requests::RequestsCmd::Prune(requests::PruneArgs { commit: true })) => RunMode::MutatingCli,
     Cmd::Update(_) | Cmd::Migration(_) => RunMode::MutatingCli,
     Cmd::Sessions(_) => RunMode::MutatingCli,

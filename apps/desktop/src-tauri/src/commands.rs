@@ -52,11 +52,3 @@ pub async fn list_accounts() -> Result<Vec<data::AccountSummary>, String> {
 pub async fn read_usage() -> Result<Vec<data::UsageSummary>, String> {
   blocking(data::usage).await
 }
-#[tauri::command]
-pub async fn read_history() -> Result<serde_json::Value, String> {
-  blocking(data::history).await
-}
-#[tauri::command(rename_all = "snake_case")]
-pub async fn request_detail(day: String, request_id: String, row_id: String) -> Result<serde_json::Value, String> {
-  blocking(move || data::detail(day, request_id, row_id)).await
-}

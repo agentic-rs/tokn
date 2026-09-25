@@ -4,9 +4,7 @@ import type {
   RoutingDocument,
   AccountSummary,
   UsageSummary,
-  RequestHistory,
-  RequestDetail,
-  RequestSummary,
+  InspectQuery,
 } from "./types";
 export const api = {
   status: () => invoke<GatewayStatus>("gateway_status"),
@@ -21,11 +19,5 @@ export const api = {
     }),
   accounts: () => invoke<AccountSummary[]>("list_accounts"),
   usage: () => invoke<UsageSummary[]>("read_usage"),
-  history: () => invoke<RequestHistory>("read_history"),
-  detail: (request: RequestSummary) =>
-    invoke<RequestDetail | null>("request_detail", {
-      day: request.day,
-      request_id: request.request_id,
-      row_id: request.row_id,
-    }),
+  inspect: <T>(query: InspectQuery) => invoke<T>("inspect_query", { query }),
 };

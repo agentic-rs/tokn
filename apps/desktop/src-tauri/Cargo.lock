@@ -4169,6 +4169,7 @@ dependencies = [
  "anyhow",
  "nix",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4180,6 +4181,7 @@ dependencies = [
  "tokn-persistence",
  "tokn-router-config",
  "toml_edit 0.25.13+spec-1.1.0",
+ "url",
 ]
 
 [[package]]

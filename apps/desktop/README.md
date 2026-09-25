@@ -34,9 +34,14 @@ builds do not require WebKit/GTK or other desktop libraries.
   the local admin reload endpoint; reload failure leaves the saved file in
   place and reports that the running configuration has not changed. Runtime
   linking can reject a configuration accepted by the structural compiler.
-- **History:** the newest 100 requests on the most recent recorded day, with
-  request metadata details. Large payloads and pagination are available in the
-  existing `tokn-gateway inspect` viewer, not this first desktop version.
+- **Inspect:** the migrated request/session inspector. Browse UTC request days,
+  paginate and filter requests, inspect messages and tool definitions, lazily
+  load headers and bodies, and browse semantic session trees and usage. The
+  existing Lit components run inside the desktop shell with isolated styles;
+  native Tauri commands replace the old HTTP API. No inspector listener runs.
+  Missing, unavailable and older databases retain their existing error states;
+  opening Inspect never creates or migrates a database.
+
 
 The app uses `~/.tokn/router/config.toml` and the normal auth store. It supports both
 legacy and v2 configuration with a fixed loopback API port. It does not migrate
@@ -63,6 +68,7 @@ never changes credentials. Merely launching the app does not start a gateway.
 
 ```sh
 pnpm build
+pnpm test
 pnpm prepare:gateway
 cargo fmt --manifest-path src-tauri/Cargo.toml --all
 cargo test --locked --manifest-path src-tauri/Cargo.toml
@@ -72,7 +78,7 @@ cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-f
 Also run repository formatting and Clippy as described in `AGENTS.md`. Native
 checks need permission to bind loopback sockets for process ownership tests.
 Manually check start/stop, external ownership, invalid/stale routing edits,
-reload failure, empty history and existing history before release.
+reload failure, request filters, lazy payloads, session trees and empty/unavailable databases before release.
 
 To exercise the real bundled gateway on a temporary listener (no inference calls):
 
@@ -80,3 +86,9 @@ To exercise the real bundled gateway on a temporary listener (no inference calls
 TOKN_DESKTOP_TEST_GATEWAY="$(pwd)/../../target/debug/tokn-gateway" \
   cargo test --locked --manifest-path src-tauri/Cargo.toml -- --include-ignored
 ```
+
+`tokn-gateway inspect` and the standalone `tokn-router-inspect` crate have been
+removed. Use the desktop **Inspect** screen instead. The inspector's existing
+frontend checks now run from this package; native tests are still run locally.
+UI navigation discards cancelled native query results; a database read already
+in progress finishes on a blocking worker rather than interrupting SQLite.
