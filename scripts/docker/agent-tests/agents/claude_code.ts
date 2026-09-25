@@ -16,7 +16,7 @@ function prepare(testCase: AgentTestCase, options: { router_url: string; marker?
     command: [
       "--print", "--output-format", "stream-json", "--verbose", "--no-session-persistence", "--bare", "--restricted",
       "--model", model, "--permission-mode", "dontAsk", "--permission-prompts", "none", "--max-turns", "3",
-      "--tools", readTool ? "Read" : "", ...(readTool ? ["--allowedTools", "Read"] : []), prompt,
+      "--tools", readTool ? "Read" : "", ...(readTool ? ["--allowedTools", "Read"] : []), "--", prompt,
     ],
     environment: {
       // Claude Code appends /v1/messages to this origin itself.
@@ -26,7 +26,7 @@ function prepare(testCase: AgentTestCase, options: { router_url: string; marker?
       CLAUDE_CODE_SKIP_PROMPT_HISTORY: "1",
       DISABLE_TELEMETRY: "1",
     },
-    working_dir: "/workspace",
+    working_dir: readTool ? "/agent-test" : "/workspace",
     expected_text: expectedText,
     ...(fixture ? { fixture_path: fixturePath } : {}),
   };

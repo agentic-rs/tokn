@@ -50,12 +50,12 @@ describe("Codex preparation", () => {
     const prepared = codex.prepare(testCase, { router_url: "http://127.0.0.1:4141/", marker });
     expect(prepared.command).toEqual([
       "exec", "--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-      "--sandbox", "read-only", "--ask-for-approval", "never", "--cd", "/workspace", "--model", "gpt-5.4",
+      "--sandbox", "read-only", "--cd", "/workspace", "--model", "gpt-5.4",
       "--config", 'model_provider="tokn"', "--config",
       expect.stringContaining('base_url = "http://127.0.0.1:4141/test/v1"'), expect.stringContaining(marker),
     ]);
     expect(prepared.command.join(" ")).toContain('env_key = "TOKN_AGENT_TEST_API_KEY"');
-    expect(prepared.environment).toEqual({ CODEX_HOME: "/tmp/codex-home" });
+    expect(prepared.environment).toEqual({ CODEX_HOME: "/tmp" });
     expect(prepared.environment.TOKN_AGENT_TEST_API_KEY).toBeUndefined();
     expect(resolveAgent("codex")).toBe(codex);
   });
@@ -65,6 +65,8 @@ describe("Codex preparation", () => {
       ...testCase, probe: "read_tool", upstream_model: "github-copilot/gpt-5.4",
     }, { router_url: "http://127.0.0.1:4141", marker });
     expect(prepared.command).toContain("github-copilot/gpt-5.4");
+    expect(prepared.command.at(-1)).toContain("exec_command tool");
+    expect(prepared.working_dir).toBe("/agent-test");
     expect(prepared.command.join(" ")).not.toContain(marker);
     expect(prepared.files.find((file) => file.path === "tool-fixture.txt")!.content).toContain(marker);
     expect(prepared.fixture_path).toBe("/agent-test/tool-fixture.txt");

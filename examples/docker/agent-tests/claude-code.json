@@ -6,20 +6,20 @@
   "timeout_secs": 180,
   "cases": [
     {
-      "id": "claude-code-copilot-sonnet-text",
+      "id": "claude-code-deepseek-flash-text",
       "agent": "claude-code",
       "mode": "api",
-      "model": "claude-sonnet-4.6",
-      "base_path": "/opencode-github-copilot/v1",
+      "model": "deepseek-v4-flash",
+      "base_path": "/v1",
       "api": "messages",
       "probe": "text"
     },
     {
-      "id": "claude-code-copilot-sonnet-read",
+      "id": "claude-code-deepseek-flash-read",
       "agent": "claude-code",
       "mode": "api",
-      "model": "claude-sonnet-4.6",
-      "base_path": "/opencode-github-copilot/v1",
+      "model": "deepseek-v4-flash",
+      "base_path": "/v1",
       "api": "messages",
       "probe": "read_tool"
     }

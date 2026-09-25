@@ -1,4 +1,4 @@
-import { fixturePath, preparePrompt } from "./prompt";
+import { fixturePath, preparePrompt, readPrompt } from "./prompt";
 import type { AgentAdapter, PreparedAgentTest, AgentTestCase, AgentTestOutput, AgentTestResult, AgentTestToolCall } from "./types";
 
 function tomlString(value: string): string {
@@ -8,7 +8,10 @@ function tomlString(value: string): string {
 function prepare(testCase: AgentTestCase, options: { router_url: string; marker?: string }): PreparedAgentTest {
   if (testCase.mode !== "api") throw new Error(`Codex does not support agent-test mode '${testCase.mode}'`);
   if (testCase.api !== "responses") throw new Error("Codex agent tests require the Responses API");
-  const { expected_text: expectedText, prompt, fixture } = preparePrompt(testCase, options.marker);
+  const { expected_text: expectedText, prompt: sharedPrompt, fixture } = preparePrompt(testCase, options.marker);
+  const readTool = testCase.probe === "read_tool";
+  const prompt = readTool ? readPrompt(`Call the exec_command tool exactly once with cmd "cat ${fixturePath}".`) : sharedPrompt;
+  const workingDir = readTool ? "/agent-test" : "/workspace";
   const model = testCase.upstream_model ?? testCase.model;
   const baseUrl = `${options.router_url.replace(/\/$/, "")}${testCase.base_path}`;
   const provider = `{ name = "Tokn integration test", base_url = ${tomlString(baseUrl)}, ` +
@@ -20,11 +23,11 @@ function prepare(testCase: AgentTestCase, options: { router_url: string; marker?
     ],
     command: [
       "exec", "--json", "--skip-git-repo-check", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-      "--sandbox", "read-only", "--ask-for-approval", "never", "--cd", "/workspace", "--model", model,
+      "--sandbox", "read-only", "--cd", workingDir, "--model", model,
       "--config", 'model_provider="tokn"', "--config", `model_providers.tokn=${provider}`, prompt,
     ],
-    environment: { CODEX_HOME: "/tmp/codex-home" },
-    working_dir: "/workspace",
+    environment: { CODEX_HOME: "/tmp" },
+    working_dir: workingDir,
     expected_text: expectedText,
     ...(fixture ? { fixture_path: fixturePath } : {}),
   };
