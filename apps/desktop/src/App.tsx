@@ -8,23 +8,20 @@ import {
 import { Overview } from "./pages/Overview";
 import { Providers } from "./pages/Providers";
 import { Routing } from "./pages/Routing";
-import { History } from "./pages/History";
+import { Inspect } from "./pages/Inspect";
+import { ThemePicker } from "./components/ThemePicker";
+
 const pages = [
   { title: "Overview", icon: Activity, view: Overview },
   { title: "Providers", icon: Boxes, view: Providers },
   { title: "Routing", icon: GitBranch, view: Routing },
-  { title: "History", icon: HistoryIcon, view: History },
+  { title: "Inspect", icon: HistoryIcon, view: Inspect },
 ];
 export default function App() {
   const [active, setActive] = useState("Overview");
   return (
     <div className="app-shell">
       <aside>
-        <div className="brand">
-          <span className="brand-symbol">t</span>tokn
-          <span className="desktop-label">DESKTOP</span>
-        </div>
-        <div className="nav-label">WORKSPACE</div>
         <nav aria-label="Main navigation">
           {pages.map((page) => (
             <button
@@ -39,8 +36,7 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <span className="local-dot" />
-          Local workspace<small>Tokn · 0.2.4</small>
+          <ThemePicker />
         </div>
       </aside>
       <main>

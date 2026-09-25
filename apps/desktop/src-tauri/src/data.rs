@@ -60,22 +60,3 @@ pub fn usage() -> Result<Vec<UsageSummary>> {
       .collect(),
   )
 }
-
-pub fn history() -> Result<serde_json::Value> {
-  let paths = crate::config::load()?.persistence().resolve_paths()?;
-  Ok(serde_json::to_value(tokn_persistence::list_latest_requests(
-    &paths.requests_dir,
-    Some(100),
-    None,
-  )?)?)
-}
-
-pub fn detail(day: String, request_id: String, row_id: String) -> Result<serde_json::Value> {
-  let paths = crate::config::load()?.persistence().resolve_paths()?;
-  Ok(serde_json::to_value(tokn_persistence::get_request(
-    &paths.requests_dir,
-    &day,
-    &request_id,
-    Some(row_id.parse()?),
-  )?)?)
-}

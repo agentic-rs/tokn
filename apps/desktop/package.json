@@ -11,13 +11,16 @@
     "bundle": "pnpm prepare:gateway --release && tauri build",
     "prepare:gateway": "node --import tsx scripts/prepare-gateway.ts",
     "format": "prettier --write src scripts *.json *.ts src-tauri/*.json src-tauri/capabilities/*.json",
-    "format:check": "prettier --check src scripts *.json *.ts src-tauri/*.json src-tauri/capabilities/*.json"
+    "format:check": "prettier --check src scripts *.json *.ts src-tauri/*.json src-tauri/capabilities/*.json",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx src/inspect/session-tree.spec.ts && node --import tsx src/inspect/web-search.spec.ts && node --import tsx src/inspect/llm-request-overview.spec.ts && node --import tsx src/lib/inspect-query.spec.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "lucide-react": "^0.468",
     "react": "^19",
-    "react-dom": "^19"
+    "react-dom": "^19",
+    "lit": "^3.3.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

@@ -2,6 +2,7 @@ mod commands;
 mod config;
 mod data;
 mod gateway;
+mod inspect;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
@@ -19,8 +20,7 @@ pub fn run() {
       commands::save_routing,
       commands::list_accounts,
       commands::read_usage,
-      commands::read_history,
-      commands::request_detail
+      inspect::inspect_query
     ])
     .setup(|app| {
       gateway::monitor(app.handle().clone());

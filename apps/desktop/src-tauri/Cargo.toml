@@ -28,3 +28,7 @@ tokn-auth = { path = "../../../crates/auth" }
 tokn-persistence = { path = "../../../crates/persistence" }
 
 tempfile = "3"
+
+[dev-dependencies]
+rusqlite = { version = "0.40", features = ["bundled"] }
+url = "2"

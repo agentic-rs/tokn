@@ -1,14 +1,15 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import type {
   GatewayStatus,
   RoutingDocument,
   AccountSummary,
   UsageSummary,
-  RequestHistory,
-  RequestDetail,
-  RequestSummary,
+  InspectQuery,
 } from "./types";
 export const api = {
+  setTheme: (theme: "light" | "dark" | null) =>
+    getCurrentWindow().setTheme(theme),
   status: () => invoke<GatewayStatus>("gateway_status"),
   start: () => invoke<void>("start_gateway"),
   stop: () => invoke<void>("stop_gateway"),
@@ -21,11 +22,5 @@ export const api = {
     }),
   accounts: () => invoke<AccountSummary[]>("list_accounts"),
   usage: () => invoke<UsageSummary[]>("read_usage"),
-  history: () => invoke<RequestHistory>("read_history"),
-  detail: (request: RequestSummary) =>
-    invoke<RequestDetail | null>("request_detail", {
-      day: request.day,
-      request_id: request.request_id,
-      row_id: request.row_id,
-    }),
+  inspect: <T>(query: InspectQuery) => invoke<T>("inspect_query", { query }),
 };

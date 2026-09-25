@@ -293,22 +293,20 @@ response metadata, and can also persist request bodies when
 
 ### Inspect request history
 
-Run the standalone local viewer without starting `serve`:
+Open **Inspect** in [Tokn Desktop](apps/desktop/README.md) to browse persisted
+requests and sessions. The inspector is part of the desktop app; the former
+`tokn-gateway inspect` command and standalone web server have been removed.
+It reads existing request-day databases, `sessions.db`, and `usage.db` through
+native commands without starting the gateway, opening a listener, or migrating
+databases.
 
-```sh
-tokn-gateway inspect
-```
-
-It binds only to `127.0.0.1`, prints an available URL, and reads the existing
-request-day databases and `sessions.db` without creating or migrating either.
 The Sessions view reads its list, semantic node tree, and selected-node content
 only from `sessions.db`; opening it does not scan request history. Session and
 node metadata load first, while message content is fetched only when a node is
 opened. Large node responses use explicit message, part, and byte bounds, and
-the viewer reports anything omitted or truncated. Use
-`--requests-dir PATH` or `--sessions-db PATH` to inspect different persisted
-paths. The viewer can expose stored prompts and responses, so treat its URL and
-screen contents as sensitive.
+the viewer reports anything omitted or truncated. Database paths follow the
+selected gateway configuration. For a different workspace, launch the desktop app with `TOKN_DESKTOP_CONFIG` pointing to its
+configuration. Stored prompts and responses remain local to the app.
 
 The Requests view opens on the most recent non-empty UTC day. It pages through
 large days, supports provider, status, error, and text filters, and loads stored
@@ -410,7 +408,6 @@ tokn-gateway proxy run [--npx] codex|opencode|pi [ARGS...]
 tokn-gateway proxy exec COMMAND [ARGS...]
 tokn-gateway proxy ca path|show|regenerate
 tokn-gateway usage [--since 24h] [--account ID] [--provider PROVIDER]
-tokn-gateway inspect [--port PORT] [--requests-dir PATH] [--sessions-db PATH]
 tokn-gateway config get|set|unset KEY [--account ID] [--add]
 tokn-gateway config list|edit|path|init
 tokn-gateway config migrate-v2 [--expanded] [--with-proxy] [--proxy-route-mode MODE] [--insecure-allow-remote] [--allow-insecure-http]

@@ -1,6 +1,6 @@
 {
   "identifier": "main",
-  "description": "Local desktop window events only",
+  "description": "Local desktop window events and appearance",
   "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "permissions": ["core:event:default", "core:window:allow-set-theme"]
 }
