@@ -19,7 +19,13 @@ export interface AccountSummary {
   provider: string;
   label: string | null;
   enabled: boolean;
-  tier: string;
+  tier: "active" | "fallback";
+  username: string | null;
+  credential_kind: string;
+  credential_status: string;
+  expires_at: number | null;
+  last_refresh: number | null;
+  can_refresh: boolean;
 }
 export interface UsageSummary {
   account: string | null;
@@ -274,3 +280,55 @@ export type InspectQuery =
   | { kind: "sessions"; limit?: number }
   | { kind: "session" | "session_usage"; session_id: string; limit?: number }
   | { kind: "session_node"; session_id: string; node_id: string };
+
+export type AccountActivation = "active" | "fallback" | "disabled";
+export interface AccountProvider {
+  id: string;
+  device_login: boolean;
+  api_key: boolean;
+  refresh_token: boolean;
+  sources: string[];
+  default_flavor: "api_key" | "refresh_token";
+}
+export interface AccountProbe {
+  checked_at: number;
+  authentication: string;
+  quota_status: string;
+  plan: string | null;
+  headline: string | null;
+  reset_date: string | null;
+  metered: { label: string; remaining: number; entitlement?: number } | null;
+  secondary: {
+    label: string;
+    used?: number;
+    total?: number;
+    percent_used?: number;
+    reset_at_ms?: number;
+  }[];
+  message: string | null;
+}
+export interface AccountImport {
+  id: string;
+  provider: string;
+  source: string;
+  value: string;
+  flavor: "api_key" | "refresh_token";
+}
+export interface LoginTicket {
+  login_id: string;
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+}
+export interface LoginProgress {
+  login_id: string;
+  phase: "waiting" | "saving" | "complete" | "ended";
+}
+export type AccountEdit =
+  | {
+      action: "update";
+      id: string;
+      label: string | null;
+      activation: AccountActivation;
+    }
+  | { action: "remove"; id: string };

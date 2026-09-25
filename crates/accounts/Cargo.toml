@@ -9,6 +9,11 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+toml = { workspace = true }
 tokn-core = { workspace = true }
 tokn-auth = { workspace = true }
 tokn-config = { workspace = true }
@@ -27,6 +32,5 @@ smol_str = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+tempfile = "3"
 async-trait = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }

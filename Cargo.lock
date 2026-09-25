@@ -2796,13 +2796,17 @@ dependencies = [
 name = "tokn-accounts"
 version = "0.2.4"
 dependencies = [
+ "anyhow",
  "arc-swap",
  "async-trait",
  "parking_lot",
  "reqwest",
+ "serde",
  "serde_json",
  "smol_str",
  "snafu",
+ "tempfile",
+ "tokio",
  "tokn-auth",
  "tokn-core",
  "tokn-policy",
@@ -3003,6 +3007,7 @@ dependencies = [
  "time",
  "tokio",
  "tokn-access",
+ "tokn-accounts",
  "tokn-agent-migration",
  "tokn-auth",
  "tokn-catalogue",

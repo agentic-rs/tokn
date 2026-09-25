@@ -24,9 +24,17 @@ builds do not require WebKit/GTK or other desktop libraries.
 - **Overview:** check the first loopback `llm_api` listener (sorted by listener
   ID), start the bundled gateway, stop a gateway owned by this app, and view
   recorded usage for the past 24 hours.
-- **Providers:** local account metadata and recorded token usage. Credentials
-  remain in Rust; sign-in and account changes use the existing CLI. Recorded
-  usage is not remaining provider quota.
+- **Accounts:** search accounts grouped by provider; edit labels and shared
+  active/fallback/disabled state; remove accounts; check authentication and live
+  provider quota separately from recorded local usage. Add accounts using provider
+  device-code login or supported credential imports (paste, environment, file,
+  and provider-specific sources). Device login shows progress and can be cancelled.
+  Stored credentials are never returned to the frontend; pasted credentials are
+  cleared from the form when submitted. Account IDs must be unique.
+  Changes preserve auth-store shards and attempt to reload a running gateway;
+  failures clearly distinguish saved credentials from unapplied runtime changes.
+  Token refreshes are persisted before quota probes, including when quota fails.
+  Quota checks are on demand and report unsupported/unavailable separately from zero.
 - **Routing:** edit the `defaults`, `profiles`, `routes` and `model_scores`
   sections as TOML. Save validates the complete candidate with the existing configuration
   validator (including legacy fragments) and uses a locked, atomic replacement with a revision check.

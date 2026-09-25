@@ -454,3 +454,161 @@ textarea {
   color: var(--ui-accent);
   border-color: var(--ui-border);
 }
+
+.account-search,
+.account-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+.account-search {
+  margin: 20px 0;
+  max-width: 440px;
+}
+.account-search input,
+.account-form input,
+.account-form select {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 7px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+}
+.account-search input:focus-visible,
+.account-form input:focus-visible,
+.account-form select:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+.accounts-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(320px, 2fr);
+  gap: 24px;
+  align-items: start;
+}
+.account-list section + section {
+  margin-top: 24px;
+}
+.account-list h3 {
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+.account-group {
+  display: grid;
+  gap: 8px;
+}
+.account-row {
+  justify-content: space-between;
+  text-align: left;
+  padding: 15px;
+  min-width: 0;
+}
+.account-row > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-row small {
+  display: block;
+  margin-top: 5px;
+  color: var(--ui-muted);
+}
+.account-row.selected {
+  background: var(--ui-accent-surface);
+  border-color: var(--ui-accent);
+}
+.account-panel {
+  padding: 24px;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  margin-bottom: 20px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-panel h2 {
+  margin-top: 0;
+}
+.account-panel .section-label {
+  margin-top: 0;
+}
+.account-panel .section-label h2 {
+  margin-bottom: 0;
+}
+.account-form {
+  display: grid;
+  gap: 16px;
+  padding: 0;
+  border: 0;
+  margin: 24px 0 0;
+  min-width: 0;
+}
+.account-form button {
+  justify-self: start;
+}
+.account-form p {
+  margin: 0;
+  font-size: 12px;
+}
+.account-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+.account-facts dt {
+  color: var(--ui-muted);
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.account-facts dd {
+  margin: 0;
+  font-size: 12px;
+}
+.account-actions {
+  flex-wrap: wrap;
+}
+.quota-panel {
+  background: var(--ui-surface-raised);
+  padding: 18px;
+  border-radius: 8px;
+  margin-top: 20px;
+  font-size: 12px;
+}
+.quota-panel progress {
+  width: 100%;
+  accent-color: var(--ui-accent);
+}
+.quota-panel small {
+  display: block;
+  color: var(--ui-muted);
+  margin-top: 5px;
+}
+.account-remove {
+  margin-top: 24px;
+  border-top: 1px solid var(--ui-border);
+  padding-top: 20px;
+  font-size: 12px;
+}
+.danger {
+  color: var(--ui-error);
+  border-color: var(--ui-error-border);
+  background: var(--ui-error-surface);
+}
+.device-code {
+  font:
+    24px ui-monospace,
+    monospace;
+  letter-spacing: 3px;
+  user-select: all;
+}
+.selectable {
+  user-select: all;
+}
+@media (max-width: 1050px) {
+  .accounts-layout {
+    grid-template-columns: 1fr;
+  }
+}

@@ -6,14 +6,14 @@ import {
   History as HistoryIcon,
 } from "lucide-react";
 import { Overview } from "./pages/Overview";
-import { Providers } from "./pages/Providers";
+import { Accounts } from "./pages/Accounts";
 import { Routing } from "./pages/Routing";
 import { Inspect } from "./pages/Inspect";
 import { ThemePicker } from "./components/ThemePicker";
 
 const pages = [
   { title: "Overview", icon: Activity, view: Overview },
-  { title: "Providers", icon: Boxes, view: Providers },
+  { title: "Accounts", icon: Boxes, view: Accounts },
   { title: "Routing", icon: GitBranch, view: Routing },
   { title: "Inspect", icon: HistoryIcon, view: Inspect },
 ];
