@@ -17,6 +17,7 @@ export type RunReport = {
   run_id: string;
   volume_name: string;
   gateway_image: string;
+  codex_disable_selinux_label: boolean;
   started_at: string;
   finished_at?: string;
   success: boolean;
@@ -95,6 +96,7 @@ export async function runSuite(engine: ContainerEngine, suite: AgentTestSuite, o
   const volume_name = `${run_id}-state`;
   const report: RunReport = {
     schema_version: 1, run_id, volume_name, gateway_image: suite.gateway_image,
+    codex_disable_selinux_label: suite.codex_disable_selinux_label,
     started_at: new Date().toISOString(), success: false, export_complete: false, cases: [], errors: [],
   };
   let gateway_started = false;
@@ -119,6 +121,8 @@ export async function runSuite(engine: ContainerEngine, suite: AgentTestSuite, o
     for (const { testCase, adapter, mode, input } of prepared) {
       options.signal?.throwIfAborted();
       note(`Running ${testCase.id}`);
+      const disable_label = adapter.id === "codex" && suite.codex_disable_selinux_label;
+      if (disable_label) note("Codex container SELinux labeling disabled; Codex read-only sandbox remains enabled");
       const case_dir = join(output_dir, testCase.id);
       mkdirSync(case_dir, { mode: 0o700 });
       for (const file of input.files) {
@@ -129,6 +133,7 @@ export async function runSuite(engine: ContainerEngine, suite: AgentTestSuite, o
       agents.add(agent_name);
       await checked(engine, [
         "run", "-d", "--name", agent_name, ...mode.network_args(gateway_name), ...directNetworkEnv,
+        ...(disable_label ? ["--security-opt", "label=disable"] : []),
         ...Object.entries(input.environment).flatMap(([key, value]) => ["--env", `${key}=${value}`]),
         "--env", "TOKN_AGENT_TEST_API_KEY", ...bind(case_dir, "/agent-test"), "--tmpfs", "/workspace:rw", "--workdir", input.working_dir,
         suite.agent_images[adapter.id] ?? adapter.image, ...input.command,

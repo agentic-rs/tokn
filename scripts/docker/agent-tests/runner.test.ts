@@ -175,6 +175,32 @@ function expectCleaned(engine: FakeEngine): void {
 }
 
 describe("container agent-test runner", () => {
+  test("scopes the opt-in SELinux workaround to Codex while preserving its read-only sandbox", async () => {
+    suite.cases.push({
+      id: "codex-read", agent: "codex", mode: "api", model: "gpt-5.6-luna",
+      base_path: "/v1", api: "responses", probe: "read_tool",
+    });
+    for (const enabled of [false, true]) {
+      const engine = new FakeEngine();
+      const capture = join(directory, `label-${enabled}`);
+      const report = await runSuite(engine, { ...suite, codex_disable_selinux_label: enabled }, { output_dir: capture });
+      expect(report.errors).toEqual([]);
+      expect(report.codex_disable_selinux_label).toBe(enabled);
+      const persisted = JSON.parse(readFileSync(join(capture, "report.json"), "utf8"));
+      expect(persisted.codex_disable_selinux_label).toBe(enabled);
+      const runs = engine.calls.filter(({ args }) => args[0] === "run");
+      const codex_run = runs.find(({ args }) => args.includes("tokn-codex-agent-test:0.154.0"))!;
+      expect(codex_run.args[codex_run.args.indexOf("--sandbox") + 1]).toBe("read-only");
+      for (const { args } of runs) {
+        const opts = args.filter((_, index) => args[index - 1] === "--security-opt");
+        expect(opts).toEqual(enabled && args === codex_run.args ? ["label=disable"] : []);
+        expect(args).not.toContain("--privileged");
+        expect(args).not.toContain("--cap-add");
+      }
+      expectCleaned(engine);
+    }
+  });
+
   test("isolates host state, exports after shutdown, and passes the key only via process environment", async () => {
     const engine = new FakeEngine();
     const report = await runSuite(engine, suite, { output_dir });

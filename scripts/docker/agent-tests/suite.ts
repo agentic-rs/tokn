@@ -16,6 +16,7 @@ export type AgentTestSuite = {
   serve_args: string[];
   timeout_secs: number;
   agent_images: Record<string, string>;
+  codex_disable_selinux_label: boolean;
   cases: AgentTestCase[];
 };
 
@@ -35,7 +36,7 @@ function localPath(value: string, base_dir: string): string {
 
 export function parseSuite(value: unknown, base_dir: string): AgentTestSuite {
   const input = object(value, "suite");
-  const fields = new Set(["schema_version", "gateway_image", "config_file", "auth_file", "config_dir", "auth_dir", "router_url", "serve_args", "timeout_secs", "agent_images", "cases"]);
+  const fields = new Set(["schema_version", "gateway_image", "config_file", "auth_file", "config_dir", "auth_dir", "router_url", "serve_args", "timeout_secs", "agent_images", "codex_disable_selinux_label", "cases"]);
   for (const field of Object.keys(input)) if (!fields.has(field)) throw new Error(`unknown suite field: ${field}`);
   if (input.schema_version !== 1) throw new Error("suite schema_version must be 1");
   const config_file = localPath(string(input.config_file, "config_file"), base_dir);
@@ -53,6 +54,8 @@ export function parseSuite(value: unknown, base_dir: string): AgentTestSuite {
   const timeout_secs = input.timeout_secs ?? 120;
   if (!Number.isInteger(timeout_secs) || Number(timeout_secs) < 1 || Number(timeout_secs) > 3600) throw new Error("timeout_secs must be an integer from 1 to 3600");
   const agent_images = Object.fromEntries(Object.entries(object(input.agent_images ?? {}, "agent_images")).map(([key, value]) => [key, string(value, `agent_images.${key}`)]));
+  const codex_disable_selinux_label = input.codex_disable_selinux_label === undefined ? false : input.codex_disable_selinux_label;
+  if (typeof codex_disable_selinux_label !== "boolean") throw new Error("codex_disable_selinux_label must be a boolean");
   const stem = basename(config_file, extname(config_file));
   const default_config_dir = resolve(dirname(config_file), `${stem}.d`);
   const optionalDir = (value: unknown, fallback: string, label: string) => value === undefined
@@ -68,6 +71,7 @@ export function parseSuite(value: unknown, base_dir: string): AgentTestSuite {
     serve_args,
     timeout_secs: Number(timeout_secs),
     agent_images,
+    codex_disable_selinux_label,
     cases: parseCases(input.cases),
   };
 }
