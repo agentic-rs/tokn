@@ -2,7 +2,7 @@ use crate::util::secret::Secret;
 use crate::HeaderPatchCtx;
 use tokn_headers::keys::{
   ACCEPT, AUTHORIZATION, CHATGPT_ACCOUNT_ID, CONTENT_ENCODING, CONTENT_TYPE, OPENAI_BETA, ORIGINATOR, SESSION_ID_LOWER,
-  USER_AGENT, VERSION, X_CODEX_TURN_METADATA, X_SESSION_AFFINITY,
+  USER_AGENT, VERSION, X_CODEX_RESPONSES_LITE, X_CODEX_TURN_METADATA, X_SESSION_AFFINITY,
 };
 use tokn_headers::{AgentId, HeaderMap, HeaderName, HeaderNormalizeCtx, HeaderNormalizer, HeaderValue};
 
@@ -91,6 +91,8 @@ impl HeaderNormalizer for CodexCliNormalizer {
     out.insert(&ORIGINATOR, HeaderValue::from_string(originator));
     out.insert(&VERSION, HeaderValue::from_static(CODEX_CLI_VERSION));
     out.insert(&USER_AGENT, HeaderValue::from_string(user_agent));
+    // Keep the protocol selector paired with the unmodified lite request body.
+    preserve_allowed(headers, &mut out, &[&X_CODEX_RESPONSES_LITE]);
     if let Some(chatgpt_account_id) = chatgpt_account_id {
       out.insert(&CHATGPT_ACCOUNT_ID, HeaderValue::from_string(chatgpt_account_id));
     }
@@ -248,6 +250,29 @@ mod tests {
     assert_eq!(out.get(&USER_AGENT).unwrap().as_str(), "codex_exec/0.130.0");
     assert_eq!(out.get(&SESSION_ID_LOWER).unwrap().as_str(), "sess-inbound");
     assert_eq!(out.get(&X_CODEX_TURN_METADATA).unwrap().as_str(), r#"{"cwd":"/work"}"#);
+  }
+
+  #[test]
+  fn codex_cli_preserves_responses_lite_through_header_composition() {
+    // Lite requests carry tool definitions in input[].additional_tools rather
+    // than top-level tools. Preserve their explicit protocol selector as well.
+    const LITE: &str = "x-openai-internal-codex-responses-lite";
+    for value in [None, Some("true"), Some("false")] {
+      let mut inbound = HeaderMap::new();
+      if let Some(value) = value {
+        inbound.insert(LITE, value);
+      }
+      let vars = TemplateVars::default();
+      let headers = tokn_headers::registry::build_wire_identity_headers("codex", "codex-cli", &vars, &inbound);
+      let ctx = HeaderNormalizeCtx {
+        agent_id: &AgentId::CodexCli,
+        stream: true,
+        content_encoding: None,
+        vars: &vars,
+      };
+      let out = CodexCliNormalizer.normalize(&headers, &ctx);
+      assert_eq!(out.get(LITE).map(|v| v.as_str()), value);
+    }
   }
 
   #[test]
