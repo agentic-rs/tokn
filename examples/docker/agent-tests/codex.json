@@ -13,6 +13,15 @@
       "base_path": "/v1",
       "api": "responses",
       "probe": "text"
+    },
+    {
+      "id": "codex-luna-read",
+      "agent": "codex",
+      "mode": "api",
+      "model": "gpt-5.6-luna",
+      "base_path": "/v1",
+      "api": "responses",
+      "probe": "read_tool"
     }
   ]
 }

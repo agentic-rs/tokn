@@ -44,11 +44,8 @@ refreshing must first be refreshed outside the agent test.
 The OpenCode, Pi, and DSH examples use the `opencode-deepseek` and
 `opencode-codex` profiles. Codex CLI uses `gpt-5.6-luna` over Responses through
 the default `/v1` route; Claude Code uses `deepseek-v4-flash` over Messages
-through the same route. The Codex Luna example has a text probe only: in the tested
-rootless Podman environment, SELinux labeling prevents Codex's nested Bubblewrap
-sandbox from mounting `/dev/pts` before the read command can execute. Claude Code's
-DeepSeek Flash example covers text and read-tool probes. Check the recorded provider
-after each live run.
+through the same route. Both examples cover text and read-tool probes. Check the
+recorded provider after each live run.
 Edit each case's `base_path` to match your profiles. `model` names the model in
 the agent; optional `upstream_model` supplies a qualified router model identifier.
 `api` explicitly selects Chat Completions, Responses, or Messages. Model eligibility and
@@ -59,11 +56,24 @@ For Codex Responses Lite requests, tool definitions live in `input` items with
 `type: "additional_tools"`; an absent top-level `tools` array does not mean the
 model has no tools. Tokn preserves the accompanying
 `x-openai-internal-codex-responses-lite` header. Inspect subsequent
-`custom_tool_call_output` items for code-mode failures: the local Luna read probe
-invoked `exec_command` through `exec`, then returned
-`bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied`.
+`custom_tool_call_output` items for code-mode failures.
 For Claude Code, the adapter removes the terminal `/v1` from `base_path` because
 the CLI appends `/v1/messages` to `ANTHROPIC_BASE_URL`.
+
+On SELinux-enabled container hosts (including the tested rootless Podman VM),
+Codex's nested Bubblewrap sandbox can fail with
+`bwrap: Can't mount devpts on /newroot/dev/pts: Permission denied`. To allow the
+nested sandbox to start, add this explicit opt-in to your local suite:
+
+```json
+"codex_disable_selinux_label": true
+```
+
+The default is `false`. When enabled, the runner adds `--security-opt label=disable`
+only to Codex agent containers. This disables their container SELinux labeling;
+Codex still runs with `--sandbox read-only`, the fixture mount stays read-only,
+and the gateway and other agents retain their normal container settings. The
+runner records the option in `report.json` and prints when it applies it.
 
 The config must enable persistence/session recording and use default database
 paths. Use a dedicated config if your native configuration has absolute paths.

@@ -39,8 +39,18 @@ describe("agent-test suite configuration", () => {
     expect(suite.timeout_secs).toBe(120);
     expect(suite.serve_args).toEqual([]);
     expect(suite.agent_images).toEqual({});
+    expect(suite.codex_disable_selinux_label).toBe(false);
     expect(suite.cases).toEqual([defaultCases[0]]);
     expect(() => validateInputs(suite)).not.toThrow();
+  });
+
+  test("requires an explicit boolean for the Codex SELinux workaround", () => {
+    for (const value of [true, false]) {
+      expect(parseSuite(input({ codex_disable_selinux_label: value }), directory).codex_disable_selinux_label).toBe(value);
+    }
+    for (const value of [null, "true", 1, [], {}]) {
+      expect(() => parseSuite(input({ codex_disable_selinux_label: value }), directory)).toThrow("must be a boolean");
+    }
   });
 
   test("discovers matching config fragments and auth shards independently", () => {
