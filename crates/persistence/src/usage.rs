@@ -102,6 +102,16 @@ pub struct UsageDb {
 }
 
 impl UsageDb {
+  /// Open an existing usage database without migrations or writes.
+  /// Summary queries require the current usage schema; older schemas report
+  /// an error rather than being upgraded by a read-only viewer.
+  pub fn open_readonly(path: &Path) -> Result<Self> {
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    conn.busy_timeout(std::time::Duration::from_millis(2_500))?;
+    conn.execute_batch("PRAGMA query_only = ON;")?;
+    Ok(Self { conn })
+  }
+
   /// Open `usage.db` at `path`, applying any pending migrations. Pass the
   /// canonical filesystem path so `migrate::apply` can stage a `.bak`.
   pub fn open(path: &Path) -> Result<Self> {
@@ -162,6 +172,7 @@ impl UsageDb {
     Ok(())
   }
 
+  /// Summarize requests since a Unix timestamp in milliseconds.
   pub fn summary(&self, since_ts: i64, account: Option<&str>, provider: Option<&str>) -> Result<Vec<RowSummary>> {
     let mut sql = String::from(
       "SELECT account_id, provider_id, model,
@@ -198,8 +209,8 @@ impl UsageDb {
     let mut stmt = self.conn.prepare(&sql)?;
     let map_row = |row: &rusqlite::Row<'_>| {
       Ok(RowSummary {
-        account: row.get::<_, String>(0)?,
-        provider: row.get::<_, String>(1)?,
+        account: row.get::<_, Option<String>>(0)?,
+        provider: row.get::<_, Option<String>>(1)?,
         model: row.get::<_, String>(2)?,
         initiator: row.get::<_, Option<String>>(3)?,
         count: row.get::<_, i64>(4)? as u64,
@@ -489,8 +500,8 @@ impl EventHandler for UsageEventHandler {
 
 #[derive(Debug)]
 pub struct RowSummary {
-  pub account: String,
-  pub provider: String,
+  pub account: Option<String>,
+  pub provider: Option<String>,
   pub model: String,
   pub initiator: Option<String>,
   pub count: u64,
@@ -573,6 +584,48 @@ mod tests {
   use tokn_core::request_event::stage::{ConvertedResponseSummary, ExtractedSummary, ResolvedSummary, SentSummary};
   use tokn_core::request_event::{RecordEvent, RequestEvent, RequestEventPayload, StageEvent};
   use tokn_headers::HeaderMap;
+
+  #[test]
+  fn summary_handles_unresolved_accounts_and_filters_millisecond_timestamps() {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE requests (account_id TEXT, provider_id TEXT, model TEXT, params_json TEXT, usage_json TEXT, ctx_json TEXT, ts INTEGER);
+      INSERT INTO requests (model, ts, usage_json) VALUES ('recent', 1700000000000, '{\"input\":12}'), ('old', 1699900000000, '{\"input\":99}');").unwrap();
+    let db = UsageDb { conn };
+    let rows = db.summary(1700000000000 - 86_400_000, None, None).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model, "recent");
+    assert_eq!(rows[0].account, None);
+    assert_eq!(rows[0].provider, None);
+    assert_eq!(rows[0].input_tokens, 12);
+  }
+
+  #[test]
+  fn readonly_usage_never_creates_migrates_or_writes() {
+    let dir = std::env::temp_dir().join(format!("tokn-readonly-usage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("usage.db");
+    assert!(UsageDb::open_readonly(&path).is_err());
+    assert!(!path.exists());
+
+    drop(UsageDb::open(&path).unwrap());
+    let reader = UsageDb::open_readonly(&path).unwrap();
+    assert!(reader.summary(0, None, None).unwrap().is_empty());
+    assert!(reader.conn.execute("DELETE FROM requests", []).is_err());
+    drop(reader);
+
+    let old_path = dir.join("old.db");
+    let old = Connection::open(&old_path).unwrap();
+    old
+      .execute_batch("CREATE TABLE legacy (value TEXT); PRAGMA user_version = 1;")
+      .unwrap();
+    drop(old);
+    let before = std::fs::read(&old_path).unwrap();
+    let reader = UsageDb::open_readonly(&old_path).unwrap();
+    assert!(reader.summary(0, None, None).is_err());
+    drop(reader);
+    assert_eq!(std::fs::read(old_path).unwrap(), before);
+    std::fs::remove_dir_all(dir).unwrap();
+  }
 
   #[test]
   fn fresh_usage_db_records_correlation_ids() {

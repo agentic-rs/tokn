@@ -1,0 +1,30 @@
+[package]
+name = "tokn-desktop"
+version = "0.2.4"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+name = "tokn_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+toml_edit = "0.25"
+sha2 = "0.10"
+nix = { version = "0.30", features = ["signal"] }
+tokn-config = { package = "tokn-router-config", path = "../../../crates/config" }
+tokn-auth = { path = "../../../crates/auth" }
+tokn-persistence = { path = "../../../crates/persistence" }
+
+tempfile = "3"
