@@ -612,3 +612,30 @@ textarea {
     grid-template-columns: 1fr;
   }
 }
+
+.app-modal {
+  width: min(560px, calc(100vw - 48px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 24px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 14px;
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  box-shadow: 0 20px 70px var(--ui-shadow);
+}
+.app-modal::backdrop {
+  background: rgb(0 0 0 / 45%);
+}
+.modal-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.modal-heading h2 {
+  margin: 0;
+}

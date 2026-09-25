@@ -27,7 +27,7 @@ builds do not require WebKit/GTK or other desktop libraries.
 - **Accounts:** search accounts grouped by provider; edit labels and shared
   active/fallback/disabled state; remove accounts; check authentication and live
   provider quota separately from recorded local usage. Add accounts using provider
-  device-code login or supported credential imports (paste, environment, file,
+  a floating modal with device-code login or supported credential imports (paste, environment, file,
   and provider-specific sources). Device login shows progress and can be cancelled.
   Stored credentials are never returned to the frontend; pasted credentials are
   cleared from the form when submitted. Account IDs must be unique.

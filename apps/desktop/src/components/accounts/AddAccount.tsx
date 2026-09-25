@@ -8,6 +8,7 @@ import type {
   LoginTicket,
 } from "../../lib/types";
 import { ErrorMessage } from "../Feedback";
+import { Modal } from "../Modal";
 
 export function AddAccount({
   onSaved,
@@ -112,13 +113,7 @@ export function AddAccount({
     }
   }
   return (
-    <section className="account-panel" aria-label="Add account">
-      <div className="section-label">
-        <h2>Add account</h2>
-        <button disabled={busy} onClick={onClose}>
-          Close
-        </button>
-      </div>
+    <Modal title="Add account" busy={busy} onClose={onClose}>
       <ErrorMessage error={providers.error || error} />
       {providers.loading ? (
         <p>Loading providers…</p>
@@ -255,6 +250,6 @@ export function AddAccount({
           )}
         </>
       )}
-    </section>
+    </Modal>
   );
 }
